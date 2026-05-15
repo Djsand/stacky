@@ -1,0 +1,42 @@
+[stacky]
+name = "Stacky"
+data_dir = "data/stacky"
+timezone = "Europe/Copenhagen"
+
+[lmstudio]
+base_url = "http://127.0.0.1:1234/v1"
+api_key = ""
+model = "qwen3.6-35b"
+timeout_seconds = 90
+
+[voice]
+language = "da-DK"
+stt_provider = "local"
+tts_provider = "local"
+tts_engine = "piper"
+allow_language_switch = false
+barge_in = true
+sample_rate_in = 16000
+sample_rate_out = 24000
+
+[stackchan]
+host = "127.0.0.1"
+port = 8765
+device_name = "stackchan-cores3"
+wheels_enabled = false
+
+[sandcode]
+repo_root = "C:/Users/nicol/SANDCODE"
+host_script = "C:/Users/nicol/SANDCODE/ios/host/sandcode-mobile-host.mjs"
+host = "127.0.0.1"
+port = 7390
+token = "stacky-local-change-me"
+provider = "ChatGPT Codex"
+model = "gpt-5.5"
+effort = "max"
+permission_mode = "autonomousAgent"
+
+[home_assistant]
+base_url = "http://homeassistant.local:8123"
+token = ""
+suggest_first = true

@@ -1,0 +1,77 @@
+from __future__ import annotations
+
+import json
+import unittest
+
+from stacky.body.controller import BodyPresence, StackChanBodyController
+
+
+class FakeController:
+    def __init__(self) -> None:
+        self.expressions: list[str] = []
+
+    def set_expression(self, name: str) -> bool:
+        self.expressions.append(name)
+        return True
+
+
+class BodyPresenceTest(unittest.TestCase):
+    def test_presence_sets_expression_when_controller_exists(self) -> None:
+        fake = FakeController()
+        presence = BodyPresence(fake)  # type: ignore[arg-type]
+
+        presence.set("thinking")
+
+        self.assertEqual(fake.expressions, ["thinking"])
+
+    def test_presence_noops_without_controller(self) -> None:
+        presence = BodyPresence(None)
+        presence.set("thinking")
+
+
+class BodyControllerRawAudioTest(unittest.TestCase):
+    def test_processes_raw_audio_in_header_and_binary_body(self) -> None:
+        events = []
+        controller = StackChanBodyController(on_event=events.append)
+        header = json.dumps(
+            {
+                "type": "audio.in",
+                "payload": {
+                    "encoding": "pcm16le",
+                    "transport": "raw",
+                    "sampleRate": 16000,
+                    "channels": 1,
+                    "seq": 7,
+                    "bytes": 4,
+                },
+                "ts": 1.5,
+            },
+            separators=(",", ":"),
+        ).encode("utf-8")
+
+        controller._buffer = header + b"\n\x01\x02\x03\x04"  # type: ignore[attr-defined]
+        controller._process_buffered_events()  # type: ignore[attr-defined]
+
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0].type, "audio.in")
+        self.assertEqual(events[0].payload["pcm"], b"\x01\x02\x03\x04")
+        self.assertEqual(events[0].payload["sampleRate"], 16000)
+
+    def test_waits_for_full_raw_audio_body(self) -> None:
+        events = []
+        controller = StackChanBodyController(on_event=events.append)
+        controller._buffer = (  # type: ignore[attr-defined]
+            b'{"type":"audio.in","payload":{"encoding":"pcm16le","transport":"raw","bytes":4},"ts":1}\n'
+            b"\x01\x02"
+        )
+
+        controller._process_buffered_events()  # type: ignore[attr-defined]
+        self.assertEqual(events, [])
+
+        controller._buffer += b"\x03\x04"  # type: ignore[attr-defined]
+        controller._process_buffered_events()  # type: ignore[attr-defined]
+        self.assertEqual(events[0].payload["pcm"], b"\x01\x02\x03\x04")
+
+
+if __name__ == "__main__":
+    unittest.main()
