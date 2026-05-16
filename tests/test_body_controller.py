@@ -72,6 +72,22 @@ class BodyControllerRawAudioTest(unittest.TestCase):
         self.assertEqual(sent[0].type, "body.gesture")
         self.assertEqual(sent[0].payload["name"], "nod")
 
+    def test_controller_sends_motion_config_command(self) -> None:
+        sent = []
+        controller = StackChanBodyController()
+
+        def send(command) -> bool:
+            sent.append(command)
+            return True
+
+        controller.send = send  # type: ignore[method-assign]
+
+        self.assertTrue(controller.configure_motion(center_yaw=120, center_pitch=250))
+
+        self.assertEqual(sent[0].type, "body.motion_config")
+        self.assertEqual(sent[0].payload["centerYaw"], 120)
+        self.assertEqual(sent[0].payload["centerPitch"], 250)
+
     def test_processes_raw_audio_in_header_and_binary_body(self) -> None:
         events = []
         controller = StackChanBodyController(on_event=events.append)

@@ -1,5 +1,29 @@
 # Stacky Handoff
 
+## Latest Session And Memory Update
+
+Stacky's session/memory layer has been rebuilt after inspecting the proven architecture in `D:\moss\core`. Only implementation patterns were copied. No old identity, old memories, old sessions, or old names were imported.
+
+New Stacky-native runtime pieces:
+
+- `src/stacky/sessions.py` adds an append-only infinite thread at `data/stacky/sessions/stacky-infinite-thread.jsonl`.
+- The session store rolls old JSONL files, stitches newest-to-oldest up to a token budget, then presents them chronologically to the brain.
+- Stitching injects time-gap markers and escaped recalled memories as system context.
+- Repetitive assistant replies are condensed so repeated filler does not dominate context.
+- Trusted text/chat turns persist to the infinite thread.
+- Hands-free StackChan voice currently uses existing session context but does **not** write transcripts into the infinite thread, long-term memory, or short-term live context. This is intentional until STT is reliable enough for daily use.
+- `MemoryStore.recall()` excludes `dialogue` memories by default.
+- `StackyBrain.respond()` no longer writes raw dialogue into long-term memory by default.
+- Existing polluted dialogue memories were removed from `data/stacky/memory.sqlite` after backup.
+
+Memory cleanup performed 2026-05-16:
+
+- Backup: `data/stacky/memory.sqlite.backup-20260516-164456`
+- Removed rows tagged `dialogue`: `142`
+- Remaining memory rows: `1`
+
+Current priority is not head-motion polish. The blocking product problem is still input/session quality: Danish STT must be stable enough that voice can safely become a trusted session source again.
+
 ## Latest Official Stacky Firmware Update
 
 Official firmware migration is now a real Stacky firmware variant, not a loose bridge started from `app_main`. `AppStacky` has been added as a first-class Mooncake app, the firmware boots directly into it, and the Stacky body service is owned by that app lifecycle.
@@ -9,8 +33,8 @@ Active body base:
 - Branch: `official-firmware-base`
 - Official submodule: `vendor/m5stack-stackchan`
 - Repro patch: `patches/official-stackchan/0001-stacky-bridge.patch`
-- Flashed firmware: official StackChan `1.4.1` with `AppStacky` and bridge `official-0.1.6`
-- Bridge `official-0.1.6` includes `body.look_at` and `body.gesture` head motion. Social center is `yaw=90`, `pitch=260`.
+- Flashed firmware: official StackChan `1.4.1` with `AppStacky` and bridge `official-0.1.7`
+- Bridge `official-0.1.7` includes `body.look_at`, `body.gesture`, and runtime `body.motion_config` head calibration. Default social center is `yaw=90`, `pitch=260`.
 - PC body server: `192.168.50.208:8765`
 - StackChan IP in tests: `192.168.50.2`
 
@@ -22,8 +46,12 @@ Firmware variant changes:
 - `StackyBridge` now has `start()` / `stop()` lifecycle and is started from `AppStacky::onOpen()`.
 - `StackyBridge` now sets CoreS3 codec output volume to 100 during playback.
 - `StackyBridge` now accepts `audio.volume`, reports `speakerVolume`, uses mic gain 60, and drops the first 12 mic frames after input enable to avoid clipped warmup transients.
+- `StackyBridge` now accepts `body.motion_config` and reports `centerYaw` / `centerPitch`.
 - Python StackChan TTS output has tunable loudness: `--stackchan-target-rms` and `--stackchan-max-gain` default to `9000` / `4.0`.
 - Handsfree catches Danish volume commands before the LLM, e.g. `skru op`, `skru ned`, `sæt volumen til 60 procent`.
+- Handsfree catches Danish center calibration commands before the LLM: `lidt mere til højre`, `lidt mere til venstre`, `lidt op`, `lidt ned`, `gem den her position som center`.
+- Runtime head calibration persists to `data/stacky/body_calibration.json`.
+- Handsfree VAD default is now `--vad-threshold 280 --start-speech-ms 120 --min-speech-ms 220`; turn quality analysis rejects high-frequency noise by zero-crossing rate before STT.
 - Launcher/setup/app-center are no longer the boot path for Stacky.
 
 Bridge support:
@@ -38,7 +66,7 @@ Validated 2026-05-16:
 - Flash to `COM3` passed
 - `scripts\mic_listener.py --output artifacts\official_app_stacky_mic.wav --seconds 10` connected to `official-0.1.3` and captured mic frames
 - `python -m stacky speaker-tone --body-timeout 35 --frequency 880 --duration-ms 250` returned success
-- Full Python tests pass: `.\.venv\Scripts\python.exe -m unittest discover -s tests` -> 66 OK
+- Full Python tests pass: `.\.venv\Scripts\python.exe -m unittest discover -s tests` -> 101 OK
 - Python handsfree now analyzes raw turn audio before STT. Sparse/percussive sounds such as keyboard clicks are rejected before transcription, LLM response, and memory write.
 - `StackyBrain` now includes the last 6 live conversation turns in the system context, so short bad transcripts do not wipe immediate conversational context.
 - STT is still the weakest component. If raw speech-like turns pass the gate but transcripts are wrong, replace or add a better Danish STT backend rather than loosening filters.
@@ -49,17 +77,19 @@ Validated 2026-05-16:
   - `Qwen/Qwen3-ASR-0.6B` via `qwen-asr`: too slow and wrong in the quick local CPU test (`1.58s` audio -> `3.84s` inference, transcript `Se dig ved leon.`). `qwen-asr` also conflicts with Roest/Chatterbox by pinning `transformers==4.57.6`, so it was removed from the main venv and `transformers==5.2.0` restored.
 - Handsfree latency tuning:
   - Default handsfree Supertonic profile is now `quick`.
-  - Default end silence is now `450ms` instead of `650ms`.
+  - Default end silence is `850ms`; current live test uses `900ms` to avoid splitting Danish phrases.
   - Live replies default to about `150` spoken characters (`260` when details are requested).
   - Handsfree logs `[timing] stt=... brain=... tts_send=... total=...` after accepted turns.
 
-Next checkpoint: run v0.1.3 handsfree with `--debug-audio`, test normal speech vs. keyboard noise, and inspect `[audio]` lines before changing STT thresholds.
+No live hands-free server should be assumed running after the session/memory pivot. Start it manually for the next hardware test. Previous logs are in `artifacts/logs/handsfree-current.log`.
+
+Latest observed VAD behavior: high-frequency peaks were rejected before STT with `reason='højfrekvent støj'`; accepted speech-like turns used internal thresholds around `thr=506` instead of the previous hard 650.
 
 Important: opening `COM3` with `scripts/serial_log.py` resets the CoreS3 via USB-serial. A boot log starting with `rst:0x15 (USB_UART_CHIP_RESET)` after playback is not proof of an audio crash.
 
 ## Stop Point
 
-Stop here after official Stacky app variant v0.1.3. The old custom Arduino speaker-crash investigation is no longer the active path unless the same failure reproduces on official firmware.
+Stop here after official Stacky app variant `official-0.1.7`. The old custom Arduino speaker-crash investigation is no longer the active path unless the same failure reproduces on official firmware.
 
 ## Current Direction
 
@@ -85,7 +115,7 @@ Do not import or reuse Moss identity, Moss memories, Moss sessions, or the Moss 
 - StackChan IP seen during tests: `192.168.50.2`
 - PC IP used during tests: `192.168.50.208`
 - USB serial seen during tests: `/dev/cu.usbmodem1101` or `cu.usbmodem101` on Mac, `COM3` on Windows
-- Latest flashed firmware version: official StackChan `1.4.1` with `AppStacky` / Stacky bridge `official-0.1.6`
+- Latest flashed firmware version: official StackChan `1.4.1` with `AppStacky` / Stacky bridge `official-0.1.7`
 
 The old custom Arduino firmware remains as fallback/reference. The active hardware path is official ESP-IDF firmware; old speaker-crash assumptions should be re-tested before using them.
 
@@ -147,11 +177,8 @@ Minimal stdlib-only Python listener that accepts a StackChan TCP connection, cap
 ```
 
 ```powershell
-.\.venv\Scripts\python.exe -m stacky handsfree --tts-engine supertonic --speaker stackchan --debug-audio --min-speech-ms 100 --vad-threshold 100
-# → full loop fires:
-#   Nicolai: hej med dig
-#   Stacky: Hej med dig. Hvordan går det i dag?
-# → then ESP32 reboot when audio chunks start streaming to firmware speaker
+.\.venv\Scripts\python.exe -m stacky handsfree --tts-engine supertonic --speaker stackchan --debug-audio --vad-threshold 280 --start-speech-ms 140 --min-speech-ms 220 --end-silence-ms 900
+# → full loop runs on official firmware; high-frequency false turns are rejected before STT.
 ```
 
 ```bash
@@ -218,10 +245,10 @@ Run listen-only mic debugging via SSH:
 ssh nicolai@192.168.50.208 'cd C:\Users\nicol\stackchan && .\.venv\Scripts\python.exe -m stacky handsfree --listen-only --debug-audio --body-timeout 60'
 ```
 
-Run full handsfree via SSH (currently crashes at speaker):
+Run full handsfree via SSH:
 
 ```bash
-ssh nicolai@192.168.50.208 'cd C:\Users\nicol\stackchan && .\.venv\Scripts\python.exe -m stacky handsfree --tts-engine supertonic --speaker stackchan --debug-audio --min-speech-ms 100 --vad-threshold 100'
+ssh nicolai@192.168.50.208 'cd C:\Users\nicol\stackchan && .\.venv\Scripts\python.exe -m stacky handsfree --tts-engine supertonic --speaker stackchan --debug-audio --vad-threshold 280 --start-speech-ms 140 --min-speech-ms 220 --end-silence-ms 900'
 ```
 
 Read serial from StackChan via USB on Mac:

@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from .danish import compact_for_speech, live_speech_style_prompt, spoken_danish_system_prompt
 from .llm import ChatClient, ChatMessage, LLMError
 from .memory import Memory, MemoryStore
+from .sessions import InfiniteSessionStore
 from .soul import StackySoul
 
 
@@ -18,10 +19,17 @@ class BrainReply:
 
 
 class StackyBrain:
-    def __init__(self, soul: StackySoul, memory: MemoryStore, lmstudio: ChatClient) -> None:
+    def __init__(
+        self,
+        soul: StackySoul,
+        memory: MemoryStore,
+        lmstudio: ChatClient,
+        session_store: InfiniteSessionStore | None = None,
+    ) -> None:
         self.soul = soul
         self.memory = memory
         self.lmstudio = lmstudio
+        self.session_store = session_store
         self._recent_turns: list[tuple[str, str]] = []
 
     async def respond(
@@ -30,9 +38,28 @@ class StackyBrain:
         *,
         max_spoken_chars: int = 150,
         detail_spoken_chars: int = 260,
+        use_session_context: bool = True,
+        persist_session: bool = True,
+        allow_memory_writes: bool = True,
+        remember_dialogue: bool = False,
+        remember_recent: bool = True,
+        session_source: str = "conversation",
     ) -> BrainReply:
         memories = tuple(_dedupe_memories([*self.memory.pinned(limit=6), *self.memory.recall(user_text, limit=5)]))
-        messages = self._messages(user_text, memories, max_spoken_chars=max_spoken_chars)
+        stitched_messages: list[dict[str, str]] = []
+        session_user_persisted = False
+        if self.session_store is not None and use_session_context:
+            if persist_session:
+                self.session_store.append_message("user", user_text, meta={"source": session_source})
+                session_user_persisted = True
+            stitched_messages, _ = self.session_store.stitch_context(recalled_memories=memories)
+        messages = self._messages(
+            user_text,
+            memories,
+            max_spoken_chars=max_spoken_chars,
+            stitched_messages=stitched_messages,
+            include_current_user=not session_user_persisted,
+        )
         remembered: list[Memory] = []
         try:
             response = await self.lmstudio.chat(messages)
@@ -43,33 +70,46 @@ class StackyBrain:
             )
             return BrainReply(spoken, degraded=True, used_memories=memories)
 
-        for candidate in self._candidate_memories(user_text):
-            remembered.append(
-                self.memory.remember(
-                    candidate,
-                    kind="preference" if "foretrækker" in candidate or "kan lide" in candidate else "episode",
-                    importance=0.7,
-                    source="conversation",
-                    tags=("fresh-stacky",),
+        if allow_memory_writes:
+            for candidate in self._candidate_memories(user_text):
+                remembered.append(
+                    self.memory.remember(
+                        candidate,
+                        kind="preference" if "foretrækker" in candidate or "kan lide" in candidate else "episode",
+                        importance=0.7,
+                        source="conversation",
+                        tags=("fresh-stacky",),
+                    )
                 )
-            )
         spoken_response = _spoken_response_for_live(
             user_text,
             response,
             max_chars=max_spoken_chars,
             detail_chars=detail_spoken_chars,
         )
-        self.memory.remember(
-            f"Samtale: {self.soul.created_for} sagde: {user_text} | Stacky svarede: {response}",
-            kind="episode",
-            importance=0.35,
-            source="conversation",
-            tags=("dialogue",),
-        )
-        self._remember_recent_turn(user_text, response)
+        if self.session_store is not None and persist_session:
+            self.session_store.append_message("assistant", response, meta={"source": "stacky"})
+        if allow_memory_writes and remember_dialogue:
+            self.memory.remember(
+                f"Samtale: {self.soul.created_for} sagde: {user_text} | Stacky svarede: {response}",
+                kind="episode",
+                importance=0.35,
+                source="conversation",
+                tags=("dialogue",),
+            )
+        if remember_recent:
+            self._remember_recent_turn(user_text, response)
         return BrainReply(response, spoken_text=spoken_response, remembered=tuple(remembered), used_memories=memories)
 
-    def _messages(self, user_text: str, memories: tuple[Memory, ...], *, max_spoken_chars: int = 150) -> list[ChatMessage]:
+    def _messages(
+        self,
+        user_text: str,
+        memories: tuple[Memory, ...],
+        *,
+        max_spoken_chars: int = 150,
+        stitched_messages: list[dict[str, str]] | None = None,
+        include_current_user: bool = True,
+    ) -> list[ChatMessage]:
         memory_text = "\n".join(f"- {memory.text}" for memory in memories) or "- Ingen relevante friske minder endnu."
         recent_text = self._recent_context_text()
         system = "\n\n".join(
@@ -83,10 +123,15 @@ class StackyBrain:
                 "Svar som en nærværende ven, ikke som et kæledyr eller en assistent med marketingtone.",
             ]
         )
-        return [
-            ChatMessage("system", system),
-            ChatMessage("user", user_text),
-        ]
+        messages = [ChatMessage("system", system)]
+        for message in stitched_messages or []:
+            role = message.get("role", "user")
+            if role not in {"system", "user", "assistant"}:
+                role = "user"
+            messages.append(ChatMessage(role, message.get("content", "")))
+        if include_current_user:
+            messages.append(ChatMessage("user", user_text))
+        return messages
 
     def _candidate_memories(self, user_text: str) -> list[str]:
         lowered = user_text.lower()

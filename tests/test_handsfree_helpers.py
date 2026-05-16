@@ -6,6 +6,7 @@ from stacky.cli import (
     _accept_stt_result,
     _clean_transcript,
     _is_likely_hallucination,
+    _parse_calibration_command,
     _parse_local_realtime_reply,
     _parse_motion_command,
     _parse_stt_bench_spec,
@@ -149,6 +150,18 @@ class HandsfreeHelpersTest(unittest.TestCase):
         self.assertEqual((_parse_motion_command("nik med hovedet") or None).gesture, "nod")
         self.assertEqual((_parse_motion_command("prøv en bevægelse") or None).gesture, "demo")
         self.assertIsNone(_parse_motion_command("skru op"))
+
+    def test_parse_calibration_command(self) -> None:
+        right = _parse_calibration_command("lidt mere til højre")
+        left = _parse_calibration_command("lidt mere til venstre")
+        up = _parse_calibration_command("lidt op")
+        save = _parse_calibration_command("gem den her position som center")
+
+        self.assertEqual(right.yaw_delta if right else None, 30)
+        self.assertEqual(left.yaw_delta if left else None, -30)
+        self.assertEqual(up.pitch_delta if up else None, 30)
+        self.assertTrue(save.save_current if save else False)
+        self.assertIsNone(_parse_calibration_command("skru op"))
 
     def test_parse_stt_bench_aliases(self) -> None:
         self.assertEqual(_parse_stt_bench_spec("roest"), ("wav2vec2", "roest"))

@@ -126,10 +126,10 @@ index 77cc9b7..06e2ab4 100644
  #include "app_setup/app_setup.h"
 diff --git a/firmware/main/hal/stacky_bridge.cpp b/firmware/main/hal/stacky_bridge.cpp
 new file mode 100644
-index 0000000..395cd55
+index 0000000..9c74e5a
 --- /dev/null
 +++ b/firmware/main/hal/stacky_bridge.cpp
-@@ -0,0 +1,772 @@
+@@ -0,0 +1,793 @@
 +#include "stacky_bridge.h"
 +
 +#include "hal.h"
@@ -194,7 +194,7 @@ index 0000000..395cd55
 +namespace {
 +
 +constexpr const char* TAG = "StackyBridge";
-+constexpr const char* STACKY_BRIDGE_VERSION = "official-0.1.6";
++constexpr const char* STACKY_BRIDGE_VERSION = "official-0.1.7";
 +constexpr size_t MIC_FRAME_COUNT = 480;       // 20 ms at 24 kHz
 +constexpr int MIC_WARMUP_DISCARD_FRAMES = 12;
 +constexpr size_t PLAYBACK_CHUNK_SAMPLES = 960;
@@ -271,6 +271,11 @@ index 0000000..395cd55
 +    int playback_sample_rate_ = AUDIO_OUTPUT_SAMPLE_RATE;
 +    int playback_channels_    = 1;
 +    std::atomic<int> output_volume_{STACKY_OUTPUT_VOLUME};
++    std::atomic<int> center_yaw_{STACKY_CENTER_YAW};
++    std::atomic<int> center_pitch_{STACKY_CENTER_PITCH};
++    std::atomic<int> look_yaw_range_{STACKY_LOOK_YAW_RANGE};
++    std::atomic<int> look_up_range_{STACKY_LOOK_UP_RANGE};
++    std::atomic<int> look_down_range_{STACKY_LOOK_DOWN_RANGE};
 +
 +    static void mainTaskThunk(void* arg)
 +    {
@@ -488,6 +493,11 @@ index 0000000..395cd55
 +        }
 +        if (std::strcmp(type, "body.status") == 0) {
 +            sendStatus("status");
++            return;
++        }
++        if (std::strcmp(type, "body.motion_config") == 0) {
++            applyMotionConfig(payload);
++            sendStatus("motion_config");
 +            return;
 +        }
 +        if (std::strcmp(type, "body.set_expression") == 0) {
@@ -734,13 +744,15 @@ index 0000000..395cd55
 +        const int len = std::snprintf(
 +            line,
 +            sizeof(line),
-+            "{\"type\":\"status\",\"payload\":{\"device\":\"stackchan-cores3-official\",\"expression\":\"%s\",\"firmware\":\"%s\",\"speakerVolume\":%d,\"micGain\":%.1f,\"yaw\":%d,\"pitch\":%d,\"wheelsEnabled\":false},\"ts\":%.3f}\n",
++            "{\"type\":\"status\",\"payload\":{\"device\":\"stackchan-cores3-official\",\"expression\":\"%s\",\"firmware\":\"%s\",\"speakerVolume\":%d,\"micGain\":%.1f,\"yaw\":%d,\"pitch\":%d,\"centerYaw\":%d,\"centerPitch\":%d,\"wheelsEnabled\":false},\"ts\":%.3f}\n",
 +            expression,
 +            STACKY_BRIDGE_VERSION,
 +            output_volume_.load(),
 +            STACKY_MIC_INPUT_GAIN,
 +            angles.x,
 +            angles.y,
++            center_yaw_.load(),
++            center_pitch_.load(),
 +            now_seconds());
 +        if (len > 0 && static_cast<size_t>(len) < sizeof(line)) {
 +            sendBytes(line, static_cast<size_t>(len));
@@ -755,13 +767,22 @@ index 0000000..395cd55
 +        lookAt(x, y, speed);
 +    }
 +
++    void applyMotionConfig(JsonVariantConst payload)
++    {
++        center_yaw_.store(std::clamp(payload["centerYaw"] | center_yaw_.load(), -1280, 1280));
++        center_pitch_.store(std::clamp(payload["centerPitch"] | center_pitch_.load(), STACKY_MIN_PITCH, STACKY_MAX_PITCH));
++        look_yaw_range_.store(std::clamp(payload["yawRange"] | look_yaw_range_.load(), 0, 1280));
++        look_up_range_.store(std::clamp(payload["lookUpRange"] | look_up_range_.load(), 0, STACKY_MAX_PITCH));
++        look_down_range_.store(std::clamp(payload["lookDownRange"] | look_down_range_.load(), 0, STACKY_MAX_PITCH));
++    }
++
 +    void applyGesture(const char* name, float intensity, int speed)
 +    {
 +        intensity = std::clamp(intensity, 0.0f, 1.0f);
 +        speed     = std::clamp(speed, 0, 1000);
 +
 +        if (std::strcmp(name, "center") == 0) {
-+            moveTo(STACKY_CENTER_YAW, STACKY_CENTER_PITCH, speed);
++            moveTo(center_yaw_.load(), center_pitch_.load(), speed);
 +            return;
 +        }
 +        if (std::strcmp(name, "look_left") == 0) {
@@ -796,16 +817,16 @@ index 0000000..395cd55
 +            lookAt(0.0f, 0.0f, speed);
 +            return;
 +        }
-+        moveTo(STACKY_CENTER_YAW, STACKY_CENTER_PITCH, speed);
++        moveTo(center_yaw_.load(), center_pitch_.load(), speed);
 +    }
 +
 +    void lookAt(float x, float y, int speed)
 +    {
-+        const int yaw = STACKY_CENTER_YAW + static_cast<int>(std::clamp(x, -1.0f, 1.0f) * STACKY_LOOK_YAW_RANGE);
++        const int yaw = center_yaw_.load() + static_cast<int>(std::clamp(x, -1.0f, 1.0f) * look_yaw_range_.load());
 +        const int pitch_offset = y >= 0.0f
-+                                     ? static_cast<int>(std::clamp(y, 0.0f, 1.0f) * STACKY_LOOK_UP_RANGE)
-+                                     : static_cast<int>(std::clamp(y, -1.0f, 0.0f) * STACKY_LOOK_DOWN_RANGE);
-+        const int pitch = std::clamp(STACKY_CENTER_PITCH + pitch_offset, STACKY_MIN_PITCH, STACKY_MAX_PITCH);
++                                     ? static_cast<int>(std::clamp(y, 0.0f, 1.0f) * look_up_range_.load())
++                                     : static_cast<int>(std::clamp(y, -1.0f, 0.0f) * look_down_range_.load());
++        const int pitch = std::clamp(center_pitch_.load() + pitch_offset, STACKY_MIN_PITCH, STACKY_MAX_PITCH);
 +        moveTo(yaw, pitch, speed);
 +    }
 +

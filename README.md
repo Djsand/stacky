@@ -26,6 +26,7 @@ Danish speech is a hard v1 requirement. Stacky may quote code, file names, API n
 
 - `src/stacky/brain.py`: Danish-first brain around LM Studio and local memory.
 - `src/stacky/memory.py`: fresh SQLite memory store with a tiny local vector index.
+- `src/stacky/sessions.py`: append-only infinite session thread plus stitcher for trusted context.
 - `src/stacky/sandcode.py`: client for `C:\Users\nicol\SANDCODE\ios\host\sandcode-mobile-host.mjs`.
 - `src/stacky/body`: StackChan body/audio protocol and local hub.
 - `src/stacky/voice`: Pipecat pipeline factory plus a text voice loop for local testing.
@@ -69,6 +70,10 @@ Whisper is no longer the default for hands-free mode because it can hallucinate 
 
 The wav2vec2 default is `CoRal-project/roest-v3-wav2vec2-315m`. First startup is slow while the model and language model load; after that, short StackChan turns transcribe in a fraction of a second on the current PC.
 
+The hands-free VAD is tuned for the official Stacky bridge: default `--vad-threshold 280`, `--start-speech-ms 120`, and `--min-speech-ms 220`. It rejects sparse clicks and high-frequency noise before STT; use `--debug-audio` to see `[audio] ... reason='højfrekvent støj'` / `klik/percussiv støj` lines.
+
+Important safety rule while STT is unstable: hands-free voice turns use session context but do not write to the infinite session thread or long-term memory. Trusted text/chat turns persist to `data/stacky/sessions/stacky-infinite-thread.jsonl`; rolled blocks become `stacky-infinite-thread.001.jsonl`, etc.
+
 To run Stacky's brain through Gemini instead of the local OpenAI-compatible endpoint for latency testing:
 
 ```powershell
@@ -84,6 +89,14 @@ Head motion is available after flashing the official Stacky bridge firmware with
 .\.venv\Scripts\python.exe -m stacky motion-test --gesture demo
 .\.venv\Scripts\python.exe -m stacky motion-test --gesture nod
 ```
+
+Stacky can adjust its head center at runtime and persists it in `data/stacky/body_calibration.json`:
+
+- `lidt mere til højre`
+- `lidt mere til venstre`
+- `lidt op`
+- `lidt ned`
+- `gem den her position som center`
 
 ## Safety Defaults
 

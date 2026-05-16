@@ -13,6 +13,9 @@ firmware/**/.vscode/
 configs/stacky.toml
 data/stacky/*.sqlite
 data/stacky/*.sqlite-*
+data/stacky/*.sqlite.backup-*
+data/stacky/body_calibration.json
+data/stacky/sessions/
 firmware/stacky_cores3/include/wifi_secrets.h
 artifacts/
 models/

@@ -16,11 +16,11 @@ The goal is not to import any old identity or memory. Stacky remains a fresh loc
 - Official firmware builds on this PC after applying the official XiaoZhi patch manually and building through short drive aliases.
 - Official firmware was flashed to CoreS3 on `COM3`.
 - Boot was serial-logged for 25 seconds without a reboot. Log: `artifacts/official_firmware_boot.log`.
-- Stacky firmware variant v0.1.6 has been added as a local patch on top of official firmware.
+- Stacky firmware variant `official-0.1.7` has been added as a local patch on top of official firmware.
 - Repro patch: `patches/official-stackchan/0001-stacky-bridge.patch`
-- Latest flashed body version: official StackChan `1.4.1` plus `AppStacky` / bridge `official-0.1.6`.
+- Latest flashed body version: official StackChan `1.4.1` plus `AppStacky` / bridge `official-0.1.7`.
 
-## Stacky App Variant V0.1.6
+## Stacky App Variant Official-0.1.7
 
 The first official-firmware customization is now a real app variant. Stacky boots directly into a custom Mooncake app instead of launching the official launcher/setup path. It keeps the existing Python body-controller protocol so the PC runtime does not need a rewrite before we validate hardware stability.
 
@@ -42,7 +42,8 @@ Runtime shape:
 - `StackyBridge` sets CoreS3 codec output volume to 100 during playback; PC-side StackChan PCM boost is also tunable with `--stackchan-target-rms` and `--stackchan-max-gain`.
 - `StackyBridge` accepts `audio.volume`, reports `speakerVolume`, uses mic gain 60, and discards the first 12 mic frames after input enable to avoid clipped warmup transients poisoning VAD/STT.
 - `StackyBridge` accepts `body.look_at` and `body.gesture` for head-servo motion. Gestures currently include `center`, `look_left`, `look_right`, `look_up`, `look_down`, `nod`, and `shake`.
-- `StackyBridge` uses a Stacky-specific social head center (`yaw=90`, `pitch=260`) instead of raw servo home so up/down motion has visible travel in both directions. The yaw offset nudges Stacky's physical center slightly right.
+- `StackyBridge` accepts `body.motion_config` for runtime head center/range calibration and reports `centerYaw` / `centerPitch`.
+- `StackyBridge` uses a Stacky-specific default social head center (`yaw=90`, `pitch=260`) instead of raw servo home so up/down motion has visible travel in both directions. Python can override this at runtime from `data/stacky/body_calibration.json`.
 - The official launcher/setup/app-center flow is not the Stacky boot path.
 
 The bridge reads local Wi-Fi/host config from `stacky_local_config.h` when present, otherwise from the existing gitignored `firmware/stacky_cores3/include/wifi_secrets.h` compatibility header.
@@ -52,7 +53,7 @@ Supported protocol:
 - `audio.in`: raw PCM16 mono mic frames at 24 kHz from StackChan to PC
 - `audio.start` / binary `audio.raw` / `audio.end`: buffered PCM16 playback from PC to StackChan
 - `audio.tone`: local firmware-generated tone for speaker smoke tests
-- `audio.stop`, `audio.hold`, `body.status`, `body.set_expression`, `body.look_at`, `body.gesture`
+- `audio.stop`, `audio.hold`, `body.status`, `body.set_expression`, `body.look_at`, `body.gesture`, `body.motion_config`
 
 Validated locally:
 

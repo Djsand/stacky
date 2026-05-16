@@ -22,6 +22,7 @@ BODY_COMMAND_TYPES = {
     "body.look_at",
     "body.gesture",
     "body.leds",
+    "body.motion_config",
     "body.status",
     "mobility.intent",
 }
@@ -100,6 +101,26 @@ def gesture(name: str, *, intensity: float = 1.0, speed: int = 500) -> BodyComma
             "name": name,
             "intensity": max(0.0, min(1.0, float(intensity))),
             "speed": max(0, min(1000, int(speed))),
+        },
+    )
+
+
+def motion_config(
+    *,
+    center_yaw: int,
+    center_pitch: int,
+    yaw_range: int = 720,
+    look_up_range: int = 520,
+    look_down_range: int = 220,
+) -> BodyCommand:
+    return BodyCommand(
+        "body.motion_config",
+        {
+            "centerYaw": max(-1280, min(1280, int(center_yaw))),
+            "centerPitch": max(30, min(870, int(center_pitch))),
+            "yawRange": max(0, min(1280, int(yaw_range))),
+            "lookUpRange": max(0, min(870, int(look_up_range))),
+            "lookDownRange": max(0, min(870, int(look_down_range))),
         },
     )
 

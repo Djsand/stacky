@@ -115,10 +115,14 @@ class MemoryStore:
             )
         return Memory(memory_id, kind, text.strip(), float(importance), source, tags, now, now)
 
-    def recall(self, query: str, *, limit: int = 6) -> list[Memory]:
+    def recall(self, query: str, *, limit: int = 6, include_dialogue: bool = False) -> list[Memory]:
         query_embedding = self.embedder.embed(query)
         query_tokens = set(_tokens(query))
-        memories = self.all()
+        memories = [
+            memory
+            for memory in self.all()
+            if include_dialogue or "dialogue" not in memory.tags
+        ]
         scored: list[Memory] = []
         for memory in memories:
             embedding = self._embedding_for(memory)
@@ -188,6 +192,20 @@ class MemoryStore:
         with self._connect() as db:
             cursor = db.execute("DELETE FROM memories WHERE id = ?", (memory_id,))
             return cursor.rowcount > 0
+
+    def forget_by_tag(self, tag: str) -> int:
+        deleted = 0
+        with self._connect() as db:
+            rows = db.execute("SELECT id, tags FROM memories").fetchall()
+            for row in rows:
+                try:
+                    tags = tuple(json.loads(str(row["tags"] or "[]")))
+                except json.JSONDecodeError:
+                    tags = ()
+                if tag in tags:
+                    cursor = db.execute("DELETE FROM memories WHERE id = ?", (str(row["id"]),))
+                    deleted += cursor.rowcount
+        return deleted
 
     def all(self) -> list[Memory]:
         with self._connect() as db:

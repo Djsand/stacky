@@ -7,6 +7,7 @@ from pathlib import Path
 from stacky.brain import StackyBrain
 from stacky.llm import ChatMessage
 from stacky.memory import MemoryStore
+from stacky.sessions import InfiniteSessionStore, read_jsonl_messages
 from stacky.soul import StackySoul
 
 
@@ -64,6 +65,48 @@ class BrainMemoryContextTest(unittest.IsolatedAsyncioTestCase):
         second_system = llm.messages[1][0].content
         self.assertIn("Seneste live-kontekst", second_system)
         self.assertIn("vi taler om stacky", second_system)
+
+    async def test_dialogue_is_not_written_to_long_term_memory_by_default(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = MemoryStore(Path(tmp) / "memory.sqlite")
+            brain = StackyBrain(StackySoul(created_for="Nicolai"), memory, LongFakeLLM())  # type: ignore[arg-type]
+
+            await brain.respond("hej")
+
+            self.assertEqual(memory.count(), 0)
+
+    async def test_memory_writes_can_be_disabled_for_untrusted_voice(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = MemoryStore(Path(tmp) / "memory.sqlite")
+            brain = StackyBrain(StackySoul(created_for="Nicolai"), memory, LongFakeLLM())  # type: ignore[arg-type]
+
+            await brain.respond("mit navn er forkert transcript", allow_memory_writes=False)
+
+            self.assertEqual(memory.count(), 0)
+
+    async def test_session_store_persists_trusted_turns(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            memory = MemoryStore(root / "memory.sqlite")
+            session_store = InfiniteSessionStore(root / "data")
+            brain = StackyBrain(StackySoul(created_for="Nicolai"), memory, LongFakeLLM(), session_store)  # type: ignore[arg-type]
+
+            await brain.respond("vi bygger stacky")
+
+            messages = read_jsonl_messages(session_store.active_path)
+
+        self.assertEqual([message["role"] for message in messages], ["user", "assistant"])
+
+    async def test_untrusted_voice_does_not_persist_session_turn(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            memory = MemoryStore(root / "memory.sqlite")
+            session_store = InfiniteSessionStore(root / "data")
+            brain = StackyBrain(StackySoul(created_for="Nicolai"), memory, LongFakeLLM(), session_store)  # type: ignore[arg-type]
+
+            await brain.respond("forkert stt", persist_session=False, allow_memory_writes=False, remember_recent=False)
+
+            self.assertFalse(session_store.active_path.exists())
 
 
 if __name__ == "__main__":

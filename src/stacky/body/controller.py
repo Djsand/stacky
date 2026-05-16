@@ -16,6 +16,7 @@ from .protocol import (
     gesture,
     hold_audio,
     look_at,
+    motion_config,
     speak_audio,
     speaker_volume,
     speaker_tone,
@@ -95,6 +96,25 @@ class StackChanBodyController:
 
     def gesture(self, name: str, *, intensity: float = 1.0, speed: int = 500) -> bool:
         return self.send(gesture(name, intensity=intensity, speed=speed))
+
+    def configure_motion(
+        self,
+        *,
+        center_yaw: int,
+        center_pitch: int,
+        yaw_range: int = 720,
+        look_up_range: int = 520,
+        look_down_range: int = 220,
+    ) -> bool:
+        return self.send(
+            motion_config(
+                center_yaw=center_yaw,
+                center_pitch=center_pitch,
+                yaw_range=yaw_range,
+                look_up_range=look_up_range,
+                look_down_range=look_down_range,
+            )
+        )
 
     def speak_audio(self, pcm: bytes, *, sample_rate: int, channels: int = 1) -> bool:
         return self.send(speak_audio(pcm, sample_rate=sample_rate, channels=channels))

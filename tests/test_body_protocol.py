@@ -13,6 +13,7 @@ from stacky.body.protocol import (
     hold_audio,
     look_at,
     mobility_intent,
+    motion_config,
     speak_audio,
     speaker_volume,
     speaker_tone,
@@ -42,6 +43,23 @@ class BodyProtocolTest(unittest.TestCase):
         self.assertIn("body.gesture", raw)
         self.assertEqual(command.payload["intensity"], 1.0)
         self.assertEqual(command.payload["speed"], 0)
+
+    def test_motion_config_command_clamps(self) -> None:
+        command = motion_config(
+            center_yaw=2000,
+            center_pitch=-100,
+            yaw_range=5000,
+            look_up_range=900,
+            look_down_range=-10,
+        )
+        raw = command.to_json()
+
+        self.assertIn("body.motion_config", raw)
+        self.assertEqual(command.payload["centerYaw"], 1280)
+        self.assertEqual(command.payload["centerPitch"], 30)
+        self.assertEqual(command.payload["yawRange"], 1280)
+        self.assertEqual(command.payload["lookUpRange"], 870)
+        self.assertEqual(command.payload["lookDownRange"], 0)
 
     def test_audio_command_encodes_pcm(self) -> None:
         raw = speak_audio(b"\x00\x01").to_json()

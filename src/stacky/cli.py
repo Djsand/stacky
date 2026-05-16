@@ -13,12 +13,15 @@ from pathlib import Path
 from slugify import slugify
 
 from .brain import StackyBrain
+from .body.calibration import BodyCalibration, load_body_calibration, save_body_calibration
 from .body.controller import BodyPresence, StackChanBodyController
+from .body.director import BodyDirector
 from .body.protocol import decode_pcm_payload, expression
 from .config import DEFAULT_CONFIG_PATH, ROOT, load_config
 from .llm import create_chat_client
 from .memory import MemoryStore
 from .sandcode import SandcodeMobileHostClient
+from .sessions import InfiniteSessionStore
 from .soul import load_soul, write_default_soul
 from .voice.output import (
     create_fast_piper_output,
@@ -58,9 +61,10 @@ def main(argv: list[str] | None = None) -> int:
         default="",
         help="Model name. wav2vec2 default is CoRal-project/roest-v3-wav2vec2-315m; whisper default is small.",
     )
-    handsfree.add_argument("--vad-threshold", type=int, default=700, help="PCM RMS threshold for speech start.")
+    handsfree.add_argument("--vad-threshold", type=int, default=280, help="PCM RMS threshold for speech start.")
+    handsfree.add_argument("--start-speech-ms", type=int, default=120, help="Continuous speech needed before a turn starts.")
     handsfree.add_argument("--end-silence-ms", type=int, default=850, help="Silence duration that ends a voice turn.")
-    handsfree.add_argument("--min-speech-ms", type=int, default=150, help="Minimum voiced audio before accepting a turn.")
+    handsfree.add_argument("--min-speech-ms", type=int, default=220, help="Minimum voiced audio before accepting a turn.")
     handsfree.add_argument("--listen-only", action="store_true", help="Only print StackChan STT results; do not call the brain or TTS.")
     handsfree.add_argument("--debug-audio", action="store_true", help="Print live StackChan mic RMS/peak while listening.")
     handsfree.add_argument(
@@ -213,6 +217,7 @@ def main(argv: list[str] | None = None) -> int:
                 stt_engine=args.stt_engine,
                 stt_model=args.stt_model,
                 vad_threshold=args.vad_threshold,
+                start_speech_ms=args.start_speech_ms,
                 end_silence_ms=args.end_silence_ms,
                 min_speech_ms=args.min_speech_ms,
                 speaker=args.speaker,
@@ -524,7 +529,7 @@ async def _chat(config_path: str, *, speak: bool = False) -> int:
     config = load_config(config_path)
     soul = load_soul(config.soul_path)
     memory = MemoryStore(config.memory_path)
-    brain = StackyBrain(soul, memory, create_chat_client(config.lmstudio))
+    brain = StackyBrain(soul, memory, create_chat_client(config.lmstudio), InfiniteSessionStore(config.data_dir))
     output = await _speech_output(speak)
     await LocalTextVoiceRuntime(brain, output=output).interactive()
     return 0
@@ -534,7 +539,7 @@ async def _live_text(config_path: str, *, body_timeout: float, speak: bool = Fal
     config = load_config(config_path)
     soul = load_soul(config.soul_path)
     memory = MemoryStore(config.memory_path)
-    brain = StackyBrain(soul, memory, create_chat_client(config.lmstudio))
+    brain = StackyBrain(soul, memory, create_chat_client(config.lmstudio), InfiniteSessionStore(config.data_dir))
 
     def on_event(event) -> None:
         if event.type in {"status", "touch"}:
@@ -645,6 +650,8 @@ async def _motion_test(config_path: str, *, body_timeout: float, gesture_name: s
         controller.stop()
         return 1
     try:
+        calibration = load_body_calibration(config.data_dir)
+        BodyDirector(controller, calibration).apply_calibration()
         controller.set_expression("happy")
         if gesture_name == "demo":
             sequence = ["center", "look_left", "look_right", "look_up", "look_down", "nod", "shake", "center"]
@@ -667,6 +674,7 @@ async def _handsfree(
     stt_engine: str,
     stt_model: str,
     vad_threshold: int,
+    start_speech_ms: int,
     end_silence_ms: int,
     min_speech_ms: int,
     speaker: str,
@@ -689,15 +697,20 @@ async def _handsfree(
     if not listen_only:
         soul = load_soul(config.soul_path)
         memory = MemoryStore(config.memory_path)
-        brain = StackyBrain(soul, memory, create_chat_client(config.lmstudio))
+        brain = StackyBrain(soul, memory, create_chat_client(config.lmstudio), InfiniteSessionStore(config.data_dir))
 
     loop = asyncio.get_running_loop()
     audio_queue: asyncio.Queue[tuple[bytes, int, int]] = asyncio.Queue(maxsize=80)
     accepting_audio = False
     audio_meter = {"last_at": 0.0, "max_rms": 0, "max_peak": 0, "chunks": 0}
+    body_status: dict[str, object] = {}
+    body_calibration = load_body_calibration(config.data_dir)
+    body_director: BodyDirector | None = None
 
     def on_event(event) -> None:
         if event.type == "status":
+            body_status.clear()
+            body_status.update(event.payload)
             print(f"[StackChan] status: {event.payload}", flush=True)
             return
         if event.type == "touch":
@@ -754,7 +767,13 @@ async def _handsfree(
     address = controller.client_address
     where = f"{address[0]}:{address[1]}" if address else "StackChan"
     print(f"StackChan connected from {where}", flush=True)
-    controller.set_expression("thinking")
+    body_director = BodyDirector(controller, body_calibration)
+    body_director.apply_calibration()
+
+    def set_body_state(name: str) -> bool:
+        return body_director.set_state(name) if body_director is not None else controller.set_expression(name)
+
+    set_body_state("thinking")
 
     output = None
     if listen_only:
@@ -805,6 +824,7 @@ async def _handsfree(
 
     detector = EnergyTurnDetector(
         threshold=vad_threshold,
+        start_speech_ms=start_speech_ms,
         min_speech_ms=min_speech_ms,
         end_silence_ms=end_silence_ms,
     )
@@ -812,7 +832,7 @@ async def _handsfree(
     last_transcript = ""
     last_transcript_at = 0.0
     accepting_audio = True
-    controller.set_expression("listening")
+    set_body_state("listening")
     try:
         while True:
             pcm, sample_rate, channels = await audio_queue.get()
@@ -834,10 +854,10 @@ async def _handsfree(
             print(f"[audio] {_format_signal_quality(signal_quality)}", flush=True)
             if not signal_quality.speech_like:
                 print(f"[Stacky] ignorerer audio ({signal_quality.reason})", flush=True)
-                controller.set_expression("listening")
+                set_body_state("listening")
                 accepting_audio = True
                 continue
-            controller.set_expression("thinking")
+            set_body_state("thinking")
             stt_started = time.perf_counter()
             stt_result = await stt.transcribe_wav_result(wav_path)
             stt_seconds = time.perf_counter() - stt_started
@@ -846,25 +866,25 @@ async def _handsfree(
             accepted, reason = _accept_stt_result(stt_result, text, signal_quality=signal_quality)
             if not accepted:
                 print(f"[Stacky] ignorerer STT ({reason}): {text}", flush=True)
-                controller.set_expression("listening")
+                set_body_state("listening")
                 accepting_audio = True
                 continue
             transcript_key = _transcript_key(text)
             now = time.monotonic()
             if transcript_key and transcript_key == last_transcript and now - last_transcript_at < 6.0:
                 print(f"[Stacky] ignorerer gentaget STT: {text}", flush=True)
-                controller.set_expression("listening")
+                set_body_state("listening")
                 accepting_audio = True
                 continue
             last_transcript = transcript_key
             last_transcript_at = now
             print(f"Nicolai: {text}", flush=True)
             if listen_only:
-                controller.set_expression("listening")
+                set_body_state("listening")
                 accepting_audio = True
                 continue
             if brain is None or output is None:
-                controller.set_expression("listening")
+                set_body_state("listening")
                 accepting_audio = True
                 continue
             volume_command = _parse_volume_command(text, current_level=getattr(output, "volume_level", stackchan_volume))
@@ -874,7 +894,7 @@ async def _handsfree(
                 ok = output.set_volume(volume_level)
                 reply_seconds = time.perf_counter() - reply_started
                 print(f"[Stacky] volumen={volume_level} ok={ok}", flush=True)
-                controller.set_expression("happy")
+                set_body_state("happy")
                 speak_started = time.perf_counter()
                 await output.speak(spoken if ok else "Jeg kunne ikke ændre min volumen lige nu.")
                 await output.wait()
@@ -887,16 +907,66 @@ async def _handsfree(
                 _drain_queue(audio_queue)
                 detector.reset()
                 await asyncio.sleep(0.25)
-                controller.set_expression("listening")
+                set_body_state("listening")
+                accepting_audio = True
+                continue
+            calibration_command = _parse_calibration_command(text)
+            if calibration_command is not None:
+                reply_started = time.perf_counter()
+                if calibration_command.save_current:
+                    body_calibration = BodyCalibration(
+                        center_yaw=int(body_status.get("yaw", body_calibration.center_yaw)),
+                        center_pitch=int(body_status.get("pitch", body_calibration.center_pitch)),
+                        yaw_range=body_calibration.yaw_range,
+                        look_up_range=body_calibration.look_up_range,
+                        look_down_range=body_calibration.look_down_range,
+                    ).clamp()
+                else:
+                    body_calibration = body_calibration.nudge(
+                        yaw_delta=calibration_command.yaw_delta,
+                        pitch_delta=calibration_command.pitch_delta,
+                    )
+                save_body_calibration(config.data_dir, body_calibration)
+                if body_director is not None:
+                    ok = body_director.update_calibration(body_calibration)
+                else:
+                    ok = controller.configure_motion(
+                        center_yaw=body_calibration.center_yaw,
+                        center_pitch=body_calibration.center_pitch,
+                        yaw_range=body_calibration.yaw_range,
+                        look_up_range=body_calibration.look_up_range,
+                        look_down_range=body_calibration.look_down_range,
+                    )
+                ok = _run_motion_gesture(body_director or controller, "center", speed=260) and ok
+                reply_seconds = time.perf_counter() - reply_started
+                print(
+                    f"[Stacky] calibration center_yaw={body_calibration.center_yaw} "
+                    f"center_pitch={body_calibration.center_pitch} ok={ok}",
+                    flush=True,
+                )
+                set_body_state("happy")
+                speak_started = time.perf_counter()
+                await output.speak(calibration_command.spoken if ok else "Jeg kunne ikke gemme hovedkalibreringen lige nu.")
+                await output.wait()
+                speak_seconds = time.perf_counter() - speak_started
+                print(
+                    f"[timing] stt={stt_seconds:.2f}s command={reply_seconds:.2f}s "
+                    f"tts_send={speak_seconds:.2f}s total={time.perf_counter() - pipeline_started:.2f}s",
+                    flush=True,
+                )
+                _drain_queue(audio_queue)
+                detector.reset()
+                await asyncio.sleep(0.25)
+                set_body_state("listening")
                 accepting_audio = True
                 continue
             motion_command = _parse_motion_command(text)
             if motion_command is not None:
                 reply_started = time.perf_counter()
-                ok = _run_motion_gesture(controller, motion_command.gesture)
+                ok = _run_motion_gesture(body_director or controller, motion_command.gesture)
                 reply_seconds = time.perf_counter() - reply_started
                 print(f"[Stacky] motion={motion_command.gesture} ok={ok}", flush=True)
-                controller.set_expression("happy")
+                set_body_state("happy")
                 speak_started = time.perf_counter()
                 await output.speak(motion_command.spoken if ok else "Jeg kunne ikke bevæge hovedet lige nu.")
                 await output.wait()
@@ -909,12 +979,12 @@ async def _handsfree(
                 _drain_queue(audio_queue)
                 detector.reset()
                 await asyncio.sleep(0.25)
-                controller.set_expression("listening")
+                set_body_state("listening")
                 accepting_audio = True
                 continue
             local_reply = _parse_local_realtime_reply(text)
             if local_reply is not None:
-                controller.set_expression("happy")
+                set_body_state("happy")
                 speak_started = time.perf_counter()
                 await output.speak(local_reply)
                 await output.wait()
@@ -927,7 +997,7 @@ async def _handsfree(
                 _drain_queue(audio_queue)
                 detector.reset()
                 await asyncio.sleep(0.25)
-                controller.set_expression("listening")
+                set_body_state("listening")
                 accepting_audio = True
                 continue
             brain_started = time.perf_counter()
@@ -935,10 +1005,16 @@ async def _handsfree(
                 text,
                 max_spoken_chars=reply_chars,
                 detail_spoken_chars=detail_reply_chars,
+                persist_session=False,
+                allow_memory_writes=False,
+                remember_recent=False,
+                session_source="stackchan-voice-untrusted",
             )
             brain_seconds = time.perf_counter() - brain_started
-            controller.set_expression("happy")
+            set_body_state("happy")
             speak_started = time.perf_counter()
+            if body_director is not None:
+                body_director.reply_started(reply.spoken_text or reply.text)
             await output.speak(reply.spoken_text or reply.text)
             await output.wait()
             speak_seconds = time.perf_counter() - speak_started
@@ -950,14 +1026,14 @@ async def _handsfree(
             _drain_queue(audio_queue)
             detector.reset()
             await asyncio.sleep(0.25)
-            controller.set_expression("listening")
+            set_body_state("listening")
             accepting_audio = True
     except (KeyboardInterrupt, asyncio.CancelledError):
         return 0
     finally:
         if output is not None:
             await output.stop()
-        controller.set_expression("neutral")
+        set_body_state("neutral")
         controller.stop()
 
 
@@ -1080,7 +1156,17 @@ class MotionCommand:
     spoken: str
 
 
-def _run_motion_gesture(controller: StackChanBodyController, gesture_name: str, *, speed: int = 550) -> bool:
+@dataclass(frozen=True)
+class CalibrationCommand:
+    yaw_delta: int = 0
+    pitch_delta: int = 0
+    save_current: bool = False
+    spoken: str = "Okay, jeg justerer mit center."
+
+
+def _run_motion_gesture(actor: BodyDirector | StackChanBodyController | None, gesture_name: str, *, speed: int = 550) -> bool:
+    if actor is None:
+        return False
     sequence = (
         ["center", "look_left", "look_right", "look_up", "look_down", "nod", "shake", "center"]
         if gesture_name == "demo"
@@ -1088,10 +1174,34 @@ def _run_motion_gesture(controller: StackChanBodyController, gesture_name: str, 
     )
     ok = True
     for index, name in enumerate(sequence):
-        ok = controller.gesture(name, speed=speed) and ok
+        ok = actor.gesture(name, speed=speed) and ok
         if index + 1 < len(sequence):
             time.sleep(0.28 if name not in {"nod", "shake"} else 0.55)
     return ok
+
+
+def _parse_calibration_command(text: str) -> CalibrationCommand | None:
+    lowered = text.lower()
+    key = _motion_text_key(text)
+    if any(token in key for token in ("volumen", "volume", "skruop", "skruned", "hojerevolumen", "laverevolumen")):
+        return None
+    if any(token in key for token in ("gemcenter", "gemligeud", "gemdenherposition", "gemnuposition", "gemmitcenter")):
+        return CalibrationCommand(save_current=True, spoken="Okay, jeg gemmer den her position som mit center.")
+    if "kalibr" not in key and "center" not in key and "midt" not in key and "ligeud" not in key and "mere" not in key and "lidt" not in key:
+        return None
+
+    small = 30 if "lidt" in key else 50
+    if any(token in key for token in ("merehojre", "lidttilhojre", "modhojre", "hojre")):
+        return CalibrationCommand(yaw_delta=small, spoken="Okay, jeg flytter mit center lidt mod højre.")
+    if any(token in key for token in ("merevenstre", "lidttilvenstre", "modvenstre", "venstre")):
+        return CalibrationCommand(yaw_delta=-small, spoken="Okay, jeg flytter mit center lidt mod venstre.")
+    if any(token in key for token in ("mereop", "lidtop", "opad", "hovedetop")):
+        return CalibrationCommand(pitch_delta=small, spoken="Okay, jeg flytter mit center lidt op.")
+    if any(token in key for token in ("merened", "lidtned", "nedad", "hovedetned")):
+        return CalibrationCommand(pitch_delta=-small, spoken="Okay, jeg flytter mit center lidt ned.")
+    if any(token in lowered for token in ("gem center", "gem ligeud", "gem position")):
+        return CalibrationCommand(save_current=True, spoken="Okay, jeg gemmer den her position som mit center.")
+    return None
 
 
 def _parse_motion_command(text: str) -> MotionCommand | None:
@@ -1227,7 +1337,7 @@ def _format_signal_quality(quality: TurnSignalQuality) -> str:
         f"dur={quality.duration_seconds:.2f}s med={quality.median_rms} "
         f"p95={quality.p95_rms} peak={quality.peak} "
         f"active={quality.active_ratio:.2f}/{quality.active_ms}ms "
-        f"run={quality.max_active_run_ms}ms crest={quality.crest_factor:.1f} "
+        f"run={quality.max_active_run_ms}ms crest={quality.crest_factor:.1f} zcr={quality.zero_crossing_rate:.2f} "
         f"thr={quality.active_threshold}"
     )
 
