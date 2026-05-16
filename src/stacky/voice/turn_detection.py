@@ -162,10 +162,10 @@ class EnergyTurnDetector:
         self._noise_rms = max(self._noise_rms, 1.0)
 
     def _start_threshold(self) -> int:
-        return int(max(self.threshold, self._noise_rms * 2.0, self._noise_rms + 170))
+        return int(max(self.threshold, self._noise_rms * 1.25, self._noise_rms + 80))
 
     def _active_threshold(self) -> int:
-        return int(max(self.threshold, self._noise_rms * 1.35, self._noise_rms + 120))
+        return int(max(self.threshold, self._noise_rms * 1.10, self._noise_rms + 60))
 
     def _update_noise_floor(self, rms: int) -> None:
         if rms <= 0:

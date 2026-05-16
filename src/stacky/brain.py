@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from .danish import compact_for_speech, live_speech_style_prompt, spoken_danish_system_prompt
 from .llm import ChatClient, ChatMessage, LLMError
 from .memory import Memory, MemoryStore
+from .personality import StackySelfModel
 from .sessions import InfiniteSessionStore
 from .soul import StackySoul
 
@@ -25,19 +26,21 @@ class StackyBrain:
         memory: MemoryStore,
         lmstudio: ChatClient,
         session_store: InfiniteSessionStore | None = None,
+        self_model: StackySelfModel | None = None,
     ) -> None:
         self.soul = soul
         self.memory = memory
         self.lmstudio = lmstudio
         self.session_store = session_store
+        self.self_model = self_model
         self._recent_turns: list[tuple[str, str]] = []
 
     async def respond(
         self,
         user_text: str,
         *,
-        max_spoken_chars: int = 150,
-        detail_spoken_chars: int = 260,
+        max_spoken_chars: int = 260,
+        detail_spoken_chars: int = 420,
         use_session_context: bool = True,
         persist_session: bool = True,
         allow_memory_writes: bool = True,
@@ -45,6 +48,9 @@ class StackyBrain:
         remember_recent: bool = True,
         session_source: str = "conversation",
     ) -> BrainReply:
+        trusted_self_update = bool(allow_memory_writes and persist_session)
+        if self.self_model is not None:
+            self.self_model.observe_user_turn(user_text, trusted=trusted_self_update, source=session_source)
         memories = tuple(_dedupe_memories([*self.memory.pinned(limit=6), *self.memory.recall(user_text, limit=5)]))
         stitched_messages: list[dict[str, str]] = []
         session_user_persisted = False
@@ -87,6 +93,8 @@ class StackyBrain:
         )
         if self.session_store is not None and persist_session:
             self.session_store.append_message("assistant", response, meta={"source": "stacky"})
+        if self.self_model is not None:
+            self.self_model.observe_assistant_turn(response, trusted=trusted_self_update, source="stacky")
         if allow_memory_writes and remember_dialogue:
             self.memory.remember(
                 f"Samtale: {self.soul.created_for} sagde: {user_text} | Stacky svarede: {response}",
@@ -104,18 +112,20 @@ class StackyBrain:
         user_text: str,
         memories: tuple[Memory, ...],
         *,
-        max_spoken_chars: int = 150,
+        max_spoken_chars: int = 260,
         stitched_messages: list[dict[str, str]] | None = None,
         include_current_user: bool = True,
     ) -> list[ChatMessage]:
         memory_text = "\n".join(f"- {memory.text}" for memory in memories) or "- Ingen relevante friske minder endnu."
         recent_text = self._recent_context_text()
+        self_context = self.self_model.context_for_prompt(user_text=user_text) if self.self_model is not None else ""
         system = "\n\n".join(
             [
                 self.soul.to_system_prompt(),
                 spoken_danish_system_prompt(),
                 live_speech_style_prompt(),
                 _live_answer_rule(user_text, max_chars=max_spoken_chars),
+                self_context,
                 "Seneste live-kontekst i denne session:\n" + recent_text,
                 "Relevante friske Stacky-minder:\n" + memory_text,
                 "Svar som en nærværende ven, ikke som et kæledyr eller en assistent med marketingtone.",
@@ -172,13 +182,17 @@ def _dedupe_memories(memories: list[Memory]) -> list[Memory]:
     return result
 
 
-def _live_answer_rule(user_text: str, *, max_chars: int = 150) -> str:
+def _live_answer_rule(user_text: str, *, max_chars: int = 260) -> str:
     if _wants_detail(user_text):
-        return "Brugeren beder sandsynligvis om detaljer; giv stadig en kort konklusion først."
-    return f"Dette er live samtale: svar med 1 kort sætning som default, helst under cirka {max_chars} tegn."
+        return "Brugeren beder sandsynligvis om detaljer; giv en kort konklusion først, og uddyb derefter naturligt."
+    return (
+        "Dette er live samtale: svar med 2-3 korte, konkrete sætninger som default, "
+        f"helst under cirka {max_chars} tegn. Slut ikke automatisk med et generisk spørgsmål; "
+        "spørg kun hvis det faktisk flytter samtalen videre."
+    )
 
 
-def _spoken_response_for_live(user_text: str, response: str, *, max_chars: int = 150, detail_chars: int = 260) -> str:
+def _spoken_response_for_live(user_text: str, response: str, *, max_chars: int = 260, detail_chars: int = 420) -> str:
     limit = detail_chars if _wants_detail(user_text) else max_chars
     return compact_for_speech(response, max_chars=limit)
 

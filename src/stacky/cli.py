@@ -21,6 +21,7 @@ from .body.protocol import decode_pcm_payload, expression
 from .config import DEFAULT_CONFIG_PATH, ROOT, load_config
 from .llm import create_chat_client
 from .memory import MemoryStore
+from .personality import StackySelfModel
 from .sandcode import SandcodeMobileHostClient
 from .sessions import InfiniteSessionStore
 from .soul import load_soul, write_default_soul
@@ -57,6 +58,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--config", default=str(DEFAULT_CONFIG_PATH))
     sub = parser.add_subparsers(dest="command", required=False)
     sub.add_parser("init", help="Create fresh Stacky local state.")
+    sub.add_parser("self-status", help="Show Stacky's local personality/self-model state.")
     chat = sub.add_parser("chat", help="Run a Danish text-mode voice loop.")
     chat.add_argument("--speak", action="store_true", help="Speak replies through local low-latency Piper TTS.")
     live = sub.add_parser("live-text", help="Run Danish text chat while driving StackChan's face.")
@@ -114,8 +116,8 @@ def main(argv: list[str] | None = None) -> int:
     handsfree.add_argument("--stackchan-volume", type=int, default=80, help="Initial StackChan codec volume, 0-100.")
     handsfree.add_argument("--stackchan-mic-gain", type=int, default=100, help="Initial StackChan codec mic gain, 0-100.")
     handsfree.add_argument("--mic-preamp", type=float, default=2.5, help="Digital PCM gain before VAD/STT. Use 1.0 to disable.")
-    handsfree.add_argument("--reply-chars", type=int, default=150, help="Default spoken reply character budget for low-latency live chat.")
-    handsfree.add_argument("--detail-reply-chars", type=int, default=260, help="Spoken reply character budget when the user asks for details.")
+    handsfree.add_argument("--reply-chars", type=int, default=260, help="Default spoken reply character budget for low-latency live chat.")
+    handsfree.add_argument("--detail-reply-chars", type=int, default=420, help="Spoken reply character budget when the user asks for details.")
     stt_capture = sub.add_parser("stt-capture", help="Record labelled StackChan mic clips for Danish STT evaluation.")
     stt_capture.add_argument("--body-timeout", type=float, default=18.0, help="Seconds to wait for StackChan to connect.")
     stt_capture.add_argument("--phrase", action="append", default=[], help="Expected Danish phrase to record. Can be repeated.")
@@ -230,6 +232,8 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "init":
         return _init(args.config)
+    if args.command == "self-status":
+        return _self_status(args.config)
     if args.command == "sandcode-health":
         return _run_async(_sandcode_health(args.config))
     if args.command == "body-server":
@@ -909,6 +913,37 @@ def _init(config_path: str) -> int:
     return 0
 
 
+def _create_brain(config) -> StackyBrain:
+    soul = load_soul(config.soul_path)
+    memory = MemoryStore(config.memory_path)
+    self_model = StackySelfModel(config.data_dir)
+    return StackyBrain(
+        soul,
+        memory,
+        create_chat_client(config.lmstudio),
+        InfiniteSessionStore(config.data_dir),
+        self_model,
+    )
+
+
+def _self_status(config_path: str) -> int:
+    config = load_config(config_path)
+    self_model = StackySelfModel(config.data_dir)
+    summary = self_model.summary()
+    print(f"Stacky self-model: {summary['path']}")
+    print(f"Trusted turns: {summary['trusted_turns']}")
+    print(f"Untrusted voice turns: {summary['untrusted_turns']}")
+    print(f"Tid: {summary['temporal']['wall_clock']} ({summary['temporal']['continuity']})")
+    print(f"Nicolai-model: {summary['social']['mood']} / {summary['social']['phase']}")
+    print("Style notes:")
+    for note in summary["style_notes"] or ["-"]:
+        print(f"- {note}")
+    print("Convictions:")
+    for conviction in summary["convictions"] or ["-"]:
+        print(f"- {conviction}")
+    return 0
+
+
 def _voice_lab_roest(phrases: list[str], *, play: bool, speaker: str) -> int:
     voice = roest_voice(speaker)
     tts = RoestTTS(voice)
@@ -961,9 +996,7 @@ def _voice_lab_supertonic(phrases: list[str], *, play: bool) -> int:
 
 async def _chat(config_path: str, *, speak: bool = False) -> int:
     config = load_config(config_path)
-    soul = load_soul(config.soul_path)
-    memory = MemoryStore(config.memory_path)
-    brain = StackyBrain(soul, memory, create_chat_client(config.lmstudio), InfiniteSessionStore(config.data_dir))
+    brain = _create_brain(config)
     output = await _speech_output(speak)
     await LocalTextVoiceRuntime(brain, output=output).interactive()
     return 0
@@ -971,9 +1004,7 @@ async def _chat(config_path: str, *, speak: bool = False) -> int:
 
 async def _live_text(config_path: str, *, body_timeout: float, speak: bool = False) -> int:
     config = load_config(config_path)
-    soul = load_soul(config.soul_path)
-    memory = MemoryStore(config.memory_path)
-    brain = StackyBrain(soul, memory, create_chat_client(config.lmstudio), InfiniteSessionStore(config.data_dir))
+    brain = _create_brain(config)
 
     def on_event(event) -> None:
         if event.type in {"status", "touch"}:
@@ -1132,9 +1163,7 @@ async def _handsfree(
     config = load_config(config_path)
     brain = None
     if not listen_only:
-        soul = load_soul(config.soul_path)
-        memory = MemoryStore(config.memory_path)
-        brain = StackyBrain(soul, memory, create_chat_client(config.lmstudio), InfiniteSessionStore(config.data_dir))
+        brain = _create_brain(config)
 
     loop = asyncio.get_running_loop()
     audio_queue: asyncio.Queue[tuple[bytes, int, int]] = asyncio.Queue(maxsize=80)

@@ -1,0 +1,473 @@
+from __future__ import annotations
+
+import hashlib
+import json
+import re
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any
+
+
+MAX_STYLE_NOTES = 24
+MAX_CONVICTIONS = 32
+MAX_EPOCHS = 40
+MAX_SIGNALS = 20
+MAX_MESSAGE_TIMESTAMPS = 200
+
+
+DOMAIN_KEYWORDS: dict[str, tuple[str, ...]] = {
+    "stacky-udvikling": ("stacky", "stackchan", "firmware", "stt", "tts", "mikrofon", "stemme", "hjul"),
+    "kode": ("kode", "projekt", "python", "test", "bug", "repo", "github", "sandcode", "codex"),
+    "hjem": ("home assistant", "lys", "hjem", "sensor", "rum", "pc", "computer"),
+    "hardware": ("strix", "halo", "gpu", "core", "usb", "esp", "m5stack", "servo"),
+    "samtale": ("personlighed", "hukommelse", "ven", "samtale", "kontekst", "selvudvik"),
+}
+
+
+@dataclass(frozen=True)
+class SelfObservation:
+    trusted: bool
+    style_notes: tuple[str, ...] = ()
+    convictions: tuple[str, ...] = ()
+    epochs: tuple[str, ...] = ()
+
+
+class StackySelfModel:
+    """Persistent Stacky-native personality state.
+
+    This is deliberately not a Moss import. It stores only new Stacky runtime
+    observations under Stacky's own data directory.
+    """
+
+    def __init__(self, data_dir: Path) -> None:
+        self.root = data_dir / "personality"
+        self.state_path = self.root / "self_model.json"
+        self.evolution_log_path = self.root / "evolution.jsonl"
+        self.state = self._default_state()
+        self._load()
+
+    def observe_user_turn(self, text: str, *, trusted: bool, source: str = "conversation") -> SelfObservation:
+        now = _now()
+        text = text.strip()
+        if not text:
+            return SelfObservation(trusted=trusted)
+
+        epochs = self._update_time_context(now)
+        self.state["last_seen_at"] = now
+        self.state["untrusted_turns" if not trusted else "trusted_turns"] = int(
+            self.state.get("untrusted_turns" if not trusted else "trusted_turns", 0)
+        ) + 1
+
+        if not trusted:
+            self._save()
+            return SelfObservation(trusted=False, epochs=tuple(epochs))
+
+        self._observe_interaction_density(now)
+        self._observe_interests(text)
+        self._observe_mood(text, now)
+
+        style_notes = self._extract_style_notes(text)
+        stored_style_notes = tuple(self._upsert_items("style_notes", style_notes, source=source, now=now))
+
+        convictions = self._extract_convictions(text)
+        stored_convictions = tuple(self._upsert_items("convictions", convictions, source=source, now=now))
+
+        self._save()
+        for label in epochs:
+            self._log_evolution("epoch", label, source=source)
+        for note in stored_style_notes:
+            self._log_evolution("style_note", note, source=source)
+        for conviction in stored_convictions:
+            self._log_evolution("conviction", conviction, source=source)
+        return SelfObservation(
+            trusted=True,
+            style_notes=stored_style_notes,
+            convictions=stored_convictions,
+            epochs=tuple(epochs),
+        )
+
+    def observe_assistant_turn(self, text: str, *, trusted: bool, source: str = "stacky") -> None:
+        if not trusted:
+            return
+        text = text.strip()
+        if not text:
+            return
+        self.state["assistant_turns"] = int(self.state.get("assistant_turns", 0)) + 1
+        recent_lengths = list(self.state.get("recent_response_lengths", []))
+        recent_lengths.append(len(text))
+        self.state["recent_response_lengths"] = recent_lengths[-20:]
+        self.state["last_assistant_at"] = _now()
+        self._save()
+
+    def context_for_prompt(self, *, user_text: str = "") -> str:
+        temporal = self._temporal_context()
+        social = self._social_context()
+        style_notes = self._active_items("style_notes", limit=5)
+        convictions = self._relevant_items("convictions", user_text, limit=5)
+
+        style_text = "\n".join(f"- {item['text']}" for item in style_notes) or "- Ingen stabile stilnoter endnu."
+        conviction_text = "\n".join(f"- {item['text']}" for item in convictions) or "- Ingen relevante Stacky-convictions endnu."
+        interests = ", ".join(social["top_interests"]) if social["top_interests"] else "ingen tydelige endnu"
+
+        return "\n".join(
+            [
+                "Stackys selvmodel (frisk Stacky-state, ikke Moss):",
+                f"- Tid: {temporal['wall_clock']}; {temporal['continuity']}",
+                f"- Nicolai-model: humør={social['mood']} ({social['mood_confidence']:.2f}), fase={social['phase']}, interesser={interests}.",
+                f"- Interaktioner: trusted={self.state.get('trusted_turns', 0)}, untrusted_voice={self.state.get('untrusted_turns', 0)}.",
+                "Stilnoter fra eksplicit feedback:",
+                style_text,
+                "Convictions der må give integritet/friktion:",
+                conviction_text,
+                "Regel: Brug selvmodellen til tone, kontinuitet og prioritering. Opfind ikke minder, og ret hellere langsomt end forkert.",
+            ]
+        )
+
+    def summary(self) -> dict[str, Any]:
+        return {
+            "path": str(self.state_path),
+            "trusted_turns": int(self.state.get("trusted_turns", 0)),
+            "untrusted_turns": int(self.state.get("untrusted_turns", 0)),
+            "temporal": self._temporal_context(),
+            "social": self._social_context(),
+            "style_notes": [item["text"] for item in self._active_items("style_notes", limit=8)],
+            "convictions": [item["text"] for item in self._active_items("convictions", limit=8)],
+        }
+
+    def _observe_interaction_density(self, now: str) -> None:
+        now_dt = _parse_iso(now) or datetime.now(UTC)
+        timestamps = [value for value in self.state.get("message_timestamps", []) if isinstance(value, str)]
+        timestamps.append(now)
+        cutoff_seconds = 24 * 3600
+        kept: list[str] = []
+        for value in timestamps:
+            parsed = _parse_iso(value)
+            if parsed and (now_dt - parsed).total_seconds() <= cutoff_seconds:
+                kept.append(value)
+        self.state["message_timestamps"] = kept[-MAX_MESSAGE_TIMESTAMPS:]
+        self.state["interaction_density"] = round(len(kept) / 24.0, 2)
+
+    def _observe_interests(self, text: str) -> None:
+        lowered = text.lower()
+        interests = dict(self.state.get("interests", {}))
+        for domain, keywords in DOMAIN_KEYWORDS.items():
+            if any(keyword in lowered for keyword in keywords):
+                boost = min(0.12, 0.04 + len(text) / 4000.0)
+                interests[domain] = min(1.0, float(interests.get(domain, 0.0)) + boost)
+        for domain in list(interests):
+            interests[domain] = max(0.0, float(interests[domain]) - 0.002)
+            if interests[domain] < 0.01:
+                del interests[domain]
+        self.state["interests"] = interests
+
+    def _observe_mood(self, text: str, now: str) -> None:
+        signal = _mood_signal(text)
+        if signal is None:
+            return
+        signals = list(self.state.get("mood_signals", []))
+        signals.append({"ts": now, "signal": signal})
+        signals = signals[-MAX_SIGNALS:]
+        self.state["mood_signals"] = signals
+        recent = [str(item.get("signal", "")) for item in signals[-6:] if isinstance(item, dict)]
+        if not recent:
+            return
+        counts: dict[str, int] = {}
+        for item in recent:
+            mood = _SIGNAL_TO_MOOD.get(item, "neutral")
+            counts[mood] = counts.get(mood, 0) + 1
+        mood, count = sorted(counts.items(), key=lambda pair: pair[1], reverse=True)[0]
+        self.state["mood"] = mood
+        self.state["mood_confidence"] = round(count / max(1, len(recent)), 2)
+
+    def _update_time_context(self, now: str) -> list[str]:
+        epochs: list[str] = []
+        now_dt = _parse_iso(now) or datetime.now(UTC)
+        last_seen = _parse_iso(str(self.state.get("last_seen_at", "")))
+        if last_seen is not None:
+            gap_seconds = (now_dt - last_seen).total_seconds()
+            if gap_seconds >= 4 * 3600:
+                epochs.append(_gap_label(gap_seconds))
+            if last_seen.date() != now_dt.date():
+                epochs.append(f"Ny dag: {now_dt.strftime('%Y-%m-%d')}")
+        if epochs:
+            markers = list(self.state.get("epoch_markers", []))
+            for label in epochs:
+                markers.append({"ts": now, "label": label})
+            self.state["epoch_markers"] = markers[-MAX_EPOCHS:]
+            self.state["continuity_score"] = 0.35 if any("pause" in label for label in epochs) else 0.65
+        else:
+            current = float(self.state.get("continuity_score", 0.55))
+            self.state["continuity_score"] = min(1.0, current + 0.02)
+        return epochs
+
+    def _extract_style_notes(self, text: str) -> list[str]:
+        lowered = text.lower()
+        notes: list[str] = []
+        if "generisk" in lowered or "hvad har du på hjerte" in lowered or "hvad har du paa hjerte" in lowered:
+            notes.append("Undgå generiske afslutningsspørgsmål; reager konkret på det Nicolai lige sagde.")
+        if "kortfattet" in lowered or "for kort" in lowered or "mærkeligt og kort" in lowered:
+            notes.append("Svar ikke for fladt eller kundeserviceagtigt; giv 2-3 konkrete sætninger når samtalen kalder på det.")
+        if "dansk" in lowered and ("must" in lowered or "skal" in lowered or "krav" in lowered):
+            notes.append("Dansk tale er et hårdt krav, medmindre Nicolai eksplicit beder om andet.")
+        if "kæledyr" in lowered or "kaeledyr" in lowered:
+            notes.append("Stacky skal opføre sig som en ven, ikke som et kæledyr.")
+        if "latency" in lowered or "realtime" in lowered:
+            notes.append("Prioritér lav latency i live-samtale, også hvis svaret bliver mindre perfekt.")
+        if "memory" in lowered or "hukommelse" in lowered or "kontekst" in lowered:
+            notes.append("Bevar kontekst over tid, men gem kun sikre og friske Stacky-observationer.")
+        if "stt" in lowered or "forstår ikke" in lowered or "fatter ikke" in lowered:
+            notes.append("Vær ærlig om usikre voice-transcripts og bed hellere kort om gentagelse end at gætte hårdt.")
+        return notes
+
+    def _extract_convictions(self, text: str) -> list[str]:
+        lowered = text.lower()
+        explicit = (
+            "husk",
+            "du skal",
+            "du må ikke",
+            "du maa ikke",
+            "jeg vil have",
+            "jeg gider ikke",
+            "det er vigtigt",
+            "det er et krav",
+            "must",
+        )
+        if not any(trigger in lowered for trigger in explicit):
+            return []
+        clean = re.sub(r"\s+", " ", text).strip(" .")
+        if len(clean) < 8:
+            return []
+        if len(clean) > 220:
+            clean = clean[:217].rstrip() + "..."
+        return [f"Nicolai har givet en stabil Stacky-rettet regel: {clean}."]
+
+    def _upsert_items(self, key: str, texts: list[str], *, source: str, now: str) -> list[str]:
+        if not texts:
+            return []
+        items = list(self.state.get(key, []))
+        stored: list[str] = []
+        for text in texts:
+            item_id = _stable_id(text)
+            existing = next((item for item in items if item.get("id") == item_id), None)
+            if existing is None:
+                items.append(
+                    {
+                        "id": item_id,
+                        "text": text,
+                        "confidence": 0.62,
+                        "hits": 1,
+                        "source": source,
+                        "created_at": now,
+                        "updated_at": now,
+                    }
+                )
+                stored.append(text)
+            else:
+                existing["hits"] = int(existing.get("hits", 1)) + 1
+                existing["confidence"] = min(1.0, float(existing.get("confidence", 0.62)) + 0.08)
+                existing["updated_at"] = now
+        items.sort(key=lambda item: (float(item.get("confidence", 0.0)), int(item.get("hits", 0))), reverse=True)
+        self.state[key] = items[: MAX_STYLE_NOTES if key == "style_notes" else MAX_CONVICTIONS]
+        return stored
+
+    def _active_items(self, key: str, *, limit: int) -> list[dict[str, Any]]:
+        items = [dict(item) for item in self.state.get(key, []) if isinstance(item, dict)]
+        items = [item for item in items if float(item.get("confidence", 0.0)) >= 0.2]
+        items.sort(key=lambda item: (float(item.get("confidence", 0.0)), int(item.get("hits", 0))), reverse=True)
+        return items[:limit]
+
+    def _relevant_items(self, key: str, text: str, *, limit: int) -> list[dict[str, Any]]:
+        items = self._active_items(key, limit=MAX_CONVICTIONS)
+        query_tokens = set(_tokens(text))
+        if not query_tokens:
+            return items[:limit]
+        scored: list[tuple[float, dict[str, Any]]] = []
+        for item in items:
+            item_tokens = set(_tokens(str(item.get("text", ""))))
+            overlap = len(query_tokens & item_tokens)
+            base = float(item.get("confidence", 0.0))
+            if overlap > 0:
+                scored.append((overlap + base, item))
+        if not scored:
+            return items[: min(2, limit)]
+        scored.sort(key=lambda pair: pair[0], reverse=True)
+        return [item for _, item in scored[:limit]]
+
+    def _temporal_context(self) -> dict[str, Any]:
+        now = datetime.now(UTC)
+        hour = now.hour
+        if 5 <= hour < 9:
+            tod = "morgen"
+        elif 9 <= hour < 12:
+            tod = "formiddag"
+        elif 12 <= hour < 14:
+            tod = "middag"
+        elif 14 <= hour < 18:
+            tod = "eftermiddag"
+        elif 18 <= hour < 22:
+            tod = "aften"
+        else:
+            tod = "nat"
+        last_seen = _parse_iso(str(self.state.get("last_seen_at", "")))
+        if last_seen is None:
+            continuity = "ingen tidligere Stacky-interaktion registreret"
+        else:
+            gap = (now - last_seen).total_seconds()
+            continuity = f"sidste sikre kontakt var {_format_gap(gap)} siden"
+        return {
+            "wall_clock": f"det er {tod} ({now.astimezone().strftime('%H:%M')})",
+            "continuity_score": round(float(self.state.get("continuity_score", 0.55)), 2),
+            "continuity": continuity,
+            "recent_epochs": self.state.get("epoch_markers", [])[-5:],
+        }
+
+    def _social_context(self) -> dict[str, Any]:
+        interests = dict(self.state.get("interests", {}))
+        top_interests = [
+            name
+            for name, score in sorted(interests.items(), key=lambda pair: float(pair[1]), reverse=True)[:3]
+            if float(score) > 0.02
+        ]
+        density = float(self.state.get("interaction_density", 0.0))
+        if density >= 4.0:
+            phase = "intens samarbejde"
+        elif density >= 1.0:
+            phase = "aktiv udforskning"
+        else:
+            phase = "rolig kontakt"
+        return {
+            "mood": str(self.state.get("mood", "neutral")),
+            "mood_confidence": float(self.state.get("mood_confidence", 0.0)),
+            "top_interests": top_interests,
+            "phase": phase,
+            "interaction_density": density,
+        }
+
+    def _load(self) -> None:
+        try:
+            data = json.loads(self.state_path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return
+        except (json.JSONDecodeError, OSError):
+            return
+        if isinstance(data, dict):
+            merged = self._default_state()
+            merged.update(data)
+            self.state = merged
+
+    def _save(self) -> None:
+        self.root.mkdir(parents=True, exist_ok=True)
+        self.state_path.write_text(json.dumps(self.state, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+    def _log_evolution(self, event_type: str, text: str, *, source: str) -> None:
+        self.root.mkdir(parents=True, exist_ok=True)
+        entry = {
+            "ts": _now(),
+            "type": event_type,
+            "source": source,
+            "text": text,
+        }
+        with self.evolution_log_path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(entry, ensure_ascii=False, separators=(",", ":")) + "\n")
+
+    def _default_state(self) -> dict[str, Any]:
+        now = _now()
+        return {
+            "schema": 1,
+            "origin": "fresh_stacky_self_model",
+            "created_at": now,
+            "last_seen_at": "",
+            "last_assistant_at": "",
+            "trusted_turns": 0,
+            "untrusted_turns": 0,
+            "assistant_turns": 0,
+            "continuity_score": 0.55,
+            "epoch_markers": [],
+            "interests": {},
+            "interaction_density": 0.0,
+            "message_timestamps": [],
+            "mood": "neutral",
+            "mood_confidence": 0.0,
+            "mood_signals": [],
+            "style_notes": [],
+            "convictions": [],
+            "recent_response_lengths": [],
+        }
+
+
+_SIGNAL_TO_MOOD = {
+    "frustreret": "frustreret",
+    "fokuseret": "fokuseret",
+    "glad": "glad",
+    "omsorgsfuld": "varm",
+    "engageret": "engageret",
+    "kort": "træt",
+}
+
+
+def _mood_signal(text: str) -> str | None:
+    lowered = text.lower()
+    if any(word in lowered for word in ("pis", "fuck", "lort", "elendigt", "stadig", "virker ikke")):
+        return "frustreret"
+    if any(word in lowered for word in ("fedt", "godt", "perfekt", "virker", "pisse godt")):
+        return "glad"
+    if any(word in lowered for word in ("implement", "kode", "test", "debug", "repo", "firmware")):
+        return "fokuseret"
+    if any(word in lowered for word in ("hvordan har du", "føles det", "foeles det")):
+        return "omsorgsfuld"
+    if len(text) > 80:
+        return "engageret"
+    if len(text) < 14 and "?" not in text:
+        return "kort"
+    return None
+
+
+def _stable_id(text: str) -> str:
+    digest = hashlib.sha256(_normalise(text).encode("utf-8")).hexdigest()[:16]
+    return f"self_{digest}"
+
+
+def _normalise(text: str) -> str:
+    return re.sub(r"\s+", " ", text.lower()).strip()
+
+
+def _tokens(text: str) -> list[str]:
+    return [token for token in re.findall(r"[0-9A-Za-zÆØÅæøå_-]+", text.lower()) if len(token) > 2]
+
+
+def _now() -> str:
+    return datetime.now(UTC).isoformat()
+
+
+def _parse_iso(value: str) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
+
+
+def _gap_label(seconds: float) -> str:
+    if seconds < 86400:
+        hours = max(1, int(seconds // 3600))
+        return f"Tilbage efter {hours} timers pause"
+    days = max(1, int(seconds // 86400))
+    return f"Tilbage efter {days} dages pause"
+
+
+def _format_gap(seconds: float) -> str:
+    if seconds < 60:
+        return "under et minut"
+    if seconds < 3600:
+        minutes = int(seconds // 60)
+        return "1 minut" if minutes == 1 else f"{minutes} minutter"
+    if seconds < 86400:
+        hours = int(seconds // 3600)
+        return "1 time" if hours == 1 else f"{hours} timer"
+    days = int(seconds // 86400)
+    return "1 dag" if days == 1 else f"{days} dage"

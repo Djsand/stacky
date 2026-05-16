@@ -41,6 +41,7 @@ Danish speech is a hard v1 requirement. Stacky may quote code, file names, API n
 - `src/stacky/brain.py`: Danish-first brain around LM Studio and local memory.
 - `src/stacky/memory.py`: fresh SQLite memory store with a tiny local vector index.
 - `src/stacky/sessions.py`: append-only infinite session thread plus stitcher for trusted context.
+- `src/stacky/personality.py`: Stacky's fresh self-model: continuity, Nicolai-model, style notes, and convictions from trusted feedback.
 - `src/stacky/sandcode.py`: client for `C:\Users\nicol\SANDCODE\ios\host\sandcode-mobile-host.mjs`.
 - `src/stacky/body`: StackChan body/audio protocol and local hub.
 - `src/stacky/voice`: Pipecat pipeline factory plus a text voice loop for local testing.
@@ -89,6 +90,12 @@ The hands-free VAD is tuned for the official Stacky bridge: default `--vad-thres
 Firmware `official-0.1.10` streams all StackChan mic input channels and accepts PC-controlled mic gain. `handsfree` and `stt-capture` default to `--mic-channel auto`, which chooses the strongest input channel per audio chunk. Use `--mic-channel 0` or `--mic-channel 1` to compare channels, `--mic-channel mix` to average them, and `--mic-channel all` to keep multichannel diagnostic WAVs. Default `--stackchan-mic-gain` is `100`, and default `--mic-preamp` is `2.5`.
 
 Important safety rule while STT is unstable: hands-free voice turns use session context but do not write to the infinite session thread or long-term memory. Trusted text/chat turns persist to `data/stacky/sessions/stacky-infinite-thread.jsonl`; rolled blocks become `stacky-infinite-thread.001.jsonl`, etc.
+
+Stacky's personality/self-development layer is also conservative while STT is unstable. Trusted text/chat feedback can form persistent style notes and convictions in `data/stacky/personality/`; untrusted hands-free voice turns only update lightweight continuity counters. Inspect it with:
+
+```powershell
+.\.venv\Scripts\python.exe -m stacky self-status
+```
 
 ## Danish STT Dataset Loop
 

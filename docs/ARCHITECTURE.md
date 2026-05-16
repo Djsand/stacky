@@ -6,6 +6,9 @@ Stacky is split into PC brain and StackChan body.
 
 - `StackyBrain` builds a Danish system prompt from `data/stacky/soul.yaml`.
 - `MemoryStore` owns a fresh SQLite DB at `data/stacky/memory.sqlite`.
+- `StackySelfModel` owns fresh personality runtime state at `data/stacky/personality/`.
+- The self-model tracks continuity, Nicolai's current interaction pattern, trusted style feedback, and Stacky convictions.
+- Trusted text/chat turns can evolve the self-model. Untrusted StackChan voice turns only update lightweight counters until STT is reliable enough.
 - `LMStudioClient` calls LM Studio through its OpenAI-compatible `/v1/chat/completions` endpoint.
 - `LocalTextVoiceRuntime` is the current test harness.
 - `build_pipecat_pipeline` builds the realtime voice pipeline once STT/TTS services are selected and installed.

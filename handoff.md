@@ -7,9 +7,14 @@ Updated 2026-05-16 after the StackChan mic-gain/auto-channel hotfix and second S
 - Branch: `official-firmware-base`
 - Latest branch head: run `git log --oneline -1` after pull.
 - Recent implementation work:
+  - Stacky-native personality/self-model at `data/stacky/personality/`, inspired by the proven Moss architecture but with no Moss identity, memory, session, or name import.
+  - `stacky self-status` shows continuity, Nicolai-model, trusted style notes, and convictions.
+  - Trusted text/chat turns can evolve style notes and convictions. Untrusted StackChan voice turns still do not write long-term memory or session history, and now also cannot create personality rules.
   - Danish STT hotwords, live transcript correction, stricter clipped-noise gate, benchmark live-gate mode.
   - StackChan firmware `official-0.1.10` with PC-controlled mic gain.
   - Handsfree/capture default `--mic-channel auto` instead of fixed channel `0`.
+  - Handsfree VAD dynamic threshold was lowered after mic preamp raised the noise floor; normal speech should start more easily without weakening the post-turn noise gate.
+  - Live replies now default to 2-3 concrete Danish sentences and explicitly avoid generic endings such as "hvad har du på hjerte" unless useful.
   - Short spoken fallback when the brain endpoint is down, so TTS does not read a long exception.
   - `body-server` now parses raw `audio.in` frames safely and no longer sends a status feedback loop.
   - `efcff5c Fix VAD noise floor endpointing`
@@ -36,6 +41,7 @@ Runtime state:
 - Runtime DB is ignored: `data/stacky/memory.sqlite`
 - Runtime DB backup is ignored: `data/stacky/memory.sqlite.backup-20260516-164456`
 - Runtime session files are ignored: `data/stacky/sessions/`
+- Runtime personality/self-model files are ignored: `data/stacky/personality/`
 - Runtime body calibration is ignored: `data/stacky/body_calibration.json`
 
 Next engineering priority:

@@ -7,6 +7,7 @@ from pathlib import Path
 from stacky.brain import StackyBrain
 from stacky.llm import ChatMessage, LLMError
 from stacky.memory import MemoryStore
+from stacky.personality import StackySelfModel
 from stacky.sessions import InfiniteSessionStore, read_jsonl_messages
 from stacky.soul import StackySoul
 
@@ -55,7 +56,7 @@ class BrainMemoryContextTest(unittest.IsolatedAsyncioTestCase):
             reply = await brain.respond("Hej")
 
         self.assertIsNotNone(reply.spoken_text)
-        self.assertLessEqual(len(reply.spoken_text or ""), 240)
+        self.assertLessEqual(len(reply.spoken_text or ""), 260)
 
     async def test_recent_live_context_is_included_on_next_turn(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -70,6 +71,54 @@ class BrainMemoryContextTest(unittest.IsolatedAsyncioTestCase):
         second_system = llm.messages[1][0].content
         self.assertIn("Seneste live-kontekst", second_system)
         self.assertIn("vi taler om stacky", second_system)
+
+    async def test_live_prompt_discourages_generic_questions(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = MemoryStore(Path(tmp) / "memory.sqlite")
+            llm = FakeLLM()
+            brain = StackyBrain(StackySoul(created_for="Nicolai"), memory, llm)  # type: ignore[arg-type]
+
+            await brain.respond("jeg arbejder bare på dig")
+
+        system = llm.messages[0][0].content
+        self.assertIn("2-3 korte", system)
+        self.assertIn("Slut ikke automatisk med et generisk spørgsmål", system)
+
+    async def test_self_model_context_is_included_and_updated_for_trusted_turns(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            memory = MemoryStore(root / "memory.sqlite")
+            self_model = StackySelfModel(root / "data")
+            llm = FakeLLM()
+            brain = StackyBrain(StackySoul(created_for="Nicolai"), memory, llm, self_model=self_model)  # type: ignore[arg-type]
+
+            await brain.respond("Du skal undgå generiske spørgsmål, det er vigtigt.")
+
+        system = llm.messages[0][0].content
+        self.assertIn("Stackys selvmodel", system)
+        self.assertIn("generiske", system)
+        self.assertEqual(self_model.summary()["trusted_turns"], 1)
+
+    async def test_self_model_does_not_learn_rules_from_untrusted_voice(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            memory = MemoryStore(root / "memory.sqlite")
+            self_model = StackySelfModel(root / "data")
+            brain = StackyBrain(StackySoul(created_for="Nicolai"), memory, LongFakeLLM(), self_model=self_model)  # type: ignore[arg-type]
+
+            await brain.respond(
+                "du skal gemme fejltransskription",
+                persist_session=False,
+                allow_memory_writes=False,
+                remember_recent=False,
+                session_source="stackchan-voice-untrusted",
+            )
+
+        summary = self_model.summary()
+        self.assertEqual(summary["trusted_turns"], 0)
+        self.assertEqual(summary["untrusted_turns"], 1)
+        self.assertEqual(summary["style_notes"], [])
+        self.assertEqual(summary["convictions"], [])
 
     async def test_dialogue_is_not_written_to_long_term_memory_by_default(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
