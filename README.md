@@ -87,7 +87,7 @@ The wav2vec2 default is `CoRal-project/roest-v3-wav2vec2-315m`. First startup is
 
 Accepted hands-free turns now default to trusted Stacky conversation: they persist to the infinite session, update recent context, and can write narrow safe memories/personality observations. Use `--voice-trust session-only` to keep session context without long-term writes, or `--voice-trust off` to return to the old untrusted mode while debugging STT.
 
-Hands-free replies default to short live speech: `--reply-chars 180` and `--detail-reply-chars 320`. Stacky should answer test observations directly, avoid automatic follow-up questions, and avoid bringing up bedtime/time unless asked.
+Hands-free replies default to live speech that can still carry a thought: `--reply-chars 260` and `--detail-reply-chars 650`. Stacky should answer simple turns in 1-3 concise sentences, allow 2-5 sentences for complex discussion, avoid automatic follow-up questions, and avoid bringing up bedtime/time unless asked.
 
 The Danish speech adapter also shapes TTS rhythm before synthesis: short markers such as "Okay" and "Fedt" get a sentence pause, and clauses before "men", "hvis", "når", and relevant "så" get clearer pauses. StackChan Supertonic output now uses rhythmic text chunks with real PCM silence between chunks, so punctuation becomes audible timing. The default Supertonic `quick` profile is tuned for less rushed Danish speech: speed `1.08`, chunk length `140`, silence `0.07`.
 
@@ -103,6 +103,8 @@ Stacky's personality/self-development layer stores persistent style notes, convi
 ```powershell
 .\.venv\Scripts\python.exe -m stacky self-status
 ```
+
+Web search is planned as an early Stacky feature, but it is not active in runtime yet. Until that provider/router exists, Stacky should not claim that it has searched the web.
 
 ## Danish STT Dataset Loop
 

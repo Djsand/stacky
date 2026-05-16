@@ -20,7 +20,9 @@ class DanishContractTest(unittest.TestCase):
             assert_danish_voice_config("en-US", False)
         with self.assertRaises(ValueError):
             assert_danish_voice_config("da-DK", True)
-        self.assertIn("1-2 korte", live_speech_style_prompt())
+        self.assertIn("1-3 korte", live_speech_style_prompt())
+        self.assertIn("2-5 sætninger", live_speech_style_prompt())
+        self.assertIn("kommende Stacky-feature", live_speech_style_prompt())
         self.assertIn("generiske afslutninger", live_speech_style_prompt())
         self.assertIn("tester dig", live_speech_style_prompt())
 

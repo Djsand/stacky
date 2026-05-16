@@ -2,7 +2,7 @@
 
 ## Current Snapshot
 
-Updated 2026-05-17 after the brightness, motion, camera-foundation, and false-trigger pass.
+Updated 2026-05-17 after the camera-foundation, reply-length, and web-search roadmap pass.
 
 - Branch: `official-firmware-base`
 - Latest branch head: run `git log --oneline -1` after pull.
@@ -12,7 +12,7 @@ Updated 2026-05-17 after the brightness, motion, camera-foundation, and false-tr
   - Trusted text/chat turns can evolve style notes and convictions.
   - Accepted StackChan hands-free turns now default to trusted session persistence and safe memory/personality writes. Use `--voice-trust session-only` for context-only logging or `--voice-trust off` for old untrusted STT debugging.
   - Local hands-free commands such as volume, calibration, motion, and pause are recorded into the infinite session without an extra brain-model call.
-  - Hands-free replies now default to `--reply-chars 180` and `--detail-reply-chars 320`; Stacky should answer test observations directly instead of steering into smalltalk or bedtime/time comments.
+  - Hands-free replies now default to `--reply-chars 260` and `--detail-reply-chars 650`; Stacky should answer simple turns in 1-3 concrete sentences and allow 2-5 sentences for complex discussion.
   - Speech rhythm is shaped before TTS: marker sentence-pauses and pauses before `men`/`hvis`/`når`/relevant `så`; StackChan Supertonic uses rhythmic chunks with real PCM gaps. Supertonic `quick` is now speed `1.08`, chunk length `140`, silence `0.07`.
   - Volume parser catches soft spoken commands like `skrue lyden ned`, `ned til 65`, and `skrue meget længere ned` locally before the brain model.
   - Danish STT hotwords, live transcript correction, stricter clipped-noise gate, benchmark live-gate mode.
@@ -24,7 +24,8 @@ Updated 2026-05-17 after the brightness, motion, camera-foundation, and false-tr
   - Handsfree VAD dynamic threshold was lowered after mic preamp raised the noise floor; normal speech should start more easily without weakening the post-turn noise gate.
   - Follow-up VAD fix: high-frequency mic noise is no longer allowed to start a voice turn or train the noise floor. Sustained noisy speech can still reach STT if it contains enough low-ZCR voice-band frames.
   - Roest STT loading is cache-first. `transformers` uses `local_files_only=True` first and only falls back to Hugging Face when the model is missing locally.
-  - Live replies now default to 1-2 concrete Danish sentences and explicitly avoid generic endings such as "hvad har du på hjerte", "hvordan går det", or bedtime/time comments unless useful.
+  - Live replies now default to 1-3 concrete Danish sentences, can expand to 2-5 sentences for complex topics, and explicitly avoid generic endings such as "hvad har du på hjerte", "hvordan går det", or bedtime/time comments unless useful.
+  - Web search is a planned early runtime feature, but it is not active yet. Stacky should not claim it searched the web until a real provider/router is implemented.
   - Brain prompt now treats StackChan wireless/battery/audio/mic comments as Stacky's own body status, not Nicolai's body.
   - Body director is calmer: no automatic `look_up` during thinking, slower listening recenter, and a smaller less frequent nod on happy.
   - Short spoken fallback when the brain endpoint is down, so TTS does not read a long exception.
@@ -79,11 +80,15 @@ Next engineering priority:
 6. Continue personality + voice tuning before adding more agent skills:
    - tune Supertonic profile/voice/speed/steps/silence in `voice-lab` and then test through StackChan speaker.
    - inspect `python -m stacky self-status` after live conversation to verify style notes/memory are evolving from real trusted turns.
-7. Next body-control backlog, after personality/voice feels stable:
+7. Implement web search as an early feature slice before broad agent skills:
+   - add a provider abstraction and local config/env for search API credentials.
+   - route explicit/current-knowledge questions to search, but do not auto-search casual chat.
+   - log search citations/summaries into the session without polluting long-term memory.
+8. Next body-control backlog, after personality/voice feels stable:
    - battery status, speaker volume/mic gain commands, and verify flashed display brightness control.
    - top LEDs, touch surface, NFC events.
    - richer face states and speaking/listening mouth animation.
-8. Agent skills and Sandcode integration come after the body/personality foundation is stable.
+9. Agent skills and Sandcode integration come after the body/personality/search foundation is stable.
 
 ## Latest Mic/STT Hotfix
 

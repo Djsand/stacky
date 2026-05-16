@@ -256,15 +256,18 @@ def _dedupe_memories(memories: list[Memory]) -> list[Memory]:
 def _live_answer_rule(user_text: str, *, max_chars: int = 260) -> str:
     if _wants_detail(user_text):
         return (
-            "Brugeren beder sandsynligvis om detaljer; giv en kort konklusion først, "
-            "og uddyb kun det nødvendige i 2-4 korte sætninger."
+            "Brugeren beder sandsynligvis om detaljer eller diskuterer noget komplekst; "
+            "giv en kort konklusion først, og uddyb det nødvendige i 2-5 naturlige sætninger. "
+            "Det må gerne fylde mere end et hurtigt live-svar, men undgå lange monologer."
         )
     return (
-        "Dette er live samtale: svar med 1-2 korte, konkrete sætninger som default, "
+        "Dette er live samtale: svar med 1-3 korte, konkrete sætninger som default, "
         f"helst under cirka {max_chars} tegn. Slut ikke automatisk med et spørgsmål. "
         "Spørg kun hvis Nicolai tydeligt mangler en afklaring for at komme videre. "
         "Nævn ikke at det er sent, aften, nat eller sengetid, medmindre Nicolai spørger om tid eller søvn. "
-        "Når Nicolai siger at han tester dig, så anerkend testen kort og vent på næste observation."
+        "Når Nicolai siger at han tester dig, så anerkend testen kort og vent på næste observation. "
+        "Web search er planlagt som en tidlig feature, men er ikke aktiv i runtime endnu; "
+        "du skal ikke påstå at du har søgt på nettet."
     )
 
 
@@ -287,6 +290,12 @@ def _wants_detail(user_text: str) -> bool:
         "fejl",
         "hvorfor",
         "hvordan",
+        "diskuter",
+        "kompleks",
+        "komplekst",
+        "arkitektur",
+        "strategi",
+        "research",
         "lav det",
         "gør det",
     )

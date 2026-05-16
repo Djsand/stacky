@@ -12,6 +12,7 @@ Stacky is split into PC brain and StackChan body.
 - `LMStudioClient` calls LM Studio through its OpenAI-compatible `/v1/chat/completions` endpoint.
 - `LocalTextVoiceRuntime` is the current test harness.
 - `build_pipecat_pipeline` builds the realtime voice pipeline once STT/TTS services are selected and installed.
+- Web search is planned as an early PC-brain tool, but it is not active yet. The intended shape is a provider/router that only searches for explicit or current-knowledge questions and records citations in the session.
 
 ## StackChan Body
 
