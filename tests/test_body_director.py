@@ -51,14 +51,23 @@ class BodyDirectorTest(unittest.TestCase):
         self.assertEqual(fake.configs[0]["center_yaw"], 125)
         self.assertEqual(fake.configs[0]["center_pitch"], 255)
 
-    def test_set_state_updates_expression_and_small_motion(self) -> None:
+    def test_thinking_updates_expression_without_twitch_motion(self) -> None:
         fake = FakeDirectorController()
         director = BodyDirector(fake, BodyCalibration())  # type: ignore[arg-type]
 
         self.assertTrue(director.set_state("thinking"))
 
         self.assertEqual(fake.expressions, ["thinking"])
-        self.assertEqual(fake.gestures[0][0], "look_up")
+        self.assertEqual(fake.gestures, [])
+
+    def test_happy_uses_restrained_nod(self) -> None:
+        fake = FakeDirectorController()
+        director = BodyDirector(fake, BodyCalibration())  # type: ignore[arg-type]
+
+        self.assertTrue(director.set_state("happy"))
+
+        self.assertEqual(fake.expressions, ["happy"])
+        self.assertEqual(fake.gestures, [("nod", 0.18, 260)])
 
 
 if __name__ == "__main__":

@@ -107,6 +107,61 @@ class StackyBrain:
             self._remember_recent_turn(user_text, response)
         return BrainReply(response, spoken_text=spoken_response, remembered=tuple(remembered), used_memories=memories)
 
+    def record_observed_turn(
+        self,
+        user_text: str,
+        assistant_text: str,
+        *,
+        persist_session: bool = True,
+        allow_memory_writes: bool = True,
+        remember_dialogue: bool = False,
+        remember_recent: bool = True,
+        session_source: str = "conversation",
+    ) -> tuple[Memory, ...]:
+        """Record a completed local turn without calling the brain model."""
+
+        user_text = user_text.strip()
+        assistant_text = assistant_text.strip()
+        if not user_text and not assistant_text:
+            return ()
+
+        trusted_self_update = bool(allow_memory_writes and persist_session)
+        if self.self_model is not None and user_text:
+            self.self_model.observe_user_turn(user_text, trusted=trusted_self_update, source=session_source)
+
+        if self.session_store is not None and persist_session:
+            if user_text:
+                self.session_store.append_message("user", user_text, meta={"source": session_source})
+            if assistant_text:
+                self.session_store.append_message("assistant", assistant_text, meta={"source": "stacky"})
+
+        remembered: list[Memory] = []
+        if allow_memory_writes and user_text:
+            for candidate in self._candidate_memories(user_text):
+                remembered.append(
+                    self.memory.remember(
+                        candidate,
+                        kind="preference" if "foretrækker" in candidate or "kan lide" in candidate else "episode",
+                        importance=0.7,
+                        source="conversation",
+                        tags=("fresh-stacky",),
+                    )
+                )
+
+        if self.self_model is not None and assistant_text:
+            self.self_model.observe_assistant_turn(assistant_text, trusted=trusted_self_update, source="stacky")
+        if allow_memory_writes and remember_dialogue and user_text and assistant_text:
+            self.memory.remember(
+                f"Samtale: {self.soul.created_for} sagde: {user_text} | Stacky svarede: {assistant_text}",
+                kind="episode",
+                importance=0.35,
+                source="conversation",
+                tags=("dialogue",),
+            )
+        if remember_recent and user_text and assistant_text:
+            self._remember_recent_turn(user_text, assistant_text)
+        return tuple(remembered)
+
     def _messages(
         self,
         user_text: str,
@@ -128,6 +183,15 @@ class StackyBrain:
                 self_context,
                 "Seneste live-kontekst i denne session:\n" + recent_text,
                 "Relevante friske Stacky-minder:\n" + memory_text,
+                (
+                    "Kropslig situationsregel: Du er Stacky i StackChan-kroppen på bordet hos Nicolai. "
+                    "Når Nicolai siger at du, Stacky, kroppen, lyden, mikrofonen, batteriet eller trådløs drift virker, "
+                    "så svar fra din egen Stacky-status. Tolk ikke automatisk ordene som om Nicolai selv er apparatet."
+                ),
+                (
+                    "Hvis voice-transcriptet virker afbrudt eller semantisk tyndt, så sig kort at du ikke fik fat i det, "
+                    "i stedet for at opfinde et nyt emne."
+                ),
                 "Svar som en nærværende ven, ikke som et kæledyr eller en assistent med marketingtone.",
             ]
         )
@@ -152,6 +216,13 @@ class StackyBrain:
             "jeg hedder",
             "mit hjem",
             "min pc",
+            "for første gang",
+            "trådløs",
+            "wireless",
+            "batteri",
+            "opgradering",
+            "firmware",
+            "hjul",
         )
         if any(trigger in lowered for trigger in triggers):
             return [f"{self.soul.created_for} fortalte Stacky: {user_text.strip()}"]

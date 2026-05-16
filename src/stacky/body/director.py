@@ -30,18 +30,14 @@ class BodyDirector:
     def set_state(self, name: str) -> bool:
         ok = self.controller.set_expression(name)
         now = time.monotonic()
-        if name == "thinking":
-            ok = self._motion("look_up", intensity=0.22, speed=220, cooldown=0.7, now=now) and ok
-        elif name == "listening":
-            ok = self._motion("center", intensity=0.45, speed=220, cooldown=2.5, now=now) and ok
+        if name == "listening":
+            ok = self._motion("center", intensity=0.22, speed=180, cooldown=4.0, now=now) and ok
         elif name == "happy":
-            ok = self._motion("nod", intensity=0.28, speed=320, cooldown=1.2, now=now) and ok
+            ok = self._motion("nod", intensity=0.18, speed=260, cooldown=2.4, now=now) and ok
         return ok
 
     def reply_started(self, text: str) -> bool:
-        if len(text.strip()) < 12:
-            return True
-        return self._motion("nod", intensity=0.22, speed=260, cooldown=1.4)
+        return True
 
     def gesture(self, name: str, *, intensity: float = 1.0, speed: int = 500) -> bool:
         self._last_motion_at = time.monotonic()

@@ -118,6 +118,12 @@ def main(argv: list[str] | None = None) -> int:
     handsfree.add_argument("--mic-preamp", type=float, default=2.0, help="Digital PCM gain before VAD/STT. Limited to avoid PCM clipping; use 1.0 to disable.")
     handsfree.add_argument("--reply-chars", type=int, default=260, help="Default spoken reply character budget for low-latency live chat.")
     handsfree.add_argument("--detail-reply-chars", type=int, default=420, help="Spoken reply character budget when the user asks for details.")
+    handsfree.add_argument(
+        "--voice-trust",
+        choices=("trusted", "session-only", "off"),
+        default="trusted",
+        help="How accepted StackChan voice turns are logged. trusted writes session + safe memories; session-only logs context; off keeps the old untrusted mode.",
+    )
     stt_capture = sub.add_parser("stt-capture", help="Record labelled StackChan mic clips for Danish STT evaluation.")
     stt_capture.add_argument("--body-timeout", type=float, default=18.0, help="Seconds to wait for StackChan to connect.")
     stt_capture.add_argument("--phrase", action="append", default=[], help="Expected Danish phrase to record. Can be repeated.")
@@ -301,6 +307,7 @@ def main(argv: list[str] | None = None) -> int:
                 stackchan_mic_gain=args.stackchan_mic_gain,
                 reply_chars=args.reply_chars,
                 detail_reply_chars=args.detail_reply_chars,
+                voice_trust=args.voice_trust,
                 listen_only=args.listen_only,
                 debug_audio=args.debug_audio,
             )
@@ -379,6 +386,37 @@ _STT_SPEC_ALIASES = {
     "saga": ("qwen3", "saga"),
     "milo": ("qwen3", "milo"),
 }
+
+
+@dataclass(frozen=True)
+class _VoiceMemoryPolicy:
+    persist_session: bool
+    allow_memory_writes: bool
+    remember_recent: bool
+    session_source: str
+
+
+def _voice_memory_policy(mode: str) -> _VoiceMemoryPolicy:
+    if mode == "off":
+        return _VoiceMemoryPolicy(
+            persist_session=False,
+            allow_memory_writes=False,
+            remember_recent=False,
+            session_source="stackchan-voice-untrusted",
+        )
+    if mode == "session-only":
+        return _VoiceMemoryPolicy(
+            persist_session=True,
+            allow_memory_writes=False,
+            remember_recent=True,
+            session_source="stackchan-voice-session",
+        )
+    return _VoiceMemoryPolicy(
+        persist_session=True,
+        allow_memory_writes=True,
+        remember_recent=True,
+        session_source="stackchan-voice",
+    )
 
 
 @dataclass
@@ -1156,6 +1194,7 @@ async def _handsfree(
     stackchan_mic_gain: int,
     reply_chars: int,
     detail_reply_chars: int,
+    voice_trust: str,
     mic_channel: str,
     mic_preamp: float,
     listen_only: bool,
@@ -1165,6 +1204,7 @@ async def _handsfree(
     brain = None
     if not listen_only:
         brain = _create_brain(config)
+    voice_policy = _voice_memory_policy(voice_trust)
 
     loop = asyncio.get_running_loop()
     audio_queue: asyncio.Queue[tuple[bytes, int, int]] = asyncio.Queue(maxsize=80)
@@ -1244,12 +1284,26 @@ async def _handsfree(
     print(f"Using StackChan mic channel: {mic_channel}", flush=True)
     print(f"Setting StackChan mic gain: {stackchan_mic_gain}", flush=True)
     print(f"Applying StackChan mic preamp: {mic_preamp:.2f}x", flush=True)
+    if not listen_only:
+        print(f"Voice memory mode: {voice_trust}", flush=True)
     controller.set_mic_gain(stackchan_mic_gain)
     body_director = BodyDirector(controller, body_calibration)
     body_director.apply_calibration()
 
     def set_body_state(name: str) -> bool:
         return body_director.set_state(name) if body_director is not None else controller.set_expression(name)
+
+    def record_local_turn(user_text: str, assistant_text: str) -> None:
+        if brain is None:
+            return
+        brain.record_observed_turn(
+            user_text,
+            assistant_text,
+            persist_session=voice_policy.persist_session,
+            allow_memory_writes=voice_policy.allow_memory_writes,
+            remember_recent=voice_policy.remember_recent,
+            session_source=voice_policy.session_source,
+        )
 
     set_body_state("thinking")
 
@@ -1386,7 +1440,9 @@ async def _handsfree(
                 print(f"[Stacky] volumen={volume_level} ok={ok}", flush=True)
                 set_body_state("happy")
                 speak_started = time.perf_counter()
-                await output.speak(spoken if ok else "Jeg kunne ikke ændre min volumen lige nu.")
+                spoken_reply = spoken if ok else "Jeg kunne ikke ændre min volumen lige nu."
+                record_local_turn(text, spoken_reply)
+                await output.speak(spoken_reply)
                 await output.wait()
                 speak_seconds = time.perf_counter() - speak_started
                 print(
@@ -1436,7 +1492,9 @@ async def _handsfree(
                 )
                 set_body_state("happy")
                 speak_started = time.perf_counter()
-                await output.speak(calibration_command.spoken if ok else "Jeg kunne ikke gemme hovedkalibreringen lige nu.")
+                spoken_reply = calibration_command.spoken if ok else "Jeg kunne ikke gemme hovedkalibreringen lige nu."
+                record_local_turn(text, spoken_reply)
+                await output.speak(spoken_reply)
                 await output.wait()
                 speak_seconds = time.perf_counter() - speak_started
                 print(
@@ -1458,7 +1516,9 @@ async def _handsfree(
                 print(f"[Stacky] motion={motion_command.gesture} ok={ok}", flush=True)
                 set_body_state("happy")
                 speak_started = time.perf_counter()
-                await output.speak(motion_command.spoken if ok else "Jeg kunne ikke bevæge hovedet lige nu.")
+                spoken_reply = motion_command.spoken if ok else "Jeg kunne ikke bevæge hovedet lige nu."
+                record_local_turn(text, spoken_reply)
+                await output.speak(spoken_reply)
                 await output.wait()
                 speak_seconds = time.perf_counter() - speak_started
                 print(
@@ -1476,6 +1536,7 @@ async def _handsfree(
             if local_reply is not None:
                 set_body_state("happy")
                 speak_started = time.perf_counter()
+                record_local_turn(text, local_reply)
                 await output.speak(local_reply)
                 await output.wait()
                 speak_seconds = time.perf_counter() - speak_started
@@ -1495,10 +1556,10 @@ async def _handsfree(
                 text,
                 max_spoken_chars=reply_chars,
                 detail_spoken_chars=detail_reply_chars,
-                persist_session=False,
-                allow_memory_writes=False,
-                remember_recent=False,
-                session_source="stackchan-voice-untrusted",
+                persist_session=voice_policy.persist_session,
+                allow_memory_writes=voice_policy.allow_memory_writes,
+                remember_recent=voice_policy.remember_recent,
+                session_source=voice_policy.session_source,
             )
             brain_seconds = time.perf_counter() - brain_started
             set_body_state("happy")
@@ -1647,6 +1708,8 @@ def _is_short_uncertain_stt_fragment(transcript: str, result: STTResult) -> bool
     if len(words) > 3:
         return False
     key = _transcript_key(transcript)
+    if key in {"deer", "deeri", "deter", "deteri", "jageri", "jegeri"}:
+        return False
     if key in {
         "vent",
         "ventlige",
@@ -1671,6 +1734,8 @@ def _is_short_high_frequency_stt_fragment(transcript: str, signal_quality: TurnS
     if len(words) > 2:
         return False
     key = _transcript_key(transcript)
+    if key in {"deer", "deeri", "deter", "deteri", "jageri", "jegeri"}:
+        return False
     if key in {
         "vent",
         "ventlige",
@@ -1687,6 +1752,19 @@ def _is_short_high_frequency_stt_fragment(transcript: str, signal_quality: TurnS
         return False
     if any(token in key for token in ("volumen", "volume", "hojre", "venstre")):
         return False
+    if key in {"jegkan", "jegkanher"} and (
+        signal_quality.crest_factor >= 12.0
+        or signal_quality.active_ratio < 0.35
+        or signal_quality.max_active_run_ms < 320
+    ):
+        return True
+    if (
+        signal_quality.crest_factor >= 16.0
+        and signal_quality.active_ratio < 0.32
+        and signal_quality.max_active_run_ms <= 280
+        and signal_quality.max_speech_band_run_ms <= 280
+    ):
+        return True
     if signal_quality.zero_crossing_rate < 0.38:
         return False
     return (
@@ -1842,6 +1920,9 @@ def _parse_volume_command(text: str, *, current_level: int) -> tuple[int, str] |
             "dæmp",
             "daemp",
             "skru",
+            "juster",
+            "justerer",
+            "justere",
         )
     )
     if not volume_context:
@@ -1853,7 +1934,7 @@ def _parse_volume_command(text: str, *, current_level: int) -> tuple[int, str] |
         return 100, "Okay, jeg skruer helt op."
 
     match = re.search(r"\b(\d{1,3})\s*(?:procent|%)?", lowered)
-    if match and any(word in lowered for word in ("volumen", "volume", "lyd", "procent", "%")):
+    if match and any(word in lowered for word in ("volumen", "volume", "lyd", "procent", "%", "juster", "justerer", "justere")):
         level = _clamp_volume_level(int(match.group(1)))
         return level, f"Okay, min volumen er nu {level} procent."
 

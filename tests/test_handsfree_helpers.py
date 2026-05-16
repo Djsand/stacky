@@ -15,6 +15,7 @@ from stacky.cli import (
     _resolve_capture_speech_styles,
     _resolve_stt_bench_specs,
     _transcript_key,
+    _voice_memory_policy,
     _word_error_rate,
 )
 from stacky.voice.stt import AudioStats, STTResult
@@ -109,6 +110,9 @@ class HandsfreeHelpersTest(unittest.TestCase):
 
     def test_parse_volume_command_absolute_percent(self) -> None:
         self.assertEqual(_parse_volume_command("sæt din volumen til 60 procent", current_level=80), (60, "Okay, min volumen er nu 60 procent."))
+
+    def test_parse_volume_command_followup_adjust_to_number(self) -> None:
+        self.assertEqual(_parse_volume_command("justerer til 50", current_level=80), (50, "Okay, min volumen er nu 50 procent."))
 
     def test_parse_volume_command_relative_up(self) -> None:
         self.assertEqual(_parse_volume_command("skru op", current_level=80), (95, "Okay, jeg skruer op til 95 procent."))
@@ -235,6 +239,50 @@ class HandsfreeHelpersTest(unittest.TestCase):
 
         self.assertFalse(accepted)
         self.assertEqual(reason, "kort højfrekvent STT-fragment")
+
+    def test_rejects_noisy_jeg_kan_fragment(self) -> None:
+        result = STTResult(
+            text="jeg kan",
+            audio=AudioStats(duration_seconds=1.58, rms=1893, peak=25610, sample_rate=24000, channels=1),
+            avg_logprob=-0.52,
+            no_speech_prob=0.0,
+            compression_ratio=0.0,
+        )
+        quality = TurnSignalQuality(
+            duration_seconds=1.58,
+            median_rms=128,
+            p80_rms=900,
+            p95_rms=5332,
+            peak=25610,
+            active_ratio=0.27,
+            active_ms=420,
+            max_active_run_ms=240,
+            crest_factor=26.4,
+            active_threshold=420,
+            zero_crossing_rate=0.20,
+            speech_band_ms=420,
+            max_speech_band_run_ms=240,
+        )
+
+        accepted, reason = _accept_stt_result(result, signal_quality=quality)
+
+        self.assertFalse(accepted)
+        self.assertEqual(reason, "kort højfrekvent STT-fragment")
+
+    def test_voice_memory_policy_defaults_to_trusted_session(self) -> None:
+        policy = _voice_memory_policy("trusted")
+
+        self.assertTrue(policy.persist_session)
+        self.assertTrue(policy.allow_memory_writes)
+        self.assertTrue(policy.remember_recent)
+        self.assertEqual(policy.session_source, "stackchan-voice")
+
+    def test_voice_memory_policy_can_disable_writes(self) -> None:
+        policy = _voice_memory_policy("off")
+
+        self.assertFalse(policy.persist_session)
+        self.assertFalse(policy.allow_memory_writes)
+        self.assertFalse(policy.remember_recent)
 
     def test_local_realtime_reply_bypasses_brain_for_wait_commands(self) -> None:
         self.assertEqual(_parse_local_realtime_reply("vent lige"), "Jeg venter.")

@@ -173,6 +173,34 @@ class BrainMemoryContextTest(unittest.IsolatedAsyncioTestCase):
 
             self.assertFalse(session_store.active_path.exists())
 
+    async def test_local_observed_turn_persists_session_and_self_model(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            memory = MemoryStore(root / "memory.sqlite")
+            session_store = InfiniteSessionStore(root / "data")
+            self_model = StackySelfModel(root / "data")
+            brain = StackyBrain(
+                StackySoul(created_for="Nicolai"),
+                memory,
+                LongFakeLLM(),
+                session_store,
+                self_model,
+            )  # type: ignore[arg-type]
+
+            brain.record_observed_turn(
+                "nu kører du 100 procent trådløs for første gang",
+                "Det mærker jeg som min egen Stacky-status.",
+                session_source="stackchan-voice",
+            )
+
+            messages = read_jsonl_messages(session_store.active_path)
+            summary = self_model.summary()
+            memory_count = memory.count()
+
+        self.assertEqual([message["role"] for message in messages], ["user", "assistant"])
+        self.assertEqual(summary["trusted_turns"], 1)
+        self.assertGreaterEqual(memory_count, 1)
+
 
 if __name__ == "__main__":
     unittest.main()
