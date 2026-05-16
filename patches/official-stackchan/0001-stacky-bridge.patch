@@ -116,17 +116,89 @@ diff --git a/firmware/main/apps/apps.h b/firmware/main/apps/apps.h
 index 77cc9b7..06e2ab4 100644
 --- a/firmware/main/apps/apps.h
 +++ b/firmware/main/apps/apps.h
-@@ -5,6 +5,7 @@
-  */
- #pragma once
- #include "app_launcher/app_launcher.h"
+@@ -7,0 +8 @@
 +#include "app_stacky/app_stacky.h"
- #include "app_ai_agent/app_ai_agent.h"
- #include "app_avatar/app_avatar.h"
- #include "app_setup/app_setup.h"
+diff --git a/firmware/main/hal/hal.h b/firmware/main/hal/hal.h
+index 5f9efcf..a5ef1af 100644
+--- a/firmware/main/hal/hal.h
++++ b/firmware/main/hal/hal.h
+@@ -134,0 +135,2 @@ enum class MicTestStatus {
++inline constexpr const char* STACKY_BOOT_VERSION = "official-0.1.8";
++
+@@ -147 +149,2 @@ public:
+-        _panel->setBgOpa(0);
++        _panel->setBgColor(lv_color_hex(0x001510));
++        _panel->setBgOpa(255);
+@@ -149,0 +153,2 @@ public:
++        createStackyLogo();
++
+@@ -152,3 +157,3 @@ public:
+-        _label_logo->setTextColor(lv_color_hex(0xFFFFFF));
+-        _label_logo->align(LV_ALIGN_CENTER, 0, -14);
+-        _label_logo->setText("STACKCHAN");
++        _label_logo->setTextColor(lv_color_hex(0xF8F7EA));
++        _label_logo->align(LV_ALIGN_CENTER, 0, 26);
++        _label_logo->setText("STACKY");
+@@ -158,2 +163,2 @@ public:
+-        _label_msg->setTextColor(lv_color_hex(0xBFBFBF));
+-        _label_msg->align(LV_ALIGN_CENTER, 0, 14);
++        _label_msg->setTextColor(lv_color_hex(0xA7B9B0));
++        _label_msg->align(LV_ALIGN_CENTER, 0, 54);
+@@ -164 +169 @@ public:
+-        _label_version->setTextColor(lv_color_hex(0x8B8B8B));
++        _label_version->setTextColor(lv_color_hex(0x638176));
+@@ -166 +171 @@ public:
+-        _label_version->setText("V" FIRMWARE_VERSION);
++        _label_version->setText(STACKY_BOOT_VERSION);
+@@ -169,0 +175,39 @@ private:
++    void styleLogoPart(uitk::lvgl_cpp::Container& part, uint32_t color, int radius)
++    {
++        part.setBorderWidth(0);
++        part.setBgColor(lv_color_hex(color));
++        part.setBgOpa(255);
++        part.setRadius(radius);
++    }
++
++    void createStackyLogo()
++    {
++        constexpr uint32_t logo_color = 0xF8F7EA;
++        constexpr uint32_t cut_color  = 0x001510;
++
++        _logo_tail = std::make_unique<uitk::lvgl_cpp::Container>(_panel->get());
++        _logo_tail->setSize(44, 36);
++        _logo_tail->align(LV_ALIGN_CENTER, -39, -43);
++        styleLogoPart(*_logo_tail, logo_color, 20);
++
++        _logo_body = std::make_unique<uitk::lvgl_cpp::Container>(_panel->get());
++        _logo_body->setSize(88, 64);
++        _logo_body->align(LV_ALIGN_CENTER, 10, -50);
++        styleLogoPart(*_logo_body, logo_color, 34);
++
++        _logo_chin = std::make_unique<uitk::lvgl_cpp::Container>(_panel->get());
++        _logo_chin->setSize(38, 24);
++        _logo_chin->align(LV_ALIGN_CENTER, 2, -20);
++        styleLogoPart(*_logo_chin, logo_color, 14);
++
++        _logo_left_eye = std::make_unique<uitk::lvgl_cpp::Container>(_panel->get());
++        _logo_left_eye->setSize(15, 15);
++        _logo_left_eye->align(LV_ALIGN_CENTER, -11, -50);
++        styleLogoPart(*_logo_left_eye, cut_color, LV_RADIUS_CIRCLE);
++
++        _logo_right_eye = std::make_unique<uitk::lvgl_cpp::Container>(_panel->get());
++        _logo_right_eye->setSize(15, 15);
++        _logo_right_eye->align(LV_ALIGN_CENTER, 28, -50);
++        styleLogoPart(*_logo_right_eye, cut_color, LV_RADIUS_CIRCLE);
++    }
++
+@@ -170,0 +215,5 @@ private:
++    std::unique_ptr<uitk::lvgl_cpp::Container> _logo_tail;
++    std::unique_ptr<uitk::lvgl_cpp::Container> _logo_body;
++    std::unique_ptr<uitk::lvgl_cpp::Container> _logo_chin;
++    std::unique_ptr<uitk::lvgl_cpp::Container> _logo_left_eye;
++    std::unique_ptr<uitk::lvgl_cpp::Container> _logo_right_eye;
 diff --git a/firmware/main/hal/stacky_bridge.cpp b/firmware/main/hal/stacky_bridge.cpp
 new file mode 100644
-index 0000000..9c74e5a
+index 0000000..cec9ff1
 --- /dev/null
 +++ b/firmware/main/hal/stacky_bridge.cpp
 @@ -0,0 +1,793 @@
@@ -194,7 +266,7 @@ index 0000000..9c74e5a
 +namespace {
 +
 +constexpr const char* TAG = "StackyBridge";
-+constexpr const char* STACKY_BRIDGE_VERSION = "official-0.1.7";
++constexpr const char* STACKY_BRIDGE_VERSION = "official-0.1.8";
 +constexpr size_t MIC_FRAME_COUNT = 480;       // 20 ms at 24 kHz
 +constexpr int MIC_WARMUP_DISCARD_FRAMES = 12;
 +constexpr size_t PLAYBACK_CHUNK_SAMPLES = 960;
@@ -943,10 +1015,7 @@ diff --git a/firmware/main/main.cpp b/firmware/main/main.cpp
 index 164a751..e6c28d4 100644
 --- a/firmware/main/main.cpp
 +++ b/firmware/main/main.cpp
-@@ -26,15 +26,9 @@ extern "C" void app_main(void)
-     ui_hal::on_delay([](uint32_t ms) { GetHAL().delay(ms); });
-     ui_hal::on_get_tick([]() { return GetHAL().millis(); });
- 
+@@ -29,9 +29,3 @@ extern "C" void app_main(void)
 -    // Install apps
 -    GetMooncake().installApp(std::make_unique<AppLauncher>());
 -    GetMooncake().installApp(std::make_unique<AppAiAgent>());
@@ -959,6 +1028,3 @@ index 164a751..e6c28d4 100644
 +    // Stacky firmware variant: boot directly into the local Stacky body app.
 +    const int stacky_app_id = GetMooncake().installApp(std::make_unique<AppStacky>());
 +    GetMooncake().openApp(stacky_app_id);
- 
-     // Main loop
-     while (1) {

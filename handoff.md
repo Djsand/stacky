@@ -72,8 +72,8 @@ Active body base:
 - Branch: `official-firmware-base`
 - Official submodule: `vendor/m5stack-stackchan`
 - Repro patch: `patches/official-stackchan/0001-stacky-bridge.patch`
-- Flashed firmware: official StackChan `1.4.1` with `AppStacky` and bridge `official-0.1.7`
-- Bridge `official-0.1.7` includes `body.look_at`, `body.gesture`, and runtime `body.motion_config` head calibration. Default social center is `yaw=90`, `pitch=260`.
+- Latest body patch: official StackChan `1.4.1` with `AppStacky` and bridge `official-0.1.8`
+- Bridge `official-0.1.8` includes `body.look_at`, `body.gesture`, runtime `body.motion_config` head calibration, and Stacky-branded boot screen. Default social center is `yaw=90`, `pitch=260`.
 - PC body server: `192.168.50.208:8765`
 - StackChan IP in tests: `192.168.50.2`
 
@@ -86,6 +86,7 @@ Firmware variant changes:
 - `StackyBridge` now sets CoreS3 codec output volume to 100 during playback.
 - `StackyBridge` now accepts `audio.volume`, reports `speakerVolume`, uses mic gain 60, and drops the first 12 mic frames after input enable to avoid clipped warmup transients.
 - `StackyBridge` now accepts `body.motion_config` and reports `centerYaw` / `centerPitch`.
+- Boot screen now says `STACKY`, shows `official-0.1.8`, and uses a small LVGL-drawn Stacky logo mark.
 - Python StackChan TTS output has tunable loudness: `--stackchan-target-rms` and `--stackchan-max-gain` default to `9000` / `4.0`.
 - Handsfree catches Danish volume commands before the LLM, e.g. `skru op`, `skru ned`, `sæt volumen til 60 procent`.
 - Handsfree catches Danish center calibration commands before the LLM: `lidt mere til højre`, `lidt mere til venstre`, `lidt op`, `lidt ned`, `gem den her position som center`.
@@ -128,7 +129,7 @@ Important: opening `COM3` with `scripts/serial_log.py` resets the CoreS3 via USB
 
 ## Stop Point
 
-Stop here after official Stacky app variant `official-0.1.7`. The old custom Arduino speaker-crash investigation is no longer the active path unless the same failure reproduces on official firmware.
+Stop here after official Stacky app variant `official-0.1.8`. The old custom Arduino speaker-crash investigation is no longer the active path unless the same failure reproduces on official firmware.
 
 ## Current Direction
 
@@ -154,7 +155,7 @@ Do not import or reuse Moss identity, Moss memories, Moss sessions, or the Moss 
 - StackChan IP seen during tests: `192.168.50.2`
 - PC IP used during tests: `192.168.50.208`
 - USB serial seen during tests: `/dev/cu.usbmodem1101` or `cu.usbmodem101` on Mac, `COM3` on Windows
-- Latest flashed firmware version: official StackChan `1.4.1` with `AppStacky` / Stacky bridge `official-0.1.7`
+- Latest body patch version: official StackChan `1.4.1` with `AppStacky` / Stacky bridge `official-0.1.8`
 
 The old custom Arduino firmware remains as fallback/reference. The active hardware path is official ESP-IDF firmware; old speaker-crash assumptions should be re-tested before using them.
 
