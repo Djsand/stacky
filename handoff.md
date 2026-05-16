@@ -1,5 +1,36 @@
 # Stacky Handoff
 
+## Current Snapshot
+
+Updated 2026-05-16 after the session/memory pivot.
+
+- Branch: `official-firmware-base`
+- Latest pushed commit: `2a26d35 Add Stacky infinite sessions and safe memory gating`
+- Remote: `origin https://github.com/Djsand/stacky.git`
+- Push status: `official-firmware-base` pushed to `origin`
+- Local `git status --short`: only `m vendor/m5stack-stackchan`
+- The dirty submodule is expected: the official firmware patch is applied inside `vendor/m5stack-stackchan` for local build/flash. The reproducible firmware change is committed in `patches/official-stackchan/0001-stacky-bridge.patch`.
+- No live hands-free server should be assumed running.
+
+Latest verification:
+
+- `.\.venv\Scripts\python.exe -m unittest discover -s tests` -> `101 OK`
+- `.\.venv\Scripts\python.exe -m pip check` -> no broken requirements
+- `git diff --check` / `git diff --cached --check` -> clean when run before commit
+
+Runtime state:
+
+- Runtime DB is ignored: `data/stacky/memory.sqlite`
+- Runtime DB backup is ignored: `data/stacky/memory.sqlite.backup-20260516-164456`
+- Runtime session files are ignored: `data/stacky/sessions/`
+- Runtime body calibration is ignored: `data/stacky/body_calibration.json`
+
+Next engineering priority:
+
+1. Do not spend more time polishing head motion first.
+2. Fix input quality/session trust first: Danish STT is still unstable enough that StackChan voice must remain an untrusted source.
+3. Once STT is reliable, flip hands-free voice from untrusted to trusted session persistence deliberately, with a test.
+
 ## Latest Session And Memory Update
 
 Stacky's session/memory layer has been rebuilt after inspecting the proven architecture in `D:\moss\core`. Only implementation patterns were copied. No old identity, old memories, old sessions, or old names were imported.
@@ -58,7 +89,7 @@ Bridge support:
 
 - `audio.in` raw PCM16 mono at 24 kHz from StackChan to PC
 - `audio.start` / binary `audio.raw` / `audio.end` playback from PC to StackChan
-- `audio.tone`, `audio.stop`, `audio.hold`, `body.status`, `body.set_expression`
+- `audio.tone`, `audio.stop`, `audio.hold`, `body.status`, `body.set_expression`, `body.look_at`, `body.gesture`, `body.motion_config`
 
 Validated 2026-05-16:
 
