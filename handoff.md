@@ -4,6 +4,14 @@
 
 Stop here. Mic capture is fixed and end-to-end pipeline (STT → LM Studio brain → TTS synthesis) is validated working. The remaining blocker is the StackChan speaker chunked playback: when Python streams audio chunks to the firmware speaker, the ESP32 reboots. Need to capture serial output during the actual crash before next fix attempt.
 
+## Current Direction
+
+Stop fighting the custom Arduino audio stack for now. The new active branch is `official-firmware-base`, which imports the official M5Stack StackChan firmware as a submodule at `vendor/m5stack-stackchan`. The next goal is to flash untouched official firmware, validate its mic/speaker path, and then add a small local Stacky bridge on top.
+
+Current blocker: `idf.py` is not installed on this Windows PC. Official firmware needs ESP-IDF v5.5.x before it can be built/flashed here.
+
+Migration details are in `docs/OFFICIAL_FIRMWARE_MIGRATION.md`.
+
 ## Project
 
 Stacky is a fresh local Danish AI friend for Nicolai. It runs mainly on the Windows PC in `C:\Users\nicol\stackchan`, with StackChan/CoreS3 as the body: mic, speaker, face, servos, touch, LEDs, and later wheels.
