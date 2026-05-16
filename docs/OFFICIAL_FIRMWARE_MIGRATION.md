@@ -12,7 +12,10 @@ The goal is not to import any old identity or memory. Stacky remains a fresh loc
   - upstream: `https://github.com/m5stack/StackChan.git`
   - revision at import: `da156e1`
 - The previous custom Arduino firmware is still in `firmware/stacky_cores3` for fallback/reference only.
-- Current blocker on this PC: `idf.py` is not installed, so official firmware cannot build here until ESP-IDF is installed.
+- ESP-IDF v5.5.4 is installed locally at `C:\Users\nicol\esp\esp-idf-v5.5.4`.
+- Official firmware builds on this PC after applying the official XiaoZhi patch manually and building through short drive aliases.
+- Official firmware was flashed to CoreS3 on `COM3`.
+- Boot was serial-logged for 25 seconds without a reboot. Log: `artifacts/official_firmware_boot.log`.
 
 ## Why Switch Bases
 
@@ -56,6 +59,42 @@ idf.py -p COM_PORT flash monitor
 ```
 
 Replace `COM_PORT` with the CoreS3 serial port.
+
+## Windows Build Notes
+
+On this PC, direct build from the long repo path hit Windows' command line length limit during the final link step. Use short drive aliases for repeat builds:
+
+```powershell
+subst S: C:\Users\nicol\stackchan\vendor\m5stack-stackchan\firmware
+subst I: C:\Users\nicol\esp\esp-idf-v5.5.4
+. I:\export.ps1
+$env:IDF_PATH = 'I:\'
+Set-Location S:\
+idf.py build
+```
+
+The official `fetch_repos.py` currently reports that `patches/xiaozhi-esp32.patch` cannot be applied cleanly to `xiaozhi-esp32`. The practical workaround used here was:
+
+```powershell
+Set-Location C:\Users\nicol\stackchan\vendor\m5stack-stackchan\firmware\xiaozhi-esp32
+git apply --reject --whitespace=nowarn ..\patches\xiaozhi-esp32.patch
+```
+
+Then manually add the rejected `TryReadRegs` implementation to `main\boards\common\i2c_device.cc`:
+
+```cpp
+esp_err_t I2cDevice::TryReadRegs(uint8_t reg, uint8_t* buffer, size_t length, int timeout_ms) {
+    return i2c_master_transmit_receive(i2c_device_, &reg, 1, buffer, length, timeout_ms);
+}
+```
+
+After that, `idf.py build` completed and produced `build\stack-chan.bin` plus `build\generated_assets.bin`.
+
+Flash command used:
+
+```powershell
+idf.py -p COM3 flash
+```
 
 ## First Validation
 

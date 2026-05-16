@@ -8,7 +8,7 @@ Stop here. Mic capture is fixed and end-to-end pipeline (STT → LM Studio brain
 
 Stop fighting the custom Arduino audio stack for now. The new active branch is `official-firmware-base`, which imports the official M5Stack StackChan firmware as a submodule at `vendor/m5stack-stackchan`. The next goal is to flash untouched official firmware, validate its mic/speaker path, and then add a small local Stacky bridge on top.
 
-Current blocker: `idf.py` is not installed on this Windows PC. Official firmware needs ESP-IDF v5.5.x before it can be built/flashed here.
+Update: ESP-IDF v5.5.4 is now installed at `C:\Users\nicol\esp\esp-idf-v5.5.4`. Official firmware builds after applying the official XiaoZhi patch manually and building through short drive aliases. Official firmware was flashed to CoreS3 on `COM3`, and a 25-second serial boot log showed stable boot without reboot.
 
 Migration details are in `docs/OFFICIAL_FIRMWARE_MIGRATION.md`.
 
