@@ -28,8 +28,12 @@ Runtime state:
 Next engineering priority:
 
 1. Do not spend more time polishing head motion first.
-2. Fix input quality/session trust first: Danish STT is still unstable enough that StackChan voice must remain an untrusted source.
-3. Once STT is reliable, flip hands-free voice from untrusted to trusted session persistence deliberately, with a test.
+2. Use the STT dataset loop before changing models/filters:
+   - `python -m stacky stt-capture --limit 12 --debug-audio`
+   - `python -m stacky stt-capture --phrases-file .\artifacts\stt_phrases.txt --noise-count 3 --debug-audio`
+   - `python -m stacky stt-bench --dataset .\artifacts\stt_dataset\stackchan\manifest.jsonl --report .\artifacts\stt_dataset\stt-report.jsonl`
+3. Fix input quality/session trust first: Danish STT is still unstable enough that StackChan voice must remain an untrusted source.
+4. Once STT is reliable, flip hands-free voice from untrusted to trusted session persistence deliberately, with a test.
 
 ## Latest Session And Memory Update
 
@@ -46,6 +50,7 @@ New Stacky-native runtime pieces:
 - `MemoryStore.recall()` excludes `dialogue` memories by default.
 - `StackyBrain.respond()` no longer writes raw dialogue into long-term memory by default.
 - Existing polluted dialogue memories were removed from `data/stacky/memory.sqlite` after backup.
+- `src/stacky/voice/stt_eval.py` contains the repeatable StackChan STT dataset/benchmark helpers.
 
 Memory cleanup performed 2026-05-16:
 

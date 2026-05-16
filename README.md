@@ -74,6 +74,26 @@ The hands-free VAD is tuned for the official Stacky bridge: default `--vad-thres
 
 Important safety rule while STT is unstable: hands-free voice turns use session context but do not write to the infinite session thread or long-term memory. Trusted text/chat turns persist to `data/stacky/sessions/stacky-infinite-thread.jsonl`; rolled blocks become `stacky-infinite-thread.001.jsonl`, etc.
 
+## Danish STT Dataset Loop
+
+Use StackChan itself to capture labelled Danish clips before changing STT models or filters:
+
+```powershell
+.\.venv\Scripts\python.exe -m stacky stt-capture --limit 12 --debug-audio
+.\.venv\Scripts\python.exe -m stacky stt-capture --phrases-file .\artifacts\stt_phrases.txt --noise-count 3 --debug-audio
+```
+
+This writes WAV clips plus `artifacts/stt_dataset/stackchan/manifest.jsonl`. Speech clips have the expected Danish sentence; noise clips have an empty expected text so false positives score as errors.
+
+Run local candidates against the captured dataset:
+
+```powershell
+.\.venv\Scripts\python.exe -m stacky stt-bench --dataset .\artifacts\stt_dataset\stackchan\manifest.jsonl --report .\artifacts\stt_dataset\stt-report.jsonl
+.\.venv\Scripts\python.exe -m stacky stt-bench --dataset .\artifacts\stt_dataset\stackchan\manifest.jsonl --engine roest --engine ftspeech
+```
+
+Benchmark output includes load time, inference time, realtime factor, WER, CER, and a JSONL report when `--report` is set.
+
 To run Stacky's brain through Gemini instead of the local OpenAI-compatible endpoint for latency testing:
 
 ```powershell

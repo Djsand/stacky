@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import glob
+import json
 import re
 import shutil
 import socket
@@ -32,6 +32,17 @@ from .voice.output import (
 from .voice.supertonic_tts import SupertonicVoice, supertonic_voice_preset
 from .voice.runtime import LocalTextVoiceRuntime
 from .voice.stt import STTResult, create_danish_stt, resolve_stt_model_name, write_pcm_wav
+from .voice.stt_eval import (
+    STTDatasetItem,
+    apply_references,
+    char_error_rate,
+    load_capture_phrases,
+    load_dataset_manifest,
+    load_reference_file,
+    resolve_audio_inputs,
+    word_error_rate,
+    write_dataset_record,
+)
 from .voice.turn_detection import EnergyTurnDetector, TurnSignalQuality, analyze_turn_signal, pcm16_rms
 from .voice.piper_tts import FastPiperTTS, ensure_danish_piper_voice, pitch_shift_wav
 from .voice.roest_tts import RoestTTS, roest_voice
@@ -94,12 +105,27 @@ def main(argv: list[str] | None = None) -> int:
     handsfree.add_argument("--stackchan-volume", type=int, default=80, help="Initial StackChan codec volume, 0-100.")
     handsfree.add_argument("--reply-chars", type=int, default=150, help="Default spoken reply character budget for low-latency live chat.")
     handsfree.add_argument("--detail-reply-chars", type=int, default=260, help="Spoken reply character budget when the user asks for details.")
+    stt_capture = sub.add_parser("stt-capture", help="Record labelled StackChan mic clips for Danish STT evaluation.")
+    stt_capture.add_argument("--body-timeout", type=float, default=18.0, help="Seconds to wait for StackChan to connect.")
+    stt_capture.add_argument("--phrase", action="append", default=[], help="Expected Danish phrase to record. Can be repeated.")
+    stt_capture.add_argument("--phrases-file", default="", help="UTF-8 text file with one expected phrase per line.")
+    stt_capture.add_argument("--noise-count", type=int, default=0, help="Also capture N non-speech/noise clips with empty expected text.")
+    stt_capture.add_argument("--limit", type=int, default=0, help="Limit phrase count. 0 records all selected/default phrases.")
+    stt_capture.add_argument("--output-dir", default=str(ROOT / "artifacts" / "stt_dataset" / "stackchan"), help="Directory for captured WAV clips.")
+    stt_capture.add_argument("--manifest", default="", help="JSONL manifest path. Defaults to <output-dir>/manifest.jsonl.")
+    stt_capture.add_argument("--vad-threshold", type=int, default=280, help="PCM RMS threshold for speech start.")
+    stt_capture.add_argument("--start-speech-ms", type=int, default=120, help="Continuous speech needed before a turn starts.")
+    stt_capture.add_argument("--end-silence-ms", type=int, default=850, help="Silence duration that ends a voice turn.")
+    stt_capture.add_argument("--min-speech-ms", type=int, default=220, help="Minimum voiced audio before accepting a turn.")
+    stt_capture.add_argument("--debug-audio", action="store_true", help="Print accepted/rejected signal quality while capturing.")
     stt_bench = sub.add_parser("stt-bench", help="Benchmark local Danish STT models on saved StackChan WAV turns.")
     stt_bench.add_argument("--audio", action="append", default=[], help="WAV file, directory, or glob. Defaults to artifacts/handsfree_turns/*.wav.")
+    stt_bench.add_argument("--dataset", default="", help="JSONL/TSV manifest from stt-capture. Provides expected text for scoring.")
     stt_bench.add_argument("--engine", action="append", default=[], help="Model spec: roest, ftspeech, qwen3, saga, milo, or engine:model.")
     stt_bench.add_argument("--limit", type=int, default=8, help="Maximum number of WAV files to test.")
     stt_bench.add_argument("--include-heavy", action="store_true", help="Also test heavier Qwen3-ASR candidates.")
     stt_bench.add_argument("--refs", default="", help="Optional tab-separated references file: wav_filename<TAB>expected text.")
+    stt_bench.add_argument("--report", default="", help="Optional JSONL report output path.")
     voice_lab = sub.add_parser("voice-lab", help="Generate local Danish TTS samples.")
     voice_lab.add_argument("--play", action="store_true", help="Play generated samples with ffplay.")
     voice_lab.add_argument(
@@ -236,14 +262,34 @@ def main(argv: list[str] | None = None) -> int:
                 debug_audio=args.debug_audio,
             )
         )
+    if args.command == "stt-capture":
+        return _run_async(
+            _stt_capture(
+                args.config,
+                body_timeout=args.body_timeout,
+                phrase_args=args.phrase,
+                phrases_file=args.phrases_file,
+                noise_count=args.noise_count,
+                limit=args.limit,
+                output_dir=args.output_dir,
+                manifest=args.manifest,
+                vad_threshold=args.vad_threshold,
+                start_speech_ms=args.start_speech_ms,
+                end_silence_ms=args.end_silence_ms,
+                min_speech_ms=args.min_speech_ms,
+                debug_audio=args.debug_audio,
+            )
+        )
     if args.command == "stt-bench":
         return _run_async(
             _stt_bench(
                 audio_patterns=args.audio,
+                dataset_path=args.dataset,
                 engine_specs=args.engine,
                 limit=args.limit,
                 include_heavy=args.include_heavy,
                 refs_path=args.refs,
+                report_path=args.report,
             )
         )
     if args.command == "voice-lab":
@@ -275,21 +321,28 @@ _STT_SPEC_ALIASES = {
 async def _stt_bench(
     *,
     audio_patterns: list[str],
+    dataset_path: str,
     engine_specs: list[str],
     limit: int,
     include_heavy: bool,
     refs_path: str,
+    report_path: str,
 ) -> int:
-    paths = _resolve_stt_bench_audio(audio_patterns, limit=limit)
-    if not paths:
-        print("No WAV files found. Run handsfree once or pass --audio path\\to\\turn.wav.", flush=True)
+    items = _resolve_stt_bench_items(audio_patterns, dataset_path=dataset_path, refs_path=refs_path, limit=limit)
+    if not items:
+        print("No WAV files found. Run stt-capture or pass --audio path\\to\\turn.wav.", flush=True)
         return 1
 
     specs = _resolve_stt_bench_specs(engine_specs, include_heavy=include_heavy)
-    refs = _load_stt_refs(Path(refs_path)) if refs_path else {}
-    print(f"Benchmarking {len(paths)} StackChan WAV file(s).", flush=True)
-    for path in paths:
-        print(f"- {path}", flush=True)
+    report_file = Path(report_path) if report_path else None
+    if report_file:
+        report_file.parent.mkdir(parents=True, exist_ok=True)
+        report_file.write_text("", encoding="utf-8")
+    scored_count = sum(1 for item in items if item.expected_text is not None)
+    print(f"Benchmarking {len(items)} StackChan WAV file(s), scored={scored_count}.", flush=True)
+    for item in items:
+        expected = "" if item.expected_text is None else f" :: ref={item.expected_text!r}"
+        print(f"- {item.audio_path}{expected}", flush=True)
 
     for engine, requested_model in specs:
         model_name = resolve_stt_model_name(engine, requested_model)
@@ -307,7 +360,9 @@ async def _stt_bench(
         total_audio = 0.0
         total_infer = 0.0
         wer_values: list[float] = []
-        for path in paths:
+        cer_values: list[float] = []
+        for item in items:
+            path = item.audio_path
             started = time.perf_counter()
             try:
                 result = await stt.transcribe_wav_result(path)
@@ -319,24 +374,194 @@ async def _stt_bench(
             total_audio += duration
             total_infer += infer_seconds
             rtf = infer_seconds / duration
-            expected = refs.get(path.name.lower())
+            expected = item.expected_text
             score = ""
-            if expected:
-                wer = _word_error_rate(expected, result.text)
+            wer = None
+            cer = None
+            if expected is not None:
+                wer = word_error_rate(expected, result.text)
+                cer = char_error_rate(expected, result.text)
                 wer_values.append(wer)
-                score = f" wer={wer:.1%}"
+                cer_values.append(cer)
+                score = f" wer={wer:.1%} cer={cer:.1%}"
             print(
                 f"  {path.name}: dur={duration:.2f}s infer={infer_seconds:.2f}s "
                 f"rtf={rtf:.2f} logprob={result.avg_logprob:.2f}{score} :: {result.text}",
                 flush=True,
             )
+            if report_file is not None:
+                _append_stt_report(
+                    report_file,
+                    engine=engine,
+                    model=model_name,
+                    item=item,
+                    result=result,
+                    infer_seconds=infer_seconds,
+                    wer=wer,
+                    cer=cer,
+                )
 
         if total_audio > 0 and total_infer > 0:
             summary = f"  total_audio={total_audio:.2f}s total_infer={total_infer:.2f}s rtf={total_infer / total_audio:.2f}"
             if wer_values:
                 summary += f" mean_wer={sum(wer_values) / len(wer_values):.1%}"
+            if cer_values:
+                summary += f" mean_cer={sum(cer_values) / len(cer_values):.1%}"
             print(summary, flush=True)
+    if report_file is not None:
+        print(f"\nReport: {report_file}", flush=True)
     return 0
+
+
+async def _stt_capture(
+    config_path: str,
+    *,
+    body_timeout: float,
+    phrase_args: list[str],
+    phrases_file: str,
+    noise_count: int,
+    limit: int,
+    output_dir: str,
+    manifest: str,
+    vad_threshold: int,
+    start_speech_ms: int,
+    end_silence_ms: int,
+    min_speech_ms: int,
+    debug_audio: bool,
+) -> int:
+    config = load_config(config_path)
+    phrases = load_capture_phrases(
+        phrase_args=phrase_args,
+        phrases_file=Path(phrases_file) if phrases_file else None,
+        limit=limit,
+    )
+    output_path = Path(output_dir)
+    manifest_path = Path(manifest) if manifest else output_path / "manifest.jsonl"
+    output_path.mkdir(parents=True, exist_ok=True)
+
+    loop = asyncio.get_running_loop()
+    audio_queue: asyncio.Queue[tuple[bytes, int, int]] = asyncio.Queue(maxsize=80)
+    accepting_audio = False
+    audio_meter = {"last_at": 0.0, "max_rms": 0, "max_peak": 0, "chunks": 0}
+
+    def on_event(event) -> None:
+        if event.type == "status":
+            print(f"[StackChan] status: {event.payload}", flush=True)
+            return
+        if event.type == "touch":
+            print(f"[StackChan] touch: {event.payload}", flush=True)
+            return
+        if event.type != "audio.in":
+            return
+        try:
+            pcm, sample_rate, channels = decode_pcm_payload(event.payload)
+        except ValueError as exc:
+            print(f"[StackChan] bad audio.in: {exc}", flush=True)
+            return
+        if debug_audio:
+            rms = pcm16_rms(pcm)
+            peak = _pcm16_peak(pcm)
+            audio_meter["max_rms"] = max(int(audio_meter["max_rms"]), rms)
+            audio_meter["max_peak"] = max(int(audio_meter["max_peak"]), peak)
+            audio_meter["chunks"] = int(audio_meter["chunks"]) + 1
+            now = time.monotonic()
+            if now - float(audio_meter["last_at"]) >= 1.0:
+                print(
+                    "[mic] "
+                    f"rms={audio_meter['max_rms']} peak={audio_meter['max_peak']} "
+                    f"chunks={audio_meter['chunks']} accepting={accepting_audio}",
+                    flush=True,
+                )
+                audio_meter.update({"last_at": now, "max_rms": 0, "max_peak": 0, "chunks": 0})
+        if not accepting_audio:
+            return
+
+        def enqueue() -> None:
+            if audio_queue.full():
+                try:
+                    audio_queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    pass
+            audio_queue.put_nowait((pcm, sample_rate, channels))
+
+        loop.call_soon_threadsafe(enqueue)
+
+    controller = StackChanBodyController(port=config.stackchan.port, on_event=on_event)
+    controller.start()
+    print(f"Stacky STT capture server listening on 0.0.0.0:{config.stackchan.port}", flush=True)
+    if not controller.wait_connected(body_timeout):
+        print("StackChan did not connect yet. Start/flashing firmware and run this again.", flush=True)
+        controller.stop()
+        return 1
+
+    address = controller.client_address
+    where = f"{address[0]}:{address[1]}" if address else "StackChan"
+    print(f"StackChan connected from {where}", flush=True)
+    capture_items = [(phrase, phrase, False) for phrase in phrases]
+    for index in range(max(0, noise_count)):
+        label = f"noise-{index + 1:02d}"
+        capture_items.append((label, "", True))
+    print(f"Capturing {len(capture_items)} clip(s). Manifest: {manifest_path}", flush=True)
+    controller.set_expression("listening")
+
+    detector = EnergyTurnDetector(
+        threshold=vad_threshold,
+        start_speech_ms=start_speech_ms,
+        min_speech_ms=min_speech_ms,
+        end_silence_ms=end_silence_ms,
+    )
+    try:
+        for index, (prompt_text, expected_text, allow_rejected) in enumerate(capture_items, start=1):
+            slug_source = prompt_text if expected_text else f"{prompt_text}-non-speech"
+            item_id = f"{index:03d}-{slugify(slug_source, max_length=52)}"
+            wav_path = output_path / f"{item_id}.wav"
+            print("", flush=True)
+            if expected_text:
+                print(f"[{index}/{len(capture_items)}] Sig præcist: {prompt_text}", flush=True)
+            else:
+                print(f"[{index}/{len(capture_items)}] Lav IKKE tale. Brug fx tastatur/klik/støj: {prompt_text}", flush=True)
+            accepting_audio = True
+            detector.reset()
+            while True:
+                pcm, sample_rate, channels = await audio_queue.get()
+                turn = detector.push(pcm, sample_rate=sample_rate, channels=channels)
+                if turn is None:
+                    continue
+                accepting_audio = False
+                _drain_queue(audio_queue)
+                detector.reset()
+                quality = analyze_turn_signal(turn.pcm, sample_rate=turn.sample_rate, channels=turn.channels)
+                if debug_audio:
+                    print(f"[audio] {_format_signal_quality(quality)}", flush=True)
+                if not quality.speech_like and not allow_rejected:
+                    print(f"[capture] rejected ({quality.reason}); prøv sætningen igen.", flush=True)
+                    accepting_audio = True
+                    continue
+                write_pcm_wav(wav_path, turn.pcm, sample_rate=turn.sample_rate, channels=turn.channels)
+                write_dataset_record(
+                    manifest_path,
+                    audio_path=wav_path,
+                    expected_text=expected_text,
+                    item_id=item_id,
+                    sample_rate=turn.sample_rate,
+                    channels=turn.channels,
+                    duration_seconds=quality.duration_seconds,
+                    rms=quality.median_rms,
+                    peak=quality.peak,
+                    quality=_quality_record(quality),
+                )
+                print(f"[capture] saved {wav_path.name} dur={quality.duration_seconds:.2f}s peak={quality.peak}", flush=True)
+                break
+        controller.set_expression("happy")
+        print("", flush=True)
+        print(f"Done. Dataset manifest: {manifest_path}", flush=True)
+        return 0
+    except (KeyboardInterrupt, asyncio.CancelledError):
+        return 0
+    finally:
+        accepting_audio = False
+        controller.set_expression("neutral")
+        controller.stop()
 
 
 def _resolve_stt_bench_specs(engine_specs: list[str], *, include_heavy: bool) -> list[tuple[str, str]]:
@@ -371,75 +596,79 @@ def _parse_stt_bench_spec(raw: str) -> tuple[str, str]:
     return "wav2vec2", value
 
 
-def _resolve_stt_bench_audio(patterns: list[str], *, limit: int) -> list[Path]:
-    requested = patterns or [str(ROOT / "artifacts" / "handsfree_turns" / "*.wav")]
-    paths: list[Path] = []
-    for item in requested:
-        path = Path(item)
-        if path.is_dir():
-            paths.extend(sorted(path.glob("*.wav")))
-            continue
-        matches = [Path(match) for match in glob.glob(item)]
-        if matches:
-            paths.extend(matches)
-            continue
-        if path.exists():
-            paths.append(path)
-
-    unique: dict[str, Path] = {}
-    for path in paths:
-        if path.suffix.lower() == ".wav":
-            unique[str(path.resolve()).lower()] = path.resolve()
-    ordered = sorted(unique.values(), key=lambda item: item.stat().st_mtime, reverse=True)
-    if limit > 0:
-        ordered = ordered[:limit]
-    return ordered
+def _resolve_stt_bench_items(
+    audio_patterns: list[str],
+    *,
+    dataset_path: str,
+    refs_path: str,
+    limit: int,
+) -> list[STTDatasetItem]:
+    if dataset_path:
+        items = load_dataset_manifest(Path(dataset_path))
+        if limit > 0:
+            items = items[:limit]
+    else:
+        paths = resolve_audio_inputs(
+            audio_patterns,
+            default_pattern=str(ROOT / "artifacts" / "handsfree_turns" / "*.wav"),
+            limit=limit,
+        )
+        items = [STTDatasetItem(path) for path in paths]
+    refs = load_reference_file(Path(refs_path)) if refs_path else {}
+    return apply_references(items, refs)
 
 
-def _load_stt_refs(path: Path) -> dict[str, str]:
-    refs: dict[str, str] = {}
-    for line in path.read_text(encoding="utf-8").splitlines():
-        if not line.strip() or line.lstrip().startswith("#"):
-            continue
-        if "\t" in line:
-            name, text = line.split("\t", 1)
-        elif "|" in line:
-            name, text = line.split("|", 1)
-        else:
-            continue
-        refs[Path(name.strip()).name.lower()] = text.strip()
-    return refs
+def _append_stt_report(
+    report_path: Path,
+    *,
+    engine: str,
+    model: str,
+    item: STTDatasetItem,
+    result: STTResult,
+    infer_seconds: float,
+    wer: float | None,
+    cer: float | None,
+) -> None:
+    duration = max(result.audio.duration_seconds, 0.001)
+    record = {
+        "engine": engine,
+        "model": model,
+        "id": item.item_id or item.audio_path.stem,
+        "audio": str(item.audio_path),
+        "expected": item.expected_text,
+        "hypothesis": result.text,
+        "durationSeconds": round(result.audio.duration_seconds, 4),
+        "inferSeconds": round(infer_seconds, 4),
+        "rtf": round(infer_seconds / duration, 4),
+        "wer": None if wer is None else round(wer, 6),
+        "cer": None if cer is None else round(cer, 6),
+        "avgLogprob": round(result.avg_logprob, 4),
+        "noSpeechProb": round(result.no_speech_prob, 4),
+        "rms": result.audio.rms,
+        "peak": result.audio.peak,
+    }
+    with report_path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n")
+
+
+def _quality_record(quality: TurnSignalQuality) -> dict[str, object]:
+    return {
+        "speechLike": quality.speech_like,
+        "reason": quality.reason,
+        "medianRms": quality.median_rms,
+        "p80Rms": quality.p80_rms,
+        "p95Rms": quality.p95_rms,
+        "activeRatio": round(quality.active_ratio, 4),
+        "activeMs": quality.active_ms,
+        "maxActiveRunMs": quality.max_active_run_ms,
+        "crestFactor": round(quality.crest_factor, 4),
+        "zeroCrossingRate": round(quality.zero_crossing_rate, 6),
+        "activeThreshold": quality.active_threshold,
+    }
 
 
 def _word_error_rate(reference: str, hypothesis: str) -> float:
-    ref_words = _score_words(reference)
-    hyp_words = _score_words(hypothesis)
-    if not ref_words:
-        return 0.0 if not hyp_words else 1.0
-    return _edit_distance(ref_words, hyp_words) / len(ref_words)
-
-
-def _score_words(text: str) -> list[str]:
-    lowered = text.lower()
-    normalized = re.sub(r"[^0-9a-zæøå]+", " ", lowered)
-    return [word for word in normalized.split() if word]
-
-
-def _edit_distance(left: list[str], right: list[str]) -> int:
-    previous = list(range(len(right) + 1))
-    for left_index, left_item in enumerate(left, start=1):
-        current = [left_index]
-        for right_index, right_item in enumerate(right, start=1):
-            cost = 0 if left_item == right_item else 1
-            current.append(
-                min(
-                    previous[right_index] + 1,
-                    current[right_index - 1] + 1,
-                    previous[right_index - 1] + cost,
-                )
-            )
-        previous = current
-    return previous[-1]
+    return word_error_rate(reference, hypothesis)
 
 
 def _supertonic_voice(
