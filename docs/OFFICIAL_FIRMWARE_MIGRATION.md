@@ -156,9 +156,11 @@ After that, `idf.py build` completed and produced `build\stack-chan.bin` plus `b
 Apply Stacky's local official-firmware bridge patch from the parent repo:
 
 ```powershell
-Set-Location C:\Users\nicol\stackchan\vendor\m5stack-stackchan
-git apply ..\..\patches\official-stackchan\0001-stacky-bridge.patch
+Set-Location C:\Users\nicol\stackchan
+.\scripts\apply-official-firmware-patch.ps1
 ```
+
+The parent repo intentionally stores the firmware delta as `patches/official-stackchan/0001-stacky-bridge.patch` instead of committing dirty files inside `vendor/m5stack-stackchan`, because that directory is the official upstream StackChan git submodule. On a second PC, clone Stacky, run the patch script, then build/flash from `vendor\m5stack-stackchan\firmware`.
 
 Flash command used:
 

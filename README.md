@@ -18,6 +18,20 @@ python -m stacky handsfree
 
 Create `configs/stacky.toml` from `configs/stacky.example.toml` when you are ready to point Stacky at LM Studio, Home Assistant, StackChan, and Sandcode.
 
+## Official StackChan Firmware Patch
+
+The official M5Stack StackChan firmware lives in a git submodule at `vendor/m5stack-stackchan`. Stacky's firmware changes are stored in this repo as a reproducible patch:
+
+```powershell
+.\scripts\apply-official-firmware-patch.ps1
+```
+
+Use this after cloning on another PC. The script initializes the submodule and applies `patches/official-stackchan/0001-stacky-bridge.patch`, which adds the Stacky app, bridge, audio/body protocol, boot screen branding, and version string. If the submodule is already dirty and you want to recreate it from the official base:
+
+```powershell
+.\scripts\apply-official-firmware-patch.ps1 -ForceReset
+```
+
 ## Voice Rule
 
 Danish speech is a hard v1 requirement. Stacky may quote code, file names, API names, and Sandcode output in the original language, but spoken explanations and summaries stay Danish unless you explicitly ask otherwise.

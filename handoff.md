@@ -11,8 +11,8 @@ Updated 2026-05-16 after adding the STT dataset/benchmark loop.
   - `2a26d35 Add Stacky infinite sessions and safe memory gating`
 - Remote: `origin https://github.com/Djsand/stacky.git`
 - Push status: `official-firmware-base` pushed to `origin`
-- Local `git status --short`: only `m vendor/m5stack-stackchan`
-- The dirty submodule is expected: the official firmware patch is applied inside `vendor/m5stack-stackchan` for local build/flash. The reproducible firmware change is committed in `patches/official-stackchan/0001-stacky-bridge.patch`.
+- Local `git status --short`: clean after resetting the official submodule.
+- To recreate the Stacky firmware files on another PC, run `.\scripts\apply-official-firmware-patch.ps1`. The script initializes `vendor/m5stack-stackchan` and applies `patches/official-stackchan/0001-stacky-bridge.patch`.
 - No live hands-free server should be assumed running.
 
 Latest verification:
@@ -72,6 +72,7 @@ Active body base:
 - Branch: `official-firmware-base`
 - Official submodule: `vendor/m5stack-stackchan`
 - Repro patch: `patches/official-stackchan/0001-stacky-bridge.patch`
+- Patch apply script: `scripts/apply-official-firmware-patch.ps1`
 - Latest body patch: official StackChan `1.4.1` with `AppStacky` and bridge `official-0.1.8`
 - Bridge `official-0.1.8` includes `body.look_at`, `body.gesture`, runtime `body.motion_config` head calibration, and Stacky-branded boot screen. Default social center is `yaw=90`, `pitch=260`.
 - PC body server: `192.168.50.208:8765`
