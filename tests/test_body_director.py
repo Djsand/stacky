@@ -60,14 +60,14 @@ class BodyDirectorTest(unittest.TestCase):
         self.assertEqual(fake.expressions, ["thinking"])
         self.assertEqual(fake.gestures, [])
 
-    def test_happy_uses_restrained_nod(self) -> None:
+    def test_happy_only_updates_expression(self) -> None:
         fake = FakeDirectorController()
         director = BodyDirector(fake, BodyCalibration())  # type: ignore[arg-type]
 
         self.assertTrue(director.set_state("happy"))
 
         self.assertEqual(fake.expressions, ["happy"])
-        self.assertEqual(fake.gestures, [("nod", 0.18, 260)])
+        self.assertEqual(fake.gestures, [])
 
     def test_reply_started_uses_small_contextual_motion(self) -> None:
         fake = FakeDirectorController()
@@ -75,7 +75,7 @@ class BodyDirectorTest(unittest.TestCase):
 
         self.assertTrue(director.reply_started("Det giver mening, jeg gør det."))
 
-        self.assertEqual(fake.gestures, [("nod", 0.20, 280)])
+        self.assertEqual(fake.gestures, [("nod", 0.10, 180)])
 
     def test_reply_started_can_signal_uncertainty(self) -> None:
         fake = FakeDirectorController()
@@ -83,7 +83,15 @@ class BodyDirectorTest(unittest.TestCase):
 
         self.assertTrue(director.reply_started("Beklager, jeg misforstod dig."))
 
-        self.assertEqual(fake.gestures, [("shake", 0.16, 260)])
+        self.assertEqual(fake.gestures, [("shake", 0.08, 170)])
+
+    def test_reply_started_can_signal_question(self) -> None:
+        fake = FakeDirectorController()
+        director = BodyDirector(fake, BodyCalibration())  # type: ignore[arg-type]
+
+        self.assertTrue(director.reply_started("Skal jeg gøre det sådan?"))
+
+        self.assertEqual(fake.gestures, [("look_up", 0.08, 160)])
 
 
 if __name__ == "__main__":

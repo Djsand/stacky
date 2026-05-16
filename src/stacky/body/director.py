@@ -1,9 +1,17 @@
 from __future__ import annotations
 
 import time
+from dataclasses import dataclass
 
 from .calibration import BodyCalibration
 from .controller import StackChanBodyController
+
+
+@dataclass(frozen=True)
+class MotionPlan:
+    name: str
+    intensity: float
+    speed: int
 
 
 class BodyDirector:
@@ -31,22 +39,38 @@ class BodyDirector:
         ok = self.controller.set_expression(name)
         now = time.monotonic()
         if name == "listening":
-            ok = self._motion("center", intensity=0.22, speed=180, cooldown=4.0, now=now) and ok
-        elif name == "happy":
-            ok = self._motion("nod", intensity=0.18, speed=260, cooldown=2.4, now=now) and ok
+            ok = self._motion("center", intensity=0.10, speed=160, cooldown=4.0, now=now) and ok
         return ok
 
     def reply_started(self, text: str) -> bool:
+        plan = self.plan_reply_motion(text)
+        if plan is None:
+            return True
+        return self._motion(plan.name, intensity=plan.intensity, speed=plan.speed, cooldown=0.0)
+
+    def plan_reply_motion(self, text: str) -> MotionPlan | None:
         lowered = text.lower()
-        if "dans" in lowered or "rytmis" in lowered:
-            return self.gesture("nod", intensity=0.35, speed=420)
-        if any(token in lowered for token in ("beklager", "ikke helt", "kan ikke", "misforstod")):
-            return self._motion("shake", intensity=0.16, speed=260, cooldown=0.0)
-        if any(token in lowered for token in ("det giver mening", "klart", "okay", "fedt", "godt")):
-            return self._motion("nod", intensity=0.20, speed=280, cooldown=0.0)
+        if any(token in lowered for token in ("beklager", "ikke helt", "kan ikke", "misforstod", "ikke sikker")):
+            return MotionPlan("shake", intensity=0.08, speed=170)
+        if any(
+            token in lowered
+            for token in (
+                "det giver mening",
+                "du har ret",
+                "enig",
+                "klart",
+                "okay",
+                "fedt",
+                "godt",
+                "modtaget",
+            )
+        ):
+            return MotionPlan("nod", intensity=0.10, speed=180)
         if "?" in text:
-            return self._motion("look_up", intensity=0.14, speed=220, cooldown=0.0)
-        return True
+            return MotionPlan("look_up", intensity=0.08, speed=160)
+        if len(lowered) > 80 and time.monotonic() - self._last_motion_at > 3.0:
+            return MotionPlan("nod", intensity=0.07, speed=150)
+        return None
 
     def gesture(self, name: str, *, intensity: float = 1.0, speed: int = 500) -> bool:
         self._last_motion_at = time.monotonic()

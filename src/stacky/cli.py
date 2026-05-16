@@ -1599,10 +1599,22 @@ async def _handsfree(
             brain_seconds = time.perf_counter() - brain_started
             set_body_state("happy")
             speak_started = time.perf_counter()
+            motion_task = None
             if body_director is not None:
-                body_director.reply_started(reply.spoken_text or reply.text)
+                motion_task = asyncio.create_task(
+                    _delayed_reply_motion(body_director, reply.spoken_text or reply.text)
+                )
             await output.speak(reply.spoken_text or reply.text)
             await output.wait()
+            if motion_task is not None:
+                if motion_task.done():
+                    await motion_task
+                else:
+                    motion_task.cancel()
+                    try:
+                        await motion_task
+                    except asyncio.CancelledError:
+                        pass
             speak_seconds = time.perf_counter() - speak_started
             print(
                 f"[timing] stt={stt_seconds:.2f}s brain={brain_seconds:.2f}s "
@@ -1629,6 +1641,14 @@ def _drain_queue(queue: asyncio.Queue[tuple[bytes, int, int]]) -> None:
             queue.get_nowait()
         except asyncio.QueueEmpty:
             return
+
+
+async def _delayed_reply_motion(director: BodyDirector, text: str, *, delay_seconds: float = 0.45) -> None:
+    await asyncio.sleep(delay_seconds)
+    try:
+        await asyncio.to_thread(director.reply_started, text)
+    except Exception as exc:  # pragma: no cover - body motion must never break speech.
+        print(f"[Stacky] body motion skipped: {exc}", flush=True)
 
 
 def _clean_transcript(text: str) -> str:
