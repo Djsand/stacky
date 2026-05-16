@@ -43,6 +43,10 @@ PRONUNCIATION_FIXES: tuple[tuple[str, str], ...] = (
     ("Gemma", "Gemma"),
 )
 
+WORD_PRONUNCIATION_FIXES: tuple[tuple[re.Pattern[str], str], ...] = (
+    (re.compile(r"\bdig\b", re.IGNORECASE), "dej"),
+)
+
 
 def adapt_for_danish_speech(text: str) -> str:
     """Turn model text into something a Danish TTS voice can say naturally."""
@@ -56,6 +60,8 @@ def adapt_for_danish_speech(text: str) -> str:
     spoken = _VOICE_LABEL_RE.sub(_spell_voice_label, spoken)
     for source, target in PRONUNCIATION_FIXES:
         spoken = re.sub(re.escape(source), target, spoken, flags=re.IGNORECASE)
+    for pattern, target in WORD_PRONUNCIATION_FIXES:
+        spoken = pattern.sub(target, spoken)
     spoken = _AFTER_GREETING_RE.sub(lambda match: f"Hej, {match.group(1).lower()}", spoken)
     spoken = _collapse_duplicate_words(spoken)
     spoken = _shape_rhythm(spoken)

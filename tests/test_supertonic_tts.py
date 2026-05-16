@@ -11,7 +11,7 @@ class SupertonicVoiceTest(unittest.TestCase):
 
         self.assertEqual(voice.voice_name, "F2")
         self.assertEqual(voice.language, "da")
-        self.assertGreaterEqual(voice.speed, 1.10)
+        self.assertGreaterEqual(voice.speed, 1.15)
         self.assertLessEqual(voice.silence_duration, 0.025)
 
     def test_preset_allows_explicit_overrides(self) -> None:
@@ -25,7 +25,8 @@ class SupertonicVoiceTest(unittest.TestCase):
     def test_quick_profile_keeps_natural_rhythm(self) -> None:
         voice = supertonic_voice_preset("quick")
 
-        self.assertLessEqual(voice.speed, 1.12)
+        self.assertGreaterEqual(voice.speed, 1.12)
+        self.assertLessEqual(voice.speed, 1.14)
         self.assertLessEqual(voice.silence_duration, 0.03)
         self.assertGreaterEqual(voice.max_chunk_length, 200)
 

@@ -20,6 +20,12 @@ class SpeechAdapterTest(unittest.TestCase):
         self.assertIn("em tre", spoken)
         self.assertIn("eff en", spoken)
 
+    def test_dig_is_pronounced_without_touching_longer_words(self) -> None:
+        spoken = adapt_for_danish_speech("Det er godt at høre fra dig. Jeg er færdig.")
+
+        self.assertIn("fra dej", spoken)
+        self.assertIn("færdig", spoken)
+
     def test_leading_name_greeting_is_kept_short(self) -> None:
         spoken = adapt_for_danish_speech("Hej Nicolai, det her er Stacky.")
 
