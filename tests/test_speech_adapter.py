@@ -33,7 +33,12 @@ class SpeechAdapterTest(unittest.TestCase):
     def test_rhythm_punctuation_for_live_speech(self) -> None:
         spoken = adapt_for_danish_speech("Okay det giver mening men jeg venter hvis du tester.")
 
-        self.assertEqual(spoken, "Okay, det giver mening, men jeg venter, hvis du tester.")
+        self.assertEqual(spoken, "Okay. Det giver mening, men jeg venter, hvis du tester.")
+
+    def test_rhythm_keeps_phrase_marker_as_comma(self) -> None:
+        spoken = adapt_for_danish_speech("Det giver mening jeg venter.")
+
+        self.assertEqual(spoken, "Det giver mening, jeg venter.")
 
     def test_rhythm_does_not_break_intensifier_saa(self) -> None:
         spoken = adapt_for_danish_speech("Det er så fedt.")

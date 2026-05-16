@@ -1908,6 +1908,16 @@ def _parse_volume_command(text: str, *, current_level: int) -> tuple[int, str] |
         return None
     current_level = _clamp_volume_level(current_level)
 
+    directional_level = re.search(r"\b(?:ned|op)\s+til\s+(\d{1,3})\b", lowered)
+    if directional_level:
+        level = _clamp_volume_level(int(directional_level.group(1)))
+        return level, f"Okay, min volumen er nu {level} procent."
+
+    explicit_level = re.search(r"\b(?:sæt|saet|set|juster|justerer|justere|skru|skrue)\b.*\btil\s+(\d{1,3})\b", lowered)
+    if explicit_level:
+        level = _clamp_volume_level(int(explicit_level.group(1)))
+        return level, f"Okay, min volumen er nu {level} procent."
+
     volume_context = any(
         word in lowered
         for word in (
@@ -1943,11 +1953,19 @@ def _parse_volume_command(text: str, *, current_level: int) -> tuple[int, str] |
             level = _clamp_volume_level(level)
             return level, f"Okay, min volumen er nu {level} procent."
 
-    if any(phrase in lowered for phrase in ("skru op", "skru lidt op", "skru en smule op", "højere", "hojere", "mere lyd", "for lav")):
-        level = _clamp_volume_level(current_level + 15)
+    if (
+        any(phrase in lowered for phrase in ("skru op", "skru lidt op", "skru en smule op", "højere", "hojere", "mere lyd", "for lav"))
+        or re.search(r"\bskru(?:e)?\b.*\bop\b", lowered)
+    ):
+        step = 35 if any(word in lowered for word in ("meget", "langt", "længere", "laengere", "mere")) else 15
+        level = _clamp_volume_level(current_level + step)
         return level, f"Okay, jeg skruer op til {level} procent."
-    if any(phrase in lowered for phrase in ("skru ned", "skru lidt ned", "skru en smule ned", "lavere", "dæmp", "daemp", "mindre lyd", "for høj", "for hoj")):
-        level = _clamp_volume_level(current_level - 15)
+    if (
+        any(phrase in lowered for phrase in ("skru ned", "skru lidt ned", "skru en smule ned", "lavere", "dæmp", "daemp", "mindre lyd", "for høj", "for hoj"))
+        or re.search(r"\bskru(?:e)?\b.*\bned\b", lowered)
+    ):
+        step = 35 if any(word in lowered for word in ("meget", "langt", "længere", "laengere", "mindre")) else 15
+        level = _clamp_volume_level(current_level - step)
         return level, f"Okay, jeg skruer ned til {level} procent."
     return None
 

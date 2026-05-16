@@ -10,8 +10,12 @@ _VOICE_LABEL_RE = re.compile(r"\b([FM])\s*([1-5])\b", re.IGNORECASE)
 _LEADING_NAME_GREETING_RE = re.compile(r"^\s*hej\s+nicolai\s*[,!.]?\s*", re.IGNORECASE)
 _AFTER_GREETING_RE = re.compile(r"^Hej\. ([a-zæøå])")
 _DUPLICATE_WORD_RE = re.compile(r"\b([A-Za-zæøåÆØÅ]{4,})\b\s+\1\b", re.IGNORECASE)
-_LEADING_MARKER_RE = re.compile(
-    r"^(Ja|Nej|Okay|Fedt|Klart|Præcis|Godt|Fint|Det giver mening|Det lyder godt)\s+(?=[a-zæøå])",
+_LEADING_SHORT_MARKER_RE = re.compile(
+    r"^(Ja|Nej|Okay|Fedt|Klart|Præcis|Godt|Fint)\s+([a-zæøå])",
+    re.IGNORECASE,
+)
+_LEADING_PHRASE_MARKER_RE = re.compile(
+    r"^(Det giver mening|Det lyder godt)\s+(?=[a-zæøå])",
     re.IGNORECASE,
 )
 
@@ -73,7 +77,8 @@ def _collapse_duplicate_words(text: str) -> str:
 
 
 def _shape_rhythm(text: str) -> str:
-    text = _LEADING_MARKER_RE.sub(lambda match: f"{match.group(1)}, ", text)
+    text = _LEADING_SHORT_MARKER_RE.sub(lambda match: f"{match.group(1)}. {match.group(2).upper()}", text)
+    text = _LEADING_PHRASE_MARKER_RE.sub(lambda match: f"{match.group(1)}, ", text)
     text = re.sub(r"(?<![,.;:!?])\s+men\s+", ", men ", text, flags=re.IGNORECASE)
     text = re.sub(r"(?<![,.;:!?])\s+så\s+(?=(jeg|du|vi|det|bare|sig|kan|skal)\b)", ", så ", text, flags=re.IGNORECASE)
     text = re.sub(r"(?<![,.;:!?])\s+hvis\s+", ", hvis ", text, flags=re.IGNORECASE)

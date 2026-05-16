@@ -20,7 +20,7 @@ SUPERTONIC_VOICE_PRESETS: dict[str, SupertonicVoice] = {
     "stacky": SupertonicVoice(),
     "calm": SupertonicVoice(speed=1.08, total_steps=10, max_chunk_length=240, silence_duration=0.055),
     "clear": SupertonicVoice(voice_name="F1", speed=1.16, total_steps=10, max_chunk_length=220, silence_duration=0.04),
-    "quick": SupertonicVoice(speed=1.18, total_steps=6, max_chunk_length=180, silence_duration=0.04),
+    "quick": SupertonicVoice(speed=1.12, total_steps=6, max_chunk_length=160, silence_duration=0.055),
 }
 
 

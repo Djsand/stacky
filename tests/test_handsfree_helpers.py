@@ -114,6 +114,21 @@ class HandsfreeHelpersTest(unittest.TestCase):
     def test_parse_volume_command_followup_adjust_to_number(self) -> None:
         self.assertEqual(_parse_volume_command("justerer til 50", current_level=80), (50, "Okay, min volumen er nu 50 procent."))
 
+    def test_parse_volume_command_soft_request_with_words_between(self) -> None:
+        self.assertEqual(
+            _parse_volume_command("lige inden vi går videre kan du så ikke lige skrue lyden ned", current_level=80),
+            (65, "Okay, jeg skruer ned til 65 procent."),
+        )
+
+    def test_parse_volume_command_directional_absolute_level(self) -> None:
+        self.assertEqual(_parse_volume_command("du ned til 65", current_level=80), (65, "Okay, min volumen er nu 65 procent."))
+
+    def test_parse_volume_command_much_further_down(self) -> None:
+        self.assertEqual(
+            _parse_volume_command("for at skrue meget længere ned", current_level=65),
+            (30, "Okay, jeg skruer ned til 30 procent."),
+        )
+
     def test_parse_volume_command_relative_up(self) -> None:
         self.assertEqual(_parse_volume_command("skru op", current_level=80), (95, "Okay, jeg skruer op til 95 procent."))
 
