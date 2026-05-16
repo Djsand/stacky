@@ -42,6 +42,9 @@ uint32_t audioPlayCounter = 0;
 uint32_t audioPlaybackDeadlineMs = 0;
 uint32_t audioChunkQueued = 0;
 uint32_t audioChunkDropped = 0;
+uint32_t micRecordFailCounter = 0;
+uint32_t micTimeoutCounter = 0;
+uint32_t lastMicDiagAt = 0;
 
 void showStatusLine(const String& text, uint16_t color = TFT_DARKGREY) {
   statusLine = text;
@@ -736,10 +739,32 @@ void sendStatus() {
 void streamMicToStacky() {
   if (!client.connected() || audioPlaying || audioOutputHold) return;
   if (!ensureMicReady()) return;
-  if (!M5.Mic.record(micBuffer, AUDIO_IN_SAMPLES, AUDIO_IN_SAMPLE_RATE)) return;
-  bool started = waitMicRecordingState(true, 250);
-  bool completed = started && waitMicRecordingState(false, 250);
-  if (!completed) return;
+  if (!M5.Mic.record(micBuffer, AUDIO_IN_SAMPLES, AUDIO_IN_SAMPLE_RATE)) {
+    micRecordFailCounter++;
+    if (millis() - lastMicDiagAt > 1000) {
+      Serial.printf("mic.record failed count=%u running=%d recording=%d\n",
+        static_cast<unsigned>(micRecordFailCounter),
+        M5.Mic.isRunning() ? 1 : 0,
+        M5.Mic.isRecording() ? 1 : 0
+      );
+      lastMicDiagAt = millis();
+    }
+    return;
+  }
+  uint32_t captureMs = static_cast<uint32_t>((AUDIO_IN_SAMPLES * 1000UL) / AUDIO_IN_SAMPLE_RATE) + 20;
+  delay(captureMs);
+  if (M5.Mic.isRecording() && !waitMicRecordingState(false, 250)) {
+    micTimeoutCounter++;
+    if (millis() - lastMicDiagAt > 1000) {
+      Serial.printf("mic.record timeout count=%u running=%d recording=%d\n",
+        static_cast<unsigned>(micTimeoutCounter),
+        M5.Mic.isRunning() ? 1 : 0,
+        M5.Mic.isRecording() ? 1 : 0
+      );
+      lastMicDiagAt = millis();
+    }
+    return;
+  }
   if (audioPlaying) return;
 
   client.print("{\"type\":\"audio.in\",\"payload\":{\"encoding\":\"pcm16le\",\"sampleRate\":");
@@ -772,7 +797,8 @@ void setup() {
   M5.Speaker.end();
   auto micCfg = M5.Mic.config();
   micCfg.sample_rate = AUDIO_IN_SAMPLE_RATE;
-  // 0.3.17: revert magnification + noise_filter_level overrides — 0.3.15 values broke mic capture (only noise floor)
+  micCfg.magnification = 4;
+  // 0.3.22: gain=2 is clean but too quiet; gain=16 broke capture into noise floor.
   M5.Mic.config(micCfg);
   auto speakerCfg = M5.Speaker.config();
   Serial.printf("Stacky firmware %s\n", STACKY_FIRMWARE_VERSION);

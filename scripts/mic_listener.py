@@ -56,6 +56,7 @@ def main() -> None:
     parser.add_argument("--output", default="captured.wav")
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--bind", default="0.0.0.0")
+    parser.add_argument("--seconds", type=float, default=0.0, help="Stop after this many seconds; 0 runs until interrupted.")
     args = parser.parse_args()
 
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -74,9 +75,13 @@ def main() -> None:
     peak_values: list[int] = []
     frame_count = 0
     started_at = time.time()
+    deadline = started_at + args.seconds if args.seconds > 0 else None
 
     try:
         while True:
+            if deadline is not None and time.time() >= deadline:
+                print("[stop] time limit reached")
+                break
             line = read_line(sock_file)
             if line is None:
                 print("[disconnect] peer closed connection")

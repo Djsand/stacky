@@ -13,15 +13,15 @@ Do not import or reuse Moss identity, Moss memories, Moss sessions, or the Moss 
 ## Current Status
 
 - Python package: `src/stacky`
-- Firmware: `firmware/stacky_cores3` (now version `0.3.19`)
+- Firmware: `firmware/stacky_cores3` (now version `0.3.22`)
 - Tests: `tests`
 - Body server port: `8765`
 - StackChan IP seen during tests: `192.168.50.2`
 - PC IP used during tests: `192.168.50.208`
 - USB serial seen during tests: `/dev/cu.usbmodem1101` or `cu.usbmodem101` on Mac, `COM3` on Windows
-- Latest flashed firmware version: `0.3.19`
+- Latest flashed firmware version: `0.3.22`
 
-The mic now captures speech reliably. The Danish wav2vec2 STT transcribes correctly. LM Studio brain generates natural Danish replies. Supertonic TTS synthesizes WAV files. The StackChan speaker streaming is the only remaining blocker.
+The mic now sends frames reliably again, but Danish STT quality on StackChan mic clips is still poor. LM Studio brain and Supertonic TTS are still available, but the StackChan speaker streaming crash remains unresolved.
 
 ## Mac/Windows Workflow (NEW)
 

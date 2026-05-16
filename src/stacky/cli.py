@@ -56,9 +56,9 @@ def main(argv: list[str] | None = None) -> int:
         default="",
         help="Model name. wav2vec2 default is CoRal-project/roest-v3-wav2vec2-315m; whisper default is small.",
     )
-    handsfree.add_argument("--vad-threshold", type=int, default=120, help="PCM RMS threshold for speech start.")
-    handsfree.add_argument("--end-silence-ms", type=int, default=1000, help="Silence duration that ends a voice turn.")
-    handsfree.add_argument("--min-speech-ms", type=int, default=250, help="Minimum voiced audio before accepting a turn.")
+    handsfree.add_argument("--vad-threshold", type=int, default=700, help="PCM RMS threshold for speech start.")
+    handsfree.add_argument("--end-silence-ms", type=int, default=650, help="Silence duration that ends a voice turn.")
+    handsfree.add_argument("--min-speech-ms", type=int, default=150, help="Minimum voiced audio before accepting a turn.")
     handsfree.add_argument("--listen-only", action="store_true", help="Only print StackChan STT results; do not call the brain or TTS.")
     handsfree.add_argument("--debug-audio", action="store_true", help="Print live StackChan mic RMS/peak while listening.")
     handsfree.add_argument(

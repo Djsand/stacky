@@ -60,7 +60,7 @@ class FasterWhisperDanishSTT:
             beam_size=1,
             vad_filter=False,
             condition_on_previous_text=False,
-            initial_prompt="Dansk samtale mellem Nicolai og Stacky. Korte danske sætninger.",
+            initial_prompt=None,
         )
         texts: list[str] = []
         weighted_logprob = 0.0
