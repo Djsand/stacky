@@ -427,7 +427,11 @@ async def _handsfree(
             print(f"[StackChan] touch: {event.payload}", flush=True)
             return
         if event.type != "audio.in":
+            print(f"[debug] on_event non-audio.in type={event.type!r}", flush=True)
             return
+        on_event._audio_in_count = getattr(on_event, "_audio_in_count", 0) + 1
+        if on_event._audio_in_count <= 3 or on_event._audio_in_count % 200 == 0:
+            print(f"[debug] audio.in #{on_event._audio_in_count} accepting={accepting_audio}", flush=True)
         try:
             pcm, sample_rate, channels = decode_pcm_payload(event.payload)
         except ValueError as exc:

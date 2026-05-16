@@ -2,7 +2,7 @@
 
 ## Stop Point
 
-Stop debugging here. The last active work was on Stacky audio and mic reliability for the M5Stack StackChan/CoreS3 body. Old handsfree processes were stopped before this handoff was written.
+Stop here. Mic capture is fixed and end-to-end pipeline (STT → LM Studio brain → TTS synthesis) is validated working. The remaining blocker is the StackChan speaker chunked playback: when Python streams audio chunks to the firmware speaker, the ESP32 reboots. Need to capture serial output during the actual crash before next fix attempt.
 
 ## Project
 
@@ -13,70 +13,112 @@ Do not import or reuse Moss identity, Moss memories, Moss sessions, or the Moss 
 ## Current Status
 
 - Python package: `src/stacky`
-- Firmware: `firmware/stacky_cores3`
+- Firmware: `firmware/stacky_cores3` (now version `0.3.19`)
 - Tests: `tests`
 - Body server port: `8765`
 - StackChan IP seen during tests: `192.168.50.2`
 - PC IP used during tests: `192.168.50.208`
-- USB serial seen during tests: `COM3`
-- Latest flashed firmware version during this session: `0.3.15`
+- USB serial seen during tests: `/dev/cu.usbmodem1101` or `cu.usbmodem101` on Mac, `COM3` on Windows
+- Latest flashed firmware version: `0.3.19`
 
-The StackChan speaker path can play Stacky speech, but playback quality has been fragile during streaming. The best current direction is the raw/combined StackChan audio path rather than PC speaker fallback.
+The mic now captures speech reliably. The Danish wav2vec2 STT transcribes correctly. LM Studio brain generates natural Danish replies. Supertonic TTS synthesizes WAV files. The StackChan speaker streaming is the only remaining blocker.
 
-The Danish STT path is still the biggest unresolved problem. Stacky is currently using the local wav2vec2 Danish STT engine, not Whisper, by default:
+## Mac/Windows Workflow (NEW)
 
-```text
-CoRal-project/roest-v3-wav2vec2-315m
-```
+The Mac at `/Users/nicolai/stacky` is now a working dev mirror of the Windows project. Set up tonight:
 
-Recent logs showed bad transcripts even when Nicolai spoke clearly. The likely root cause is the StackChan/CoreS3 mic pipeline or framing/levels, not simply the STT model.
+- **PlatformIO installed on Mac**: `/Users/nicolai/Library/Python/3.13/bin/pio` — can flash firmware directly via USB without Windows
+- **SSH key auth Mac → Windows**: `ssh nicolai@192.168.50.208` works without password. Key in `C:\ProgramData\ssh\administrators_authorized_keys` (admin auth path)
+- **Wi-Fi creds copied**: Mac's `firmware/stacky_cores3/include/wifi_secrets.h` has real credentials (gitignored)
 
-## Latest Changes
+Typical iteration loop:
+1. Edit code on Mac
+2. `scp` changed files to Windows OR `pio run -t upload` to flash StackChan directly from Mac
+3. `ssh nicolai@192.168.50.208 'cd C:\Users\nicol\stackchan && .\.venv\Scripts\python.exe -m stacky handsfree ...'` to run Python stack
+4. Read serial from Mac (StackChan is USB-tethered to Mac during dev): `python3 /tmp/serial_log.py /dev/cu.usbmodem101 N /tmp/log.log`
 
-- `src/stacky/body/controller.py`
-  - Added raw binary `audio.in` support after a JSON header.
-  - Added pending audio state so mic PCM can arrive without base64 overhead.
+## Latest Changes (Mac-side, uncommitted)
 
-- `src/stacky/body/protocol.py`
-  - `decode_pcm_payload` now accepts raw `bytes`/`bytearray` PCM as well as base64 data.
+### Firmware 0.3.17 — mic fix (the big win)
 
-- `src/stacky/voice/stt.py`
-  - Added STT AGC for wav2vec2 input.
-  - `Wav2Vec2DanishSTT` now normalizes quiet StackChan mic captures before transcription.
+- `firmware/stacky_cores3/src/main.cpp` setup:
+  - **Removed `micCfg.magnification = 16;`** — this was the bug. M5Unified default (`magnification=2`) works; setting to 16 caused the mic to output only noise floor (RMS ~260, peak ~1700, no speech modulation). Pre-0.3.15 default mic worked; the 0.3.15 attempt at higher gain killed it.
+  - Removed `micCfg.noise_filter_level = 0;` — was a no-op anyway (`0` is the default).
+- `firmware/stacky_cores3/src/main.cpp` `sendStatus()`: Added periodic Serial diagnostic line so mic state is observable without USB-monitor on boot:
+  ```
+  mic_state running=1 gain=2 sr=16000 nf=0 recording=0 ap=0 ah=0 pending=0 session=0 spk=0
+  ```
+  Flags: running (M5.Mic), recording, ap=audioPlaying, ah=audioOutputHold, session=audioOutSessionOpen, spk=speaker playing.
 
-- `firmware/stacky_cores3/src/main.cpp`
-  - Mic frames are now sent as JSON header plus raw PCM bytes.
-  - Audio-in frame size is 640 samples at 16 kHz, about 40 ms.
-  - Mic config was changed to higher gain and reduced firmware noise filtering.
+### Firmware 0.3.18 / 0.3.19 — speaker I2S race (attempted fix, INCOMPLETE)
 
-- `tests/test_body_controller.py`
-  - Added raw incoming audio tests.
+CoreS3 shares I2S port 1 between mic (ES7210, data pin 14) and speaker (AW88298, data pin 13). When `M5.Speaker.begin()` runs, it calls `_i2s_driver_uninstall(port)` before re-installing the port for output (Speaker_Class.cpp:200). If the mic FreeRTOS task is still in `i2s_read()` when this happens, mic_task crashes with Guru Meditation Error / LoadProhibited at EXCVADDR `0x1c` (addr2line resolved: `i2s_read` called from `m5::Mic_Class::mic_task` at Mic_Class.cpp:232/598).
 
-- `tests/test_body_protocol.py`
-  - Added raw PCM decode test.
+Fix attempt in 0.3.19:
+- `pauseMicForSharedI2S()`: always call `M5.Mic.end()` (no `isRunning()` check — that check was racy). Default settle increased from `60ms` to `150ms`.
+- `prepareSpeakerForAudio()`: added `delay(120)` before `M5.Speaker.begin()` to ensure mic_task fully exits before the I2S port is yanked.
 
-- `tests/test_stt.py`
-  - Added AGC coverage.
+**This was not enough.** ESP32 still reboots when Python sends audio chunks to the speaker. User confirmed by direct observation (screen reset, expression resetting to "neutral" startup default in Python's status events). The next fix attempt should be informed by serial captured DURING the crash — earlier in this session we couldn't catch it because our serial logger wasn't running at the right moment.
 
-## Verified Before Stop
+### Python: ffmpeg fallback in `output.py`
+
+`_prepare_stackchan_wav` in `src/stacky/voice/output.py` called `subprocess.run(["ffmpeg", ...])` and got `FileNotFoundError` even though ffmpeg is installed at `C:\Users\nicol\miniconda3\Library\bin\ffmpeg.exe` — PATH issue when subprocess runs from the venv. Added `shutil.which()` lookup with explicit fallback path. Tested but the speaker crash happened before we could validate the ffmpeg fix in isolation.
+
+### Python: debug counter in `cli.py`
+
+`on_event` in `_handsfree` now counts audio.in events and prints `[debug] audio.in #N accepting=X` every 200 events. Helps confirm controller thread is dispatching events correctly. Verified Python is receiving events steadily (counter went to 2400+ in tonight's test) — earlier "intet sker" mystery was actually low VAD-trigger from quiet speech, not blocked event flow.
+
+### New: `scripts/mic_listener.py`
+
+Minimal stdlib-only Python listener that accepts a StackChan TCP connection, captures raw PCM `audio.in` frames to a WAV file, and logs per-frame RMS/peak. Built to isolate mic-capture quality from the full STT stack. Was not used in the end (we tested via real `handsfree --listen-only` instead) but it's a clean fallback debug tool.
+
+## Verified During This Session
 
 ```powershell
-.\.venv\Scripts\python.exe -m unittest discover -s tests
+# On Windows via SSH from Mac:
+.\.venv\Scripts\python.exe -m stacky handsfree --listen-only --debug-audio --body-timeout 60
+# → mic captures speech, STT returns 'hej med dig' with logprob=-0.07 (high confidence)
 ```
-
-Result: `57 tests OK`
 
 ```powershell
-.\.venv\Scripts\pio.exe run -d firmware\stacky_cores3
+.\.venv\Scripts\python.exe -m stacky handsfree --tts-engine supertonic --speaker stackchan --debug-audio --min-speech-ms 100 --vad-threshold 100
+# → full loop fires:
+#   Nicolai: hej med dig
+#   Stacky: Hej med dig. Hvordan går det i dag?
+# → then ESP32 reboot when audio chunks start streaming to firmware speaker
 ```
 
-Result: build success
-
-```powershell
-.\.venv\Scripts\pio.exe run -d firmware\stacky_cores3 -t upload
+```bash
+# On Mac:
+/Users/nicolai/Library/Python/3.13/bin/pio run -d firmware/stacky_cores3 -t upload --upload-port /dev/cu.usbmodem1101
+# → builds and flashes 0.3.19 successfully
 ```
 
-Result: firmware upload success
+## Open Problems (ranked by priority)
+
+### 1. Speaker chunked playback crashes ESP32 (BLOCKING)
+
+When Python streams audio.raw chunks to firmware and calls `audio.end`, firmware tries to play via `M5.Speaker.playWav` → reboots. The 0.3.19 fix (always-Mic.end + 150ms settle + 120ms pre-Speaker delay) did NOT solve it. Need to:
+
+1. Start serial logger BEFORE running handsfree
+2. Capture the crash output (Guru Meditation register dump or similar)
+3. Use `addr2line` against the elf in `.pio/build/m5stack-cores3/firmware.elf` to symbolize crash PC
+4. Determine if it's still the same `mic_task / i2s_read` crash (mic not fully exited) or a NEW crash path (probably in `M5.Speaker` or chunked buffer handling)
+
+Tools ready: addr2line at `/Users/nicolai/.platformio/packages/toolchain-xtensa-esp32s3/bin/xtensa-esp32s3-elf-addr2line`. Use `pio device monitor` or `python3 scripts/mic_listener.py` style serial reader.
+
+### 2. Mic gain still too low at default magnification=2
+
+User had to "fandeme råbe" to register speech on second test (peak only ~580 vs 7000+ seen in earlier test). The Python-side AGC and the "for lavt mic-niveau" rejection filter combine to drop many real-but-quiet transcripts.
+
+Plan:
+1. Bump firmware `micCfg.magnification` from default 2 → 4. **Do not go higher than 8** — 16 broke it entirely.
+2. Re-test. If signal is healthier (peak >3000 at normal voice), keep 4. Else try 6.
+3. Possibly lower the Python-side "for lavt mic-niveau" threshold in `_accept_stt_result` (find in `src/stacky/cli.py`).
+
+### 3. "ignorerer STT (for lavt mic-niveau)" filter is too aggressive
+
+Even when STT produced reasonable text (`'der har mere soreterede'` was garbage, but earlier `'hej med dig'` was good), the filter rejects based on absolute RMS. Should probably be replaced by a logprob-based check (we already see `logprob=-0.07` is excellent, `-0.61` is borderline, `-1.07` is junk).
 
 ## Usual Commands
 
@@ -86,36 +128,47 @@ Run tests:
 .\.venv\Scripts\python.exe -m unittest discover -s tests
 ```
 
-Build firmware:
+Build firmware from Mac (NEW):
+
+```bash
+/Users/nicolai/Library/Python/3.13/bin/pio run -d firmware/stacky_cores3
+```
+
+Flash firmware from Mac via USB (NEW):
+
+```bash
+/Users/nicolai/Library/Python/3.13/bin/pio run -d firmware/stacky_cores3 -t upload --upload-port /dev/cu.usbmodem1101
+```
+
+Build firmware on Windows (still works):
 
 ```powershell
 .\.venv\Scripts\pio.exe run -d firmware\stacky_cores3
 ```
 
-Flash firmware:
+Run listen-only mic debugging via SSH:
 
-```powershell
-.\.venv\Scripts\pio.exe run -d firmware\stacky_cores3 -t upload
+```bash
+ssh nicolai@192.168.50.208 'cd C:\Users\nicol\stackchan && .\.venv\Scripts\python.exe -m stacky handsfree --listen-only --debug-audio --body-timeout 60'
 ```
 
-Run handsfree with StackChan speaker:
+Run full handsfree via SSH (currently crashes at speaker):
 
-```powershell
-.\.venv\Scripts\python.exe -m stacky handsfree --tts-engine supertonic --speaker stackchan
+```bash
+ssh nicolai@192.168.50.208 'cd C:\Users\nicol\stackchan && .\.venv\Scripts\python.exe -m stacky handsfree --tts-engine supertonic --speaker stackchan --debug-audio --min-speech-ms 100 --vad-threshold 100'
 ```
 
-Run listen-only mic debugging:
+Read serial from StackChan via USB on Mac:
 
-```powershell
-.\.venv\Scripts\python.exe -m stacky handsfree --listen-only --debug-audio --body-timeout 35
+```bash
+python3 /tmp/serial_log.py /dev/cu.usbmodem101 30 /tmp/serial.log
+# script source: see /tmp/serial_log.py — short stdlib + pyserial reader
 ```
 
-Stop stuck Stacky/Pio processes:
+Stop stuck Python on Windows via SSH:
 
-```powershell
-Get-CimInstance Win32_Process |
-  Where-Object { $_.CommandLine -match 'stacky handsfree|pio monitor' } |
-  ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
+```bash
+ssh nicolai@192.168.50.208 'powershell -Command "Get-Process python -ErrorAction SilentlyContinue | Stop-Process -Force"'
 ```
 
 ## Voice
@@ -138,35 +191,23 @@ Pronunciation adapter currently rewrites:
 - `StackChan` to `Stack-tjan`
 - `Sandcode` to `Sand-kode`
 
-The user chose the first tuning profile as the current best one. The voice is acceptable, but still sings names a little and needs naturalness work later.
+The voice is acceptable, but still sings names a little and needs naturalness work later.
 
-## Open Problem: Mic/STT
+## Mic Research Done This Session
 
-The current failure mode is not that Stacky uses Whisper. It does not, unless explicitly selected. The default path is wav2vec2 Danish STT.
+### Architecture diagnosis (M5Unified internals)
 
-Observed symptoms:
+- `M5.Mic` uses a FreeRTOS task `mic_task` pinned via `xTaskCreatePinnedToCore`
+- The task loops calling `i2s_read(port, buf, len, &result, 100ms)` on the shared I2S port
+- `M5.Mic.end()` sets `_task_running = false` and waits via `do { vTaskDelay(1); } while (_task_handle);` for the task to set `_task_handle = nullptr` before returning
+- But: if the task is mid-`i2s_read` (100ms timeout), end() waits — and during that wait, another caller can race
+- `M5.Speaker.begin()` calls `_i2s_driver_uninstall(port)` at Speaker_Class.cpp:200 before re-installing for output. This is the dangerous moment.
 
-- Nicolai has to speak too loudly.
-- Transcripts are wrong or fragmented.
-- Captured turns were often very short, around 0.6 to 1.8 seconds.
-- Earlier WAVs had low RMS and sometimes only partial speech.
-- Gain in Python alone did not fix recognition.
+### XiaoZhi protocol research (for future reference)
 
-The latest firmware raw mic transport and gain changes were flashed, but not fully validated because Nicolai asked to stop here.
+The new official M5StackChan ships with XiaoZhi firmware which uses a WebSocket protocol v3 (or MQTT+UDP hybrid) with OPUS audio at 16kHz mono input / 24kHz mono output, 60ms frames. This is a different paradigm from our PCM-over-TCP custom protocol. Not relevant for current Stacky (we use our own firmware), but useful context if we ever consider migrating to a more standard protocol.
 
-Next debugging step should be:
-
-1. Ensure no old `stacky handsfree` or `pio monitor` process is running.
-2. Run listen-only with debug audio after firmware `0.3.15`.
-3. Speak one clear Danish sentence at normal volume.
-4. Inspect console RMS, peak, duration, transcript, and `artifacts/handsfree_turns`.
-5. If raw framing is broken, compare against the old base64 mic path.
-6. If audio clips, reduce `micCfg.magnification`.
-7. If levels look healthy but transcripts remain bad, test another Danish STT engine.
-
-## StackChan Mic Research
-
-Useful links gathered during the mic investigation:
+### Useful links
 
 - M5Stack StackChan docs: https://docs.m5stack.com/en/stackchan
 - StackChan Mic Arduino docs: https://docs.m5stack.com/en/arduino/stackchan/mic
@@ -174,8 +215,8 @@ Useful links gathered during the mic investigation:
 - ESPHome CoreS3 satellite config: https://raw.githubusercontent.com/m5stack/esphome-yaml/main/common/cores3-satellite-base.yaml
 - ESPHome CoreS3 device page: https://devices.esphome.io/devices/m5stack-cores3/
 - LiveKit shared I2S thread: https://community.livekit.io/t/m5stack-cores3-aw88298-es7210-shared-i2s-no-speaker-output-capture-works/561
-
-Important clue: the ESPHome/CoreS3 voice configs use ES7210 mic gain around `36`, automatic gain around `31dBFS`, and volume multiplier around `2.0`. Stacky firmware should probably keep moving closer to that style if the current M5Unified mic path remains too quiet.
+- m5stack-avatar (better face rendering than current custom drawFace): https://github.com/stack-chan/m5stack-avatar
+- kisaragi-mochi/stackchan-mcp (MCP gateway with full tool list — useful protocol reference): https://github.com/kisaragi-mochi/stackchan-mcp
 
 ## Secrets And Local Files
 
@@ -194,3 +235,12 @@ The repo should include examples only, such as `configs/stacky.example.toml` and
 ## GitHub Handoff Intent
 
 Create a private GitHub repo for this project and push the current source, firmware, tests, docs, and this handoff. Keep it private until secrets/history have been reviewed again.
+
+## Recommended Next Session Order
+
+1. **Capture the speaker crash in serial** — start `python3 /tmp/serial_log.py /dev/cu.usbmodem101 60 /tmp/crash.log` BEFORE running handsfree. Trigger one turn. Read the Guru Meditation dump from the log.
+2. **Symbolize with addr2line** — use `xtensa-esp32s3-elf-addr2line -pfiaC -e firmware.elf <PC>` to see exactly where it dies.
+3. **Apply targeted fix** based on actual crash location — could be in mic_task still, could be in `M5.Speaker` setup, could be in chunked audio buffer handling.
+4. **Bump mic magnification** to 4 (don't go higher — 16 was catastrophic).
+5. **Tune "for lavt mic-niveau" filter** to use logprob instead of absolute RMS.
+6. **Final validation**: full loop with Nicolai speaking at normal voice, Stacky responding through StackChan speaker without crash.

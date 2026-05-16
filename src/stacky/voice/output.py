@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import math
+import shutil
 import subprocess
 import time
 import wave
@@ -248,9 +249,22 @@ class StackChanSpeechOutput:
             return wav_path
 
         output_path = wav_path.with_suffix(".stackchan.wav")
+        ffmpeg_exe = shutil.which("ffmpeg")
+        if not ffmpeg_exe:
+            for candidate in (
+                Path(r"C:\Users\nicol\miniconda3\Library\bin\ffmpeg.exe"),
+                Path("/opt/homebrew/bin/ffmpeg"),
+                Path("/usr/local/bin/ffmpeg"),
+                Path("/usr/bin/ffmpeg"),
+            ):
+                if candidate.exists():
+                    ffmpeg_exe = str(candidate)
+                    break
+        if not ffmpeg_exe:
+            raise RuntimeError("ffmpeg not found on PATH or known install locations")
         subprocess.run(
             [
-                "ffmpeg",
+                ffmpeg_exe,
                 "-y",
                 "-loglevel",
                 "error",

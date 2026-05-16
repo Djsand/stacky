@@ -153,16 +153,19 @@ void markAudioPlaybackStarted(size_t pcmBytes) {
   audioPlaybackDeadlineMs = millis() + durationMs + 280;
 }
 
-void pauseMicForSharedI2S(uint32_t settleMs = 60) {
+void pauseMicForSharedI2S(uint32_t settleMs = 150) {
   uint32_t deadline = millis() + 500;
   while (M5.Mic.isRecording() && millis() < deadline) {
     delay(2);
   }
   delay(20);
-  if (M5.Mic.isRunning()) {
-    M5.Mic.end();
-    delay(settleMs);
-  }
+  // 0.3.19: always call Mic.end() (no-op if already stopped). isRunning() check was
+  // racy — when it returned false but task was still in i2s_read, Speaker.begin()'s
+  // i2s_driver_uninstall would nuke the port under the task, crashing in i2s_read.
+  Serial.printf("Mic.end() pre-shared-i2s\n");
+  M5.Mic.end();
+  Serial.printf("Mic.end() returned, settling %ums\n", static_cast<unsigned>(settleMs));
+  delay(settleMs);
 }
 
 bool ensureMicReady() {
@@ -234,6 +237,9 @@ void finishAudioPlaybackIfDone() {
 void prepareSpeakerForAudio(uint32_t sampleRate) {
   audioOutSampleRate = sampleRate > 0 ? sampleRate : 24000;
   pauseMicForAudio();
+  // 0.3.19: extra settle before Speaker.begin's i2s_driver_uninstall to ensure
+  // mic_task has fully exited its i2s_read syscall (up to 100ms timeout in M5Unified)
+  delay(120);
   if (!M5.Speaker.isRunning()) {
     bool speakerReady = M5.Speaker.begin();
     Serial.printf("speaker.begin=%s rate=%u\n", speakerReady ? "true" : "false", audioOutSampleRate);
@@ -702,6 +708,20 @@ void connectStacky() {
 }
 
 void sendStatus() {
+  auto micCfg = M5.Mic.config();
+  Serial.printf(
+    "mic_state running=%d gain=%u sr=%u nf=%u recording=%d ap=%d ah=%d pending=%u session=%d spk=%d\n",
+    M5.Mic.isRunning() ? 1 : 0,
+    static_cast<unsigned>(micCfg.magnification),
+    static_cast<unsigned>(micCfg.sample_rate),
+    static_cast<unsigned>(micCfg.noise_filter_level),
+    M5.Mic.isRecording() ? 1 : 0,
+    audioPlaying ? 1 : 0,
+    audioOutputHold ? 1 : 0,
+    static_cast<unsigned>(pendingAudioRawBytes),
+    audioOutSessionOpen ? 1 : 0,
+    M5.Speaker.isPlaying() ? 1 : 0
+  );
   if (!client.connected()) return;
   String payload = "{\"type\":\"status\",\"payload\":{\"device\":\"stackchan-cores3\",\"expression\":\"";
   payload += expressionName;
@@ -752,8 +772,7 @@ void setup() {
   M5.Speaker.end();
   auto micCfg = M5.Mic.config();
   micCfg.sample_rate = AUDIO_IN_SAMPLE_RATE;
-  micCfg.magnification = 16;
-  micCfg.noise_filter_level = 0;
+  // 0.3.17: revert magnification + noise_filter_level overrides — 0.3.15 values broke mic capture (only noise floor)
   M5.Mic.config(micCfg);
   auto speakerCfg = M5.Speaker.config();
   Serial.printf("Stacky firmware %s\n", STACKY_FIRMWARE_VERSION);
