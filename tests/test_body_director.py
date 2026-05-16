@@ -75,7 +75,7 @@ class BodyDirectorTest(unittest.TestCase):
 
         self.assertTrue(director.reply_started("Det giver mening, jeg gør det."))
 
-        self.assertEqual(fake.gestures, [("nod", 0.10, 180)])
+        self.assertEqual(fake.gestures, [("nod", 0.18, 220)])
 
     def test_reply_started_can_signal_uncertainty(self) -> None:
         fake = FakeDirectorController()
@@ -83,7 +83,7 @@ class BodyDirectorTest(unittest.TestCase):
 
         self.assertTrue(director.reply_started("Beklager, jeg misforstod dig."))
 
-        self.assertEqual(fake.gestures, [("shake", 0.08, 170)])
+        self.assertEqual(fake.gestures, [("shake", 0.14, 210)])
 
     def test_reply_started_can_signal_question(self) -> None:
         fake = FakeDirectorController()
@@ -91,7 +91,7 @@ class BodyDirectorTest(unittest.TestCase):
 
         self.assertTrue(director.reply_started("Skal jeg gøre det sådan?"))
 
-        self.assertEqual(fake.gestures, [("look_up", 0.08, 160)])
+        self.assertEqual(fake.gestures, [("look_up", 0.14, 190)])
 
 
 if __name__ == "__main__":

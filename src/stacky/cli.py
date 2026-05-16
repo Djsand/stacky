@@ -1607,9 +1607,9 @@ async def _handsfree(
             await output.speak(reply.spoken_text or reply.text)
             await output.wait()
             if motion_task is not None:
-                if motion_task.done():
-                    await motion_task
-                else:
+                try:
+                    await asyncio.wait_for(motion_task, timeout=0.5)
+                except asyncio.TimeoutError:
                     motion_task.cancel()
                     try:
                         await motion_task
@@ -1643,7 +1643,7 @@ def _drain_queue(queue: asyncio.Queue[tuple[bytes, int, int]]) -> None:
             return
 
 
-async def _delayed_reply_motion(director: BodyDirector, text: str, *, delay_seconds: float = 0.45) -> None:
+async def _delayed_reply_motion(director: BodyDirector, text: str, *, delay_seconds: float = 0.18) -> None:
     await asyncio.sleep(delay_seconds)
     try:
         await asyncio.to_thread(director.reply_started, text)

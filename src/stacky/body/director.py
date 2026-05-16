@@ -39,7 +39,7 @@ class BodyDirector:
         ok = self.controller.set_expression(name)
         now = time.monotonic()
         if name == "listening":
-            ok = self._motion("center", intensity=0.10, speed=160, cooldown=4.0, now=now) and ok
+            ok = self._motion("center", intensity=0.14, speed=170, cooldown=4.0, now=now) and ok
         return ok
 
     def reply_started(self, text: str) -> bool:
@@ -51,7 +51,7 @@ class BodyDirector:
     def plan_reply_motion(self, text: str) -> MotionPlan | None:
         lowered = text.lower()
         if any(token in lowered for token in ("beklager", "ikke helt", "kan ikke", "misforstod", "ikke sikker")):
-            return MotionPlan("shake", intensity=0.08, speed=170)
+            return MotionPlan("shake", intensity=0.14, speed=210)
         if any(
             token in lowered
             for token in (
@@ -65,11 +65,11 @@ class BodyDirector:
                 "modtaget",
             )
         ):
-            return MotionPlan("nod", intensity=0.10, speed=180)
+            return MotionPlan("nod", intensity=0.18, speed=220)
         if "?" in text:
-            return MotionPlan("look_up", intensity=0.08, speed=160)
+            return MotionPlan("look_up", intensity=0.14, speed=190)
         if len(lowered) > 80 and time.monotonic() - self._last_motion_at > 3.0:
-            return MotionPlan("nod", intensity=0.07, speed=150)
+            return MotionPlan("nod", intensity=0.12, speed=180)
         return None
 
     def gesture(self, name: str, *, intensity: float = 1.0, speed: int = 500) -> bool:
