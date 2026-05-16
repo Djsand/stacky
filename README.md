@@ -86,7 +86,7 @@ The wav2vec2 default is `CoRal-project/roest-v3-wav2vec2-315m`. First startup is
 
 The hands-free VAD is tuned for the official Stacky bridge: default `--vad-threshold 280`, `--start-speech-ms 120`, and `--min-speech-ms 220`. It rejects sparse clicks and high-frequency noise before STT; use `--debug-audio` to see `[audio] ... reason='højfrekvent støj'` / `klik/percussiv støj` lines.
 
-Firmware `official-0.1.10` streams all StackChan mic input channels and accepts PC-controlled mic gain. `handsfree` and `stt-capture` default to `--mic-channel auto`, which chooses the strongest input channel per audio chunk. Use `--mic-channel 0` or `--mic-channel 1` to compare channels, `--mic-channel mix` to average them, and `--mic-channel all` to keep multichannel diagnostic WAVs. Default `--stackchan-mic-gain` is `75`.
+Firmware `official-0.1.10` streams all StackChan mic input channels and accepts PC-controlled mic gain. `handsfree` and `stt-capture` default to `--mic-channel auto`, which chooses the strongest input channel per audio chunk. Use `--mic-channel 0` or `--mic-channel 1` to compare channels, `--mic-channel mix` to average them, and `--mic-channel all` to keep multichannel diagnostic WAVs. Default `--stackchan-mic-gain` is `100`, and default `--mic-preamp` is `2.5`.
 
 Important safety rule while STT is unstable: hands-free voice turns use session context but do not write to the infinite session thread or long-term memory. Trusted text/chat turns persist to `data/stacky/sessions/stacky-infinite-thread.jsonl`; rolled blocks become `stacky-infinite-thread.001.jsonl`, etc.
 

@@ -30,7 +30,7 @@ from .voice.output import (
     create_stackchan_supertonic_output,
     create_supertonic_output,
 )
-from .voice.channels import select_pcm16_channel
+from .voice.channels import apply_pcm16_gain, select_pcm16_channel
 from .voice.supertonic_tts import SupertonicVoice, supertonic_voice_preset
 from .voice.runtime import LocalTextVoiceRuntime
 from .voice.stt import STTResult, create_danish_stt, resolve_stt_model_name, wav_audio_stats, write_pcm_wav
@@ -112,7 +112,8 @@ def main(argv: list[str] | None = None) -> int:
     handsfree.add_argument("--stackchan-target-rms", type=int, default=9000, help="Target active PCM RMS for StackChan speaker loudness.")
     handsfree.add_argument("--stackchan-max-gain", type=float, default=4.0, help="Maximum StackChan speaker PCM gain before clipping.")
     handsfree.add_argument("--stackchan-volume", type=int, default=80, help="Initial StackChan codec volume, 0-100.")
-    handsfree.add_argument("--stackchan-mic-gain", type=int, default=75, help="Initial StackChan codec mic gain, 0-100.")
+    handsfree.add_argument("--stackchan-mic-gain", type=int, default=100, help="Initial StackChan codec mic gain, 0-100.")
+    handsfree.add_argument("--mic-preamp", type=float, default=2.5, help="Digital PCM gain before VAD/STT. Use 1.0 to disable.")
     handsfree.add_argument("--reply-chars", type=int, default=150, help="Default spoken reply character budget for low-latency live chat.")
     handsfree.add_argument("--detail-reply-chars", type=int, default=260, help="Spoken reply character budget when the user asks for details.")
     stt_capture = sub.add_parser("stt-capture", help="Record labelled StackChan mic clips for Danish STT evaluation.")
@@ -141,7 +142,8 @@ def main(argv: list[str] | None = None) -> int:
         help="StackChan input channel to record. Use 0 and 1 in separate captures to compare mic channels.",
     )
     stt_capture.add_argument("--debug-audio", action="store_true", help="Print accepted/rejected signal quality while capturing.")
-    stt_capture.add_argument("--stackchan-mic-gain", type=int, default=75, help="Initial StackChan codec mic gain, 0-100.")
+    stt_capture.add_argument("--stackchan-mic-gain", type=int, default=100, help="Initial StackChan codec mic gain, 0-100.")
+    stt_capture.add_argument("--mic-preamp", type=float, default=2.5, help="Digital PCM gain before VAD/STT. Use 1.0 to disable.")
     stt_bench = sub.add_parser("stt-bench", help="Benchmark local Danish STT models on saved StackChan WAV turns.")
     stt_bench.add_argument("--audio", action="append", default=[], help="WAV file, directory, or glob. Defaults to artifacts/handsfree_turns/*.wav.")
     stt_bench.add_argument("--dataset", default="", help="JSONL/TSV manifest from stt-capture. Provides expected text for scoring.")
@@ -281,6 +283,7 @@ def main(argv: list[str] | None = None) -> int:
                 end_silence_ms=args.end_silence_ms,
                 min_speech_ms=args.min_speech_ms,
                 mic_channel=args.mic_channel,
+                mic_preamp=args.mic_preamp,
                 speaker=args.speaker,
                 tts_engine=args.tts_engine,
                 supertonic_profile=args.supertonic_profile,
@@ -315,6 +318,7 @@ def main(argv: list[str] | None = None) -> int:
                 end_silence_ms=args.end_silence_ms,
                 min_speech_ms=args.min_speech_ms,
                 mic_channel=args.mic_channel,
+                mic_preamp=args.mic_preamp,
                 debug_audio=args.debug_audio,
                 stackchan_mic_gain=args.stackchan_mic_gain,
             )
@@ -566,6 +570,7 @@ async def _stt_capture(
     end_silence_ms: int,
     min_speech_ms: int,
     mic_channel: str,
+    mic_preamp: float,
     debug_audio: bool,
     stackchan_mic_gain: int,
 ) -> int:
@@ -603,6 +608,7 @@ async def _stt_capture(
         except ValueError as exc:
             print(f"[StackChan] bad mic channel: {exc}", flush=True)
             return
+        pcm = apply_pcm16_gain(pcm, gain=mic_preamp)
         if debug_audio:
             rms = pcm16_rms(pcm)
             peak = _pcm16_peak(pcm)
@@ -644,6 +650,7 @@ async def _stt_capture(
     print(f"StackChan connected from {where}", flush=True)
     print(f"Using StackChan mic channel: {mic_channel}", flush=True)
     print(f"Setting StackChan mic gain: {stackchan_mic_gain}", flush=True)
+    print(f"Applying StackChan mic preamp: {mic_preamp:.2f}x", flush=True)
     controller.set_mic_gain(stackchan_mic_gain)
     selected_styles = _resolve_capture_speech_styles(speech_styles)
     capture_items = [
@@ -1118,6 +1125,7 @@ async def _handsfree(
     reply_chars: int,
     detail_reply_chars: int,
     mic_channel: str,
+    mic_preamp: float,
     listen_only: bool,
     debug_audio: bool,
 ) -> int:
@@ -1162,6 +1170,7 @@ async def _handsfree(
         except ValueError as exc:
             print(f"[StackChan] bad mic channel: {exc}", flush=True)
             return
+        pcm = apply_pcm16_gain(pcm, gain=mic_preamp)
         if debug_audio or listen_only:
             rms = pcm16_rms(pcm)
             peak = _pcm16_peak(pcm)
@@ -1203,6 +1212,7 @@ async def _handsfree(
     print(f"StackChan connected from {where}", flush=True)
     print(f"Using StackChan mic channel: {mic_channel}", flush=True)
     print(f"Setting StackChan mic gain: {stackchan_mic_gain}", flush=True)
+    print(f"Applying StackChan mic preamp: {mic_preamp:.2f}x", flush=True)
     controller.set_mic_gain(stackchan_mic_gain)
     body_director = BodyDirector(controller, body_calibration)
     body_director.apply_calibration()

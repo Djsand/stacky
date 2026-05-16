@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from stacky.voice.channels import select_pcm16_channel
+from stacky.voice.channels import apply_pcm16_gain, select_pcm16_channel
 
 
 def pcm_sample(value: int) -> bytes:
@@ -41,6 +41,13 @@ class AudioChannelTest(unittest.TestCase):
 
         self.assertEqual(channels, 2)
         self.assertEqual(selected, pcm)
+
+    def test_applies_pcm16_gain_with_clipping(self) -> None:
+        pcm = pcm_sample(1000) + pcm_sample(-20000) + pcm_sample(20000)
+
+        amplified = apply_pcm16_gain(pcm, gain=2.0)
+
+        self.assertEqual(amplified, pcm_sample(2000) + pcm_sample(-32768) + pcm_sample(32767))
 
 
 if __name__ == "__main__":

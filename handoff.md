@@ -29,7 +29,7 @@ Latest verification:
 - `git diff --check -- . ':!patches/official-stackchan/0001-stacky-bridge.patch'` -> clean apart from CRLF warnings. The patch file itself contains normal unified-diff context blank lines that `git diff --check` reports as trailing whitespace when treating the patch as a text file.
 - ESP-IDF build passed via `S:\` / `I:\`.
 - Flash to `COM3` passed for `official-0.1.10`.
-- `python -m stacky body-server --duration 4` connected and reported `firmware=official-0.1.10`, `micGain=75.0`, `micChannels=2`, and `audio.in raw 24000 Hz 2 ch 1920 bytes`.
+- `python -m stacky body-server --duration 4` connected and reported `firmware=official-0.1.10`, `micGain=75.0`, `micChannels=2`, and `audio.in raw 24000 Hz 2 ch 1920 bytes`. The live CLI now overrides codec mic gain to `100` after connect.
 
 Runtime state:
 
@@ -42,7 +42,7 @@ Next engineering priority:
 
 1. Test the new live STT path on real StackChan hardware:
    - `python -m stacky handsfree --tts-engine supertonic --speaker stackchan`
-   - Expected startup should print `Using StackChan mic channel: auto` and `Setting StackChan mic gain: 75`.
+   - Expected startup should print `Using StackChan mic channel: auto`, `Setting StackChan mic gain: 100`, and `Applying StackChan mic preamp: 2.50x`.
    - speak normal Danish first, then fast, then slightly mumbled.
 2. If live behavior is still wrong, run listen-only with channel probes before changing model code:
    - `python -m stacky handsfree --listen-only --debug-audio --mic-channel auto`
@@ -62,7 +62,8 @@ Next engineering priority:
 ## Latest Mic/STT Hotfix
 
 - Firmware patch regenerated for `official-0.1.10`.
-- Firmware default input gain is now `75`; Python sends `audio.input_gain` at connect time.
+- Python now sends `audio.input_gain` at connect time; default CLI gain is `100`.
+- `handsfree` and `stt-capture` apply default digital `--mic-preamp 2.5` before VAD/STT; use `--mic-preamp 1.0` to disable.
 - `handsfree` and `stt-capture` default to `--mic-channel auto`; `auto`/`best` selects the loudest channel per PCM chunk when firmware sends stereo mic audio.
 - Signal quality now accepts shorter soft speech runs (`180ms`) so quiet real speech is less likely to be thrown away before STT.
 - Observed live failures now have conservative transcript corrections:

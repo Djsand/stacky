@@ -20,6 +20,20 @@ def select_pcm16_channel(pcm: bytes, *, channels: int, selection: str) -> tuple[
     return _extract_pcm16_channel(pcm, channels=channels, channel_index=channel_index), 1
 
 
+def apply_pcm16_gain(pcm: bytes, *, gain: float) -> bytes:
+    if gain <= 1.0 or len(pcm) < 2:
+        return pcm
+    out = bytearray()
+    for index in range(0, len(pcm) - 1, 2):
+        sample = int.from_bytes(pcm[index : index + 2], "little", signed=True)
+        amplified = int(round(sample * gain))
+        amplified = max(-32768, min(32767, amplified))
+        out.extend(amplified.to_bytes(2, "little", signed=True))
+    if len(pcm) % 2:
+        out.extend(pcm[-1:])
+    return bytes(out)
+
+
 def _extract_pcm16_channel(pcm: bytes, *, channels: int, channel_index: int) -> bytes:
     frame_bytes = channels * 2
     offset = channel_index * 2
