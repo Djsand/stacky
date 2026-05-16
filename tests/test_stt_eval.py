@@ -49,6 +49,7 @@ class STTEvalTest(unittest.TestCase):
                 rms=0,
                 peak=0,
                 quality={"speechLike": True},
+                speech_style="mumble",
             )
 
             items = load_dataset_manifest(manifest)
@@ -57,6 +58,7 @@ class STTEvalTest(unittest.TestCase):
         self.assertEqual(items[0].audio_path.name, "clip.wav")
         self.assertEqual(items[0].expected_text, "hej stacky")
         self.assertEqual(items[0].item_id, "clip-1")
+        self.assertEqual(items[0].speech_style, "mumble")
 
     def test_resolve_audio_inputs_sorts_recent_first_and_limits(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

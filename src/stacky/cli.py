@@ -110,6 +110,13 @@ def main(argv: list[str] | None = None) -> int:
     stt_capture.add_argument("--phrase", action="append", default=[], help="Expected Danish phrase to record. Can be repeated.")
     stt_capture.add_argument("--phrases-file", default="", help="UTF-8 text file with one expected phrase per line.")
     stt_capture.add_argument("--noise-count", type=int, default=0, help="Also capture N non-speech/noise clips with empty expected text.")
+    stt_capture.add_argument(
+        "--speech-style",
+        action="append",
+        choices=("normal", "fast", "mumble", "quiet"),
+        default=[],
+        help="Capture style. Repeat it to build robustness, e.g. normal + fast + mumble.",
+    )
     stt_capture.add_argument("--limit", type=int, default=0, help="Limit phrase count. 0 records all selected/default phrases.")
     stt_capture.add_argument("--output-dir", default=str(ROOT / "artifacts" / "stt_dataset" / "stackchan"), help="Directory for captured WAV clips.")
     stt_capture.add_argument("--manifest", default="", help="JSONL manifest path. Defaults to <output-dir>/manifest.jsonl.")
@@ -121,7 +128,7 @@ def main(argv: list[str] | None = None) -> int:
     stt_bench = sub.add_parser("stt-bench", help="Benchmark local Danish STT models on saved StackChan WAV turns.")
     stt_bench.add_argument("--audio", action="append", default=[], help="WAV file, directory, or glob. Defaults to artifacts/handsfree_turns/*.wav.")
     stt_bench.add_argument("--dataset", default="", help="JSONL/TSV manifest from stt-capture. Provides expected text for scoring.")
-    stt_bench.add_argument("--engine", action="append", default=[], help="Model spec: roest, ftspeech, qwen3, saga, milo, or engine:model.")
+    stt_bench.add_argument("--engine", action="append", default=[], help="Model spec: roest, roest-v2, roest-v2-1b, roest-v2-2b, qwen3, saga, milo, or engine:model.")
     stt_bench.add_argument("--limit", type=int, default=8, help="Maximum number of WAV files to test.")
     stt_bench.add_argument("--include-heavy", action="store_true", help="Also test heavier Qwen3-ASR candidates.")
     stt_bench.add_argument("--refs", default="", help="Optional tab-separated references file: wav_filename<TAB>expected text.")
@@ -270,6 +277,7 @@ def main(argv: list[str] | None = None) -> int:
                 phrase_args=args.phrase,
                 phrases_file=args.phrases_file,
                 noise_count=args.noise_count,
+                speech_styles=args.speech_style,
                 limit=args.limit,
                 output_dir=args.output_dir,
                 manifest=args.manifest,
@@ -304,12 +312,26 @@ def _run_async(coro) -> int:
         return 0
 
 
-_LOW_LATENCY_STT_SPECS = (("wav2vec2", "roest"), ("wav2vec2", "ftspeech"))
-_HEAVY_STT_SPECS = (("qwen3", "qwen3-0.6b"), ("qwen3", "saga"), ("qwen3", "milo"))
+_LOW_LATENCY_STT_SPECS = (("wav2vec2", "roest-v3"), ("wav2vec2", "roest-v2"))
+_HEAVY_STT_SPECS = (
+    ("wav2vec2", "roest-v2-1b"),
+    ("wav2vec2", "roest-v2-2b"),
+    ("qwen3", "qwen3-0.6b"),
+    ("qwen3", "saga"),
+    ("qwen3", "milo"),
+)
 _STT_SPEC_ALIASES = {
     "roest": ("wav2vec2", "roest"),
     "coral": ("wav2vec2", "roest"),
     "coral-v3": ("wav2vec2", "roest"),
+    "roest-v3": ("wav2vec2", "roest-v3"),
+    "roest-v3-315m": ("wav2vec2", "roest-v3-315m"),
+    "coral-v2": ("wav2vec2", "roest-v2"),
+    "roest-v2": ("wav2vec2", "roest-v2"),
+    "roest-v2-315m": ("wav2vec2", "roest-v2-315m"),
+    "roest-v2-1b": ("wav2vec2", "roest-v2-1b"),
+    "roest-v2-2b": ("wav2vec2", "roest-v2-2b"),
+    "roest-accurate": ("wav2vec2", "roest-accurate"),
     "ftspeech": ("wav2vec2", "ftspeech"),
     "qwen3": ("qwen3", "qwen3-0.6b"),
     "qwen3-0.6b": ("qwen3", "qwen3-0.6b"),
@@ -420,6 +442,7 @@ async def _stt_capture(
     phrase_args: list[str],
     phrases_file: str,
     noise_count: int,
+    speech_styles: list[str],
     limit: int,
     output_dir: str,
     manifest: str,
@@ -497,10 +520,15 @@ async def _stt_capture(
     address = controller.client_address
     where = f"{address[0]}:{address[1]}" if address else "StackChan"
     print(f"StackChan connected from {where}", flush=True)
-    capture_items = [(phrase, phrase, False) for phrase in phrases]
+    selected_styles = _resolve_capture_speech_styles(speech_styles)
+    capture_items = [
+        (_capture_prompt_for_style(phrase, style), phrase, False, style)
+        for style in selected_styles
+        for phrase in phrases
+    ]
     for index in range(max(0, noise_count)):
         label = f"noise-{index + 1:02d}"
-        capture_items.append((label, "", True))
+        capture_items.append((label, "", True, "noise"))
     print(f"Capturing {len(capture_items)} clip(s). Manifest: {manifest_path}", flush=True)
     controller.set_expression("listening")
 
@@ -511,8 +539,8 @@ async def _stt_capture(
         end_silence_ms=end_silence_ms,
     )
     try:
-        for index, (prompt_text, expected_text, allow_rejected) in enumerate(capture_items, start=1):
-            slug_source = prompt_text if expected_text else f"{prompt_text}-non-speech"
+        for index, (prompt_text, expected_text, allow_rejected, speech_style) in enumerate(capture_items, start=1):
+            slug_source = f"{speech_style}-{expected_text}" if expected_text else f"{prompt_text}-non-speech"
             item_id = f"{index:03d}-{slugify(slug_source, max_length=52)}"
             wav_path = output_path / f"{item_id}.wav"
             print("", flush=True)
@@ -549,6 +577,7 @@ async def _stt_capture(
                     rms=quality.median_rms,
                     peak=quality.peak,
                     quality=_quality_record(quality),
+                    speech_style=speech_style,
                 )
                 print(f"[capture] saved {wav_path.name} dur={quality.duration_seconds:.2f}s peak={quality.peak}", flush=True)
                 break
@@ -562,6 +591,28 @@ async def _stt_capture(
         accepting_audio = False
         controller.set_expression("neutral")
         controller.stop()
+
+
+def _resolve_capture_speech_styles(speech_styles: list[str]) -> list[str]:
+    styles = speech_styles or ["normal"]
+    result: list[str] = []
+    seen: set[str] = set()
+    for style in styles:
+        value = style.strip().lower()
+        if value and value not in seen:
+            result.append(value)
+            seen.add(value)
+    return result or ["normal"]
+
+
+def _capture_prompt_for_style(phrase: str, style: str) -> str:
+    if style == "fast":
+        return f"Sig hurtigt, men naturligt: {phrase}"
+    if style == "mumble":
+        return f"Muml lidt, men sig stadig sætningen: {phrase}"
+    if style == "quiet":
+        return f"Sig lavt, som i normal hverdagstale: {phrase}"
+    return phrase
 
 
 def _resolve_stt_bench_specs(engine_specs: list[str], *, include_heavy: bool) -> list[tuple[str, str]]:
@@ -647,6 +698,8 @@ def _append_stt_report(
         "rms": result.audio.rms,
         "peak": result.audio.peak,
     }
+    if item.speech_style:
+        record["speechStyle"] = item.speech_style
     with report_path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n")
 

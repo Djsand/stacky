@@ -66,6 +66,8 @@ class STTTest(unittest.TestCase):
 
     def test_resolve_stt_model_aliases(self) -> None:
         self.assertEqual(resolve_stt_model_name("wav2vec2", "roest"), "CoRal-project/roest-v3-wav2vec2-315m")
+        self.assertEqual(resolve_stt_model_name("wav2vec2", "roest-v2"), "CoRal-project/roest-v2-wav2vec2-315m")
+        self.assertEqual(resolve_stt_model_name("wav2vec2", "roest-v2-2b"), "CoRal-project/roest-v2-wav2vec2-2B")
         self.assertEqual(resolve_stt_model_name("wav2vec2", "ftspeech"), "saattrupdan/wav2vec2-xls-r-300m-ftspeech")
         self.assertEqual(resolve_stt_model_name("qwen3", "saga"), "capacit-ai/saga")
 

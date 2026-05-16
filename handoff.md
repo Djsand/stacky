@@ -113,8 +113,10 @@ Validated 2026-05-16:
 - STT is still the weakest component. If raw speech-like turns pass the gate but transcripts are wrong, replace or add a better Danish STT backend rather than loosening filters.
 - Added `python -m stacky stt-bench` to benchmark saved StackChan WAV turns without running the live body loop.
 - Low-latency STT benchmark on StackChan turns:
-  - `CoRal-project/roest-v3-wav2vec2-315m`: usable latency after load, about `rtf=0.16-0.18` on local CPU, but still mishears noisy/quiet turns.
-  - `saattrupdan/wav2vec2-xls-r-300m-ftspeech`: low latency, but not usable on current StackChan mic captures; it returned `r` on tested clips.
+  - Default candidates are now Danish-specific Røst models: `CoRal-project/roest-v3-wav2vec2-315m` and `CoRal-project/roest-v2-wav2vec2-315m`.
+  - Heavy candidates add `CoRal-project/roest-v2-wav2vec2-1B` and `CoRal-project/roest-v2-wav2vec2-2B` before Qwen/Saga/Milo experiments.
+  - `saattrupdan/wav2vec2-xls-r-300m-ftspeech` remains available by explicit `--engine ftspeech`, but is not a default after poor StackChan mic results.
+- `stt-capture` now supports repeated speech styles: `--speech-style normal --speech-style fast --speech-style mumble --speech-style quiet`. Use this to build a Nicolai/StackChan dataset for fast or slightly mumbled Danish.
   - `Qwen/Qwen3-ASR-0.6B` via `qwen-asr`: too slow and wrong in the quick local CPU test (`1.58s` audio -> `3.84s` inference, transcript `Se dig ved leon.`). `qwen-asr` also conflicts with Roest/Chatterbox by pinning `transformers==4.57.6`, so it was removed from the main venv and `transformers==5.2.0` restored.
 - Handsfree latency tuning:
   - Default handsfree Supertonic profile is now `quick`.

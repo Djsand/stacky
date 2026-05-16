@@ -12,6 +12,9 @@ DEFAULT_DANISH_STT_PHRASES: tuple[str, ...] = (
     "Hej Stacky.",
     "Hvad laver du lige nu?",
     "Kan du høre mig tydeligt?",
+    "Jeg mumler lidt, men du skal stadig forstå mig.",
+    "Jeg snakker hurtigt nu, fordi latency skal være lav.",
+    "Nicolai siger at Stacky skal lytte ordentligt.",
     "Skru lidt op for lyden.",
     "Kig lidt til højre.",
     "Gem den her position som center.",
@@ -33,6 +36,7 @@ class STTDatasetItem:
     audio_path: Path
     expected_text: str | None = None
     item_id: str = ""
+    speech_style: str = ""
 
 
 def load_capture_phrases(
@@ -110,7 +114,7 @@ def apply_references(items: list[STTDatasetItem], refs: dict[str, str]) -> list[
     result: list[STTDatasetItem] = []
     for item in items:
         expected = refs.get(item.audio_path.name.lower(), item.expected_text)
-        result.append(STTDatasetItem(item.audio_path, expected, item.item_id))
+        result.append(STTDatasetItem(item.audio_path, expected, item.item_id, item.speech_style))
     return result
 
 
@@ -126,6 +130,7 @@ def write_dataset_record(
     rms: int,
     peak: int,
     quality: dict[str, object],
+    speech_style: str = "",
 ) -> None:
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
     try:
@@ -143,6 +148,8 @@ def write_dataset_record(
         "peak": peak,
         "quality": quality,
     }
+    if speech_style:
+        record["speechStyle"] = speech_style
     with manifest_path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n")
 
@@ -171,6 +178,7 @@ def _load_jsonl_manifest(path: Path) -> list[STTDatasetItem]:
                 audio_path=audio_path,
                 expected_text=None if expected is None else str(expected).strip(),
                 item_id=str(record.get("id") or audio_path.stem),
+                speech_style=str(record.get("speechStyle") or ""),
             )
         )
     return items

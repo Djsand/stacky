@@ -4,6 +4,7 @@ import unittest
 
 from stacky.cli import (
     _accept_stt_result,
+    _capture_prompt_for_style,
     _clean_transcript,
     _is_likely_hallucination,
     _parse_calibration_command,
@@ -11,6 +12,7 @@ from stacky.cli import (
     _parse_motion_command,
     _parse_stt_bench_spec,
     _parse_volume_command,
+    _resolve_capture_speech_styles,
     _resolve_stt_bench_specs,
     _transcript_key,
     _word_error_rate,
@@ -165,13 +167,22 @@ class HandsfreeHelpersTest(unittest.TestCase):
 
     def test_parse_stt_bench_aliases(self) -> None:
         self.assertEqual(_parse_stt_bench_spec("roest"), ("wav2vec2", "roest"))
+        self.assertEqual(_parse_stt_bench_spec("roest-v2-2b"), ("wav2vec2", "roest-v2-2b"))
         self.assertEqual(_parse_stt_bench_spec("qwen3"), ("qwen3", "qwen3-0.6b"))
         self.assertEqual(_parse_stt_bench_spec("wav2vec2:custom/model"), ("wav2vec2", "custom/model"))
 
     def test_stt_bench_specs_default_to_low_latency_models(self) -> None:
         specs = _resolve_stt_bench_specs([], include_heavy=False)
 
-        self.assertEqual(specs, [("wav2vec2", "roest"), ("wav2vec2", "ftspeech")])
+        self.assertEqual(specs, [("wav2vec2", "roest-v3"), ("wav2vec2", "roest-v2")])
+
+    def test_capture_speech_styles_default_and_dedupe(self) -> None:
+        self.assertEqual(_resolve_capture_speech_styles([]), ["normal"])
+        self.assertEqual(_resolve_capture_speech_styles(["fast", "fast", "mumble"]), ["fast", "mumble"])
+
+    def test_capture_prompt_for_fast_and_mumbled_speech(self) -> None:
+        self.assertIn("hurtigt", _capture_prompt_for_style("Hej Stacky.", "fast"))
+        self.assertIn("Muml", _capture_prompt_for_style("Hej Stacky.", "mumble"))
 
     def test_word_error_rate(self) -> None:
         self.assertEqual(_word_error_rate("hej med dig", "hej med dig"), 0.0)

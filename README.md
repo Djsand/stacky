@@ -95,6 +95,7 @@ Use StackChan itself to capture labelled Danish clips before changing STT models
 ```powershell
 .\.venv\Scripts\python.exe -m stacky stt-capture --limit 12 --debug-audio
 .\.venv\Scripts\python.exe -m stacky stt-capture --phrases-file .\artifacts\stt_phrases.txt --noise-count 3 --debug-audio
+.\.venv\Scripts\python.exe -m stacky stt-capture --limit 16 --speech-style normal --speech-style fast --speech-style mumble --noise-count 5 --debug-audio
 ```
 
 This writes WAV clips plus `artifacts/stt_dataset/stackchan/manifest.jsonl`. Speech clips have the expected Danish sentence; noise clips have an empty expected text so false positives score as errors.
@@ -103,10 +104,13 @@ Run local candidates against the captured dataset:
 
 ```powershell
 .\.venv\Scripts\python.exe -m stacky stt-bench --dataset .\artifacts\stt_dataset\stackchan\manifest.jsonl --report .\artifacts\stt_dataset\stt-report.jsonl
-.\.venv\Scripts\python.exe -m stacky stt-bench --dataset .\artifacts\stt_dataset\stackchan\manifest.jsonl --engine roest --engine ftspeech
+.\.venv\Scripts\python.exe -m stacky stt-bench --dataset .\artifacts\stt_dataset\stackchan\manifest.jsonl --engine roest-v3 --engine roest-v2
+.\.venv\Scripts\python.exe -m stacky stt-bench --dataset .\artifacts\stt_dataset\stackchan\manifest.jsonl --engine roest-v3 --engine roest-v2 --include-heavy
 ```
 
 Benchmark output includes load time, inference time, realtime factor, WER, CER, and a JSONL report when `--report` is set.
+
+Stacky's STT benchmark defaults are Danish-specific: Røst v3 315M and Røst v2 315M. Heavy mode adds Røst v2 1B/2B before the non-Røst experimental candidates. Use the `fast`, `mumble`, and `quiet` capture styles to test whether a model handles everyday unclear Danish rather than only clean read-aloud clips.
 
 To run Stacky's brain through Gemini instead of the local OpenAI-compatible endpoint for latency testing:
 
