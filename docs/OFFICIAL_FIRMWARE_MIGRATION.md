@@ -16,19 +16,30 @@ The goal is not to import any old identity or memory. Stacky remains a fresh loc
 - Official firmware builds on this PC after applying the official XiaoZhi patch manually and building through short drive aliases.
 - Official firmware was flashed to CoreS3 on `COM3`.
 - Boot was serial-logged for 25 seconds without a reboot. Log: `artifacts/official_firmware_boot.log`.
-- Stacky bridge v0.1 has been added as a local patch on top of official firmware.
+- Stacky firmware variant v0.1.1 has been added as a local patch on top of official firmware.
 - Repro patch: `patches/official-stackchan/0001-stacky-bridge.patch`
-- Latest flashed body version: official StackChan `1.4.1` plus Stacky bridge `official-0.1.0`.
+- Latest flashed body version: official StackChan `1.4.1` plus `AppStacky` / bridge `official-0.1.1`.
 
-## Stacky Bridge V0.1
+## Stacky App Variant V0.1.1
 
-The first official-firmware customization is intentionally small. It keeps the existing Python body-controller protocol so the PC runtime does not need a rewrite before we validate hardware stability.
+The first official-firmware customization is now a real app variant. Stacky boots directly into a custom Mooncake app instead of launching the official launcher/setup path. It keeps the existing Python body-controller protocol so the PC runtime does not need a rewrite before we validate hardware stability.
 
 Changed official firmware files:
 
 - `firmware/main/main.cpp`
+- `firmware/main/apps/apps.h`
+- `firmware/main/apps/app_stacky/app_stacky.h`
+- `firmware/main/apps/app_stacky/app_stacky.cpp`
 - `firmware/main/hal/stacky_bridge.h`
 - `firmware/main/hal/stacky_bridge.cpp`
+
+Runtime shape:
+
+- `main.cpp` installs and opens only `AppStacky`.
+- `AppStacky::onOpen()` creates the Stacky face and starts `StackyBridge`.
+- `AppStacky::onClose()` stops `StackyBridge` and resets the avatar.
+- `StackyBridge` has explicit `start()` / `stop()` lifecycle and updates the Stacky face for listening/thinking/speaking states.
+- The official launcher/setup/app-center flow is not the Stacky boot path.
 
 The bridge reads local Wi-Fi/host config from `stacky_local_config.h` when present, otherwise from the existing gitignored `firmware/stacky_cores3/include/wifi_secrets.h` compatibility header.
 
@@ -50,6 +61,12 @@ Validated locally:
 
 .\.venv\Scripts\python.exe -m stacky speaker-test --body-timeout 45 --tts-engine supertonic --text "Hej Nicolai. Det her er official Stacky firmware. Jeg taler gennem StackChan nu."
 # command returned success
+
+.\.venv\Scripts\python.exe scripts\mic_listener.py --output artifacts\official_app_stacky_mic.wav --seconds 10
+# connected to firmware=official-0.1.1 and captured mic frames
+
+.\.venv\Scripts\python.exe -m stacky speaker-tone --body-timeout 35 --frequency 880 --duration-ms 250
+# command returned success after AppStacky refactor
 ```
 
 Note: opening `COM3` with `scripts/serial_log.py` resets CoreS3. A serial log that begins with `rst:0x15 (USB_UART_CHIP_RESET)` after playback is not evidence of an audio crash.
@@ -212,10 +229,10 @@ Fast fallback path:
 
 ## Immediate Next Steps
 
-1. Get Nicolai's subjective confirmation of the latest official bridge speaker output.
-2. If speaker output is audible and stable, run `handsfree --listen-only --debug-audio --body-timeout 45` against official firmware and test Danish speech capture.
-3. If listen-only is acceptable, run full `handsfree --tts-engine supertonic --speaker stackchan` against official firmware.
-4. If playback is choppy or silent, improve `stacky_bridge.cpp` playback buffering before touching STT/TTS.
+1. Confirm on-device screen boots straight into Stacky face, not launcher/setup.
+2. Run `handsfree --listen-only --debug-audio --body-timeout 45` against `AppStacky`.
+3. If listen-only is acceptable, run full `handsfree --tts-engine supertonic --speaker stackchan` against `AppStacky`.
+4. If playback is choppy or silent, improve `StackyBridge` buffering inside the app-owned service.
 5. Only after the body transport is stable, return to Danish STT/TTS quality tuning.
 
 ## Decision Rule

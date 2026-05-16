@@ -1,19 +1,27 @@
 # Stacky Handoff
 
-## Latest Official Bridge Update
+## Latest Official Stacky Firmware Update
 
-Official firmware migration is now active. A minimal Stacky bridge has been added on top of M5Stack's official ESP-IDF StackChan firmware, built, flashed to `COM3`, and verified for TCP connect, mic streaming, firmware tone playback command, and one Supertonic TTS stream command.
+Official firmware migration is now a real Stacky firmware variant, not a loose bridge started from `app_main`. `AppStacky` has been added as a first-class Mooncake app, the firmware boots directly into it, and the Stacky body service is owned by that app lifecycle.
 
 Active body base:
 
 - Branch: `official-firmware-base`
 - Official submodule: `vendor/m5stack-stackchan`
 - Repro patch: `patches/official-stackchan/0001-stacky-bridge.patch`
-- Flashed firmware: official StackChan `1.4.1` with Stacky bridge `official-0.1.0`
+- Flashed firmware: official StackChan `1.4.1` with `AppStacky` and bridge `official-0.1.1`
 - PC body server: `192.168.50.208:8765`
 - StackChan IP in tests: `192.168.50.2`
 
-Bridge support added:
+Firmware variant changes:
+
+- New app: `firmware/main/apps/app_stacky/app_stacky.h`
+- New app: `firmware/main/apps/app_stacky/app_stacky.cpp`
+- `firmware/main/main.cpp` installs and opens only `AppStacky` at boot.
+- `StackyBridge` now has `start()` / `stop()` lifecycle and is started from `AppStacky::onOpen()`.
+- Launcher/setup/app-center are no longer the boot path for Stacky.
+
+Bridge support:
 
 - `audio.in` raw PCM16 mono at 24 kHz from StackChan to PC
 - `audio.start` / binary `audio.raw` / `audio.end` playback from PC to StackChan
@@ -23,22 +31,20 @@ Validated 2026-05-16:
 
 - ESP-IDF build passed with short aliases `S:` and `I:`
 - Flash to `COM3` passed
-- `scripts\mic_listener.py --output artifacts\official_bridge_mic.wav --seconds 25` captured `24.94s @ 24000 Hz`, `1247` frames, no clipping
-- `python -m stacky speaker-tone --body-timeout 45 --frequency 880 --duration-ms 350` returned success
-- `python -m stacky speaker-test --body-timeout 45 --tts-engine supertonic --text "..."`
-  returned success
+- `scripts\mic_listener.py --output artifacts\official_app_stacky_mic.wav --seconds 10` connected to `official-0.1.1` and captured mic frames
+- `python -m stacky speaker-tone --body-timeout 35 --frequency 880 --duration-ms 250` returned success
 
-Next checkpoint: Nicolai needs to confirm what was actually audible from StackChan. If speaker output is acceptable, test `handsfree --listen-only` on official bridge. If it is choppy/silent, debug official bridge playback buffering before returning to STT/TTS quality.
+Next checkpoint: Nicolai should confirm the screen now boots straight into Stacky face instead of launcher/setup. Then run full handsfree against this app variant.
 
 Important: opening `COM3` with `scripts/serial_log.py` resets the CoreS3 via USB-serial. A boot log starting with `rst:0x15 (USB_UART_CHIP_RESET)` after playback is not proof of an audio crash.
 
 ## Stop Point
 
-Stop here after official bridge v0.1. The old custom Arduino speaker-crash investigation is no longer the active path unless the same failure reproduces on official firmware.
+Stop here after official Stacky app variant v0.1.1. The old custom Arduino speaker-crash investigation is no longer the active path unless the same failure reproduces on official firmware.
 
 ## Current Direction
 
-Stop fighting the custom Arduino audio stack for now. The active branch is `official-firmware-base`, which imports the official M5Stack StackChan firmware as a submodule at `vendor/m5stack-stackchan`. The current goal is to harden the small local Stacky bridge on top of official firmware.
+Stop fighting the custom Arduino audio stack. The active branch is `official-firmware-base`, which imports the official M5Stack StackChan firmware as a submodule at `vendor/m5stack-stackchan`. The current goal is to harden `AppStacky` as the permanent firmware shell.
 
 Update: ESP-IDF v5.5.4 is now installed at `C:\Users\nicol\esp\esp-idf-v5.5.4`. Official firmware builds after applying the official XiaoZhi patch manually and building through short drive aliases. Official firmware was flashed to CoreS3 on `COM3`, and a 25-second serial boot log showed stable boot without reboot.
 
@@ -60,7 +66,7 @@ Do not import or reuse Moss identity, Moss memories, Moss sessions, or the Moss 
 - StackChan IP seen during tests: `192.168.50.2`
 - PC IP used during tests: `192.168.50.208`
 - USB serial seen during tests: `/dev/cu.usbmodem1101` or `cu.usbmodem101` on Mac, `COM3` on Windows
-- Latest flashed firmware version: official StackChan `1.4.1` with Stacky bridge `official-0.1.0`
+- Latest flashed firmware version: official StackChan `1.4.1` with `AppStacky` / Stacky bridge `official-0.1.1`
 
 The old custom Arduino firmware remains as fallback/reference. The active hardware path is official ESP-IDF firmware; old speaker-crash assumptions should be re-tested before using them.
 

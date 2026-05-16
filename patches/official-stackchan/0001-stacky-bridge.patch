@@ -1,9 +1,135 @@
+diff --git a/firmware/main/apps/app_stacky/app_stacky.cpp b/firmware/main/apps/app_stacky/app_stacky.cpp
+new file mode 100644
+index 0000000..b4de981
+--- /dev/null
++++ b/firmware/main/apps/app_stacky/app_stacky.cpp
+@@ -0,0 +1,79 @@
++/*
++ * SPDX-FileCopyrightText: 2026 M5Stack Technology CO LTD
++ *
++ * SPDX-License-Identifier: MIT
++ */
++#include "app_stacky.h"
++
++#include <assets/assets.h>
++#include <hal/hal.h>
++#include <hal/stacky_bridge.h>
++#include <mooncake_log.h>
++#include <smooth_lvgl.hpp>
++#include <stackchan/avatar/skins/default/default.h>
++#include <stackchan/stackchan.h>
++
++using namespace mooncake;
++using namespace smooth_ui_toolkit::lvgl_cpp;
++using namespace stackchan;
++
++AppStacky::AppStacky()
++{
++    setAppInfo().name = "STACKY";
++    static auto icon  = assets::get_image("icon_ai_agent.bin");
++    setAppInfo().icon = (void*)&icon;
++    static uint32_t theme_color = 0x33CC99;
++    setAppInfo().userData       = (void*)&theme_color;
++}
++
++void AppStacky::onCreate()
++{
++    mclog::tagInfo(getAppInfo().name, "on create");
++}
++
++void AppStacky::onOpen()
++{
++    mclog::tagInfo(getAppInfo().name, "on open");
++    _is_open = true;
++    create_avatar();
++    GetStackyBridge().start();
++}
++
++void AppStacky::onRunning()
++{
++    if (!_is_open) {
++        return;
++    }
++
++    LvglLockGuard lock;
++    GetStackChan().update();
++}
++
++void AppStacky::onClose()
++{
++    mclog::tagInfo(getAppInfo().name, "on close");
++    _is_open = false;
++    GetStackyBridge().stop();
++
++    LvglLockGuard lock;
++    GetStackChan().clearModifiers();
++    GetStackChan().resetAvatar();
++}
++
++void AppStacky::create_avatar()
++{
++    LvglLockGuard lock;
++
++    auto& stacky_body = GetStackChan();
++    stacky_body.clearModifiers();
++    stacky_body.resetAvatar();
++
++    auto avatar = std::make_unique<avatar::DefaultAvatar>();
++    avatar->init(lv_screen_active(), &lv_font_montserrat_20);
++    stacky_body.attachAvatar(std::move(avatar));
++    stacky_body.avatar().setEmotion(avatar::Emotion::Neutral);
++    stacky_body.avatar().setSpeech("Stacky");
++    stacky_body.addModifier(std::make_unique<BlinkModifier>());
++    stacky_body.addModifier(std::make_unique<BreathModifier>(0, 8, 7600, 700));
++    stacky_body.addModifier(std::make_unique<IdleExpressionModifier>(3500, 9000));
++}
+diff --git a/firmware/main/apps/app_stacky/app_stacky.h b/firmware/main/apps/app_stacky/app_stacky.h
+new file mode 100644
+index 0000000..de0c57e
+--- /dev/null
++++ b/firmware/main/apps/app_stacky/app_stacky.h
+@@ -0,0 +1,23 @@
++/*
++ * SPDX-FileCopyrightText: 2026 M5Stack Technology CO LTD
++ *
++ * SPDX-License-Identifier: MIT
++ */
++#pragma once
++
++#include <mooncake.h>
++
++class AppStacky : public mooncake::AppAbility {
++public:
++    AppStacky();
++
++    void onCreate() override;
++    void onOpen() override;
++    void onRunning() override;
++    void onClose() override;
++
++private:
++    bool _is_open = false;
++
++    void create_avatar();
++};
+diff --git a/firmware/main/apps/apps.h b/firmware/main/apps/apps.h
+index 77cc9b7..06e2ab4 100644
+--- a/firmware/main/apps/apps.h
++++ b/firmware/main/apps/apps.h
+@@ -5,6 +5,7 @@
+  */
+ #pragma once
+ #include "app_launcher/app_launcher.h"
++#include "app_stacky/app_stacky.h"
+ #include "app_ai_agent/app_ai_agent.h"
+ #include "app_avatar/app_avatar.h"
+ #include "app_setup/app_setup.h"
 diff --git a/firmware/main/hal/stacky_bridge.cpp b/firmware/main/hal/stacky_bridge.cpp
 new file mode 100644
-index 0000000..6a8f164
+index 0000000..95597a1
 --- /dev/null
 +++ b/firmware/main/hal/stacky_bridge.cpp
-@@ -0,0 +1,570 @@
+@@ -0,0 +1,648 @@
 +#include "stacky_bridge.h"
 +
 +#include "hal.h"
@@ -23,6 +149,9 @@ index 0000000..6a8f164
 +#include <lwip/inet.h>
 +#include <lwip/netdb.h>
 +#include <lwip/sockets.h>
++#include <smooth_lvgl.hpp>
++#include <stackchan/modifiers/modifiers.h>
++#include <stackchan/stackchan.h>
 +
 +#include <algorithm>
 +#include <atomic>
@@ -65,10 +194,11 @@ index 0000000..6a8f164
 +namespace {
 +
 +constexpr const char* TAG = "StackyBridge";
-+constexpr const char* STACKY_BRIDGE_VERSION = "official-0.1.0";
++constexpr const char* STACKY_BRIDGE_VERSION = "official-0.1.1";
 +constexpr size_t MIC_FRAME_COUNT = 480;       // 20 ms at 24 kHz
 +constexpr size_t PLAYBACK_CHUNK_SAMPLES = 960;
 +constexpr double TWO_PI = 6.2831853071795864769;
++constexpr float STACKY_MIC_INPUT_GAIN = 30.0f;
 +
 +double now_seconds()
 +{
@@ -86,6 +216,7 @@ index 0000000..6a8f164
 +public:
 +    void start() override
 +    {
++        enabled_.store(true);
 +        if (started_.exchange(true)) {
 +            return;
 +        }
@@ -95,8 +226,30 @@ index 0000000..6a8f164
 +        xTaskCreatePinnedToCore(&StackyBridgeImpl::micTaskThunk, "stacky_mic", 8192, this, 5, nullptr, 1);
 +    }
 +
++    void stop() override
++    {
++        enabled_.store(false);
++        connected_.store(false);
++        audio_hold_.store(true);
++        playback_active_.store(false);
++        closeSocket();
++
++        auto* codec = Board::GetInstance().GetAudioCodec();
++        if (codec && audio_mutex_) {
++            xSemaphoreTake(audio_mutex_, portMAX_DELAY);
++            if (codec->input_enabled()) {
++                codec->EnableInput(false);
++            }
++            if (codec->output_enabled()) {
++                codec->EnableOutput(false);
++            }
++            xSemaphoreGive(audio_mutex_);
++        }
++    }
++
 +private:
 +    std::atomic<bool> started_{false};
++    std::atomic<bool> enabled_{false};
 +    std::atomic<bool> connected_{false};
 +    std::atomic<bool> audio_hold_{false};
 +    std::atomic<bool> playback_active_{false};
@@ -121,15 +274,18 @@ index 0000000..6a8f164
 +
 +    void mainTask()
 +    {
-+        if (!config_available()) {
-+            ESP_LOGW(TAG, "Stacky bridge disabled: missing WiFi or host config");
-+            vTaskDelete(nullptr);
-+            return;
-+        }
-+
 +        ESP_LOGI(TAG, "Stacky bridge starting: host=%s port=%d", STACKY_HOST, STACKY_PORT);
 +
 +        while (true) {
++            if (!enabled_.load()) {
++                vTaskDelay(pdMS_TO_TICKS(200));
++                continue;
++            }
++            if (!config_available()) {
++                ESP_LOGW(TAG, "Stacky bridge disabled: missing WiFi or host config");
++                vTaskDelay(pdMS_TO_TICKS(3000));
++                continue;
++            }
 +            if (!ensureWifi()) {
 +                vTaskDelay(pdMS_TO_TICKS(3000));
 +                continue;
@@ -206,7 +362,7 @@ index 0000000..6a8f164
 +
 +    void commandLoop()
 +    {
-+        while (connected_.load()) {
++        while (enabled_.load() && connected_.load()) {
 +            std::string line;
 +            const ReadResult result = readLine(line);
 +            if (result == ReadResult::Disconnected) {
@@ -321,7 +477,9 @@ index 0000000..6a8f164
 +            return;
 +        }
 +        if (std::strcmp(type, "body.set_expression") == 0) {
-+            sendStatus(payload["name"] | "expression");
++            const char* expression = payload["name"] | "expression";
++            applyExpression(expression);
++            sendStatus(expression);
 +            return;
 +        }
 +    }
@@ -402,12 +560,14 @@ index 0000000..6a8f164
 +            codec->EnableInput(false);
 +        }
 +        codec->EnableOutput(true);
++        showSpeaking(true);
 +        std::vector<int16_t> chunk;
 +        for (size_t offset = 0; offset < playback_samples_.size() && connected_.load(); offset += PLAYBACK_CHUNK_SAMPLES) {
 +            const size_t count = std::min(PLAYBACK_CHUNK_SAMPLES, playback_samples_.size() - offset);
 +            chunk.assign(playback_samples_.begin() + offset, playback_samples_.begin() + offset + count);
 +            codec->OutputData(chunk);
 +        }
++        showSpeaking(false);
 +        codec->EnableOutput(false);
 +        xSemaphoreGive(audio_mutex_);
 +
@@ -424,7 +584,7 @@ index 0000000..6a8f164
 +        bool input_enabled_by_bridge = false;
 +
 +        while (true) {
-+            if (!connected_.load() || audio_hold_.load() || playback_active_.load()) {
++            if (!enabled_.load() || !connected_.load() || audio_hold_.load() || playback_active_.load()) {
 +                if (input_enabled_by_bridge) {
 +                    auto* codec = Board::GetInstance().GetAudioCodec();
 +                    if (codec) {
@@ -452,6 +612,7 @@ index 0000000..6a8f164
 +
 +            xSemaphoreTake(audio_mutex_, portMAX_DELAY);
 +            if (!codec->input_enabled()) {
++                codec->SetInputGain(STACKY_MIC_INPUT_GAIN);
 +                codec->EnableInput(true);
 +                input_enabled_by_bridge = true;
 +            }
@@ -532,6 +693,49 @@ index 0000000..6a8f164
 +        }
 +    }
 +
++    void applyExpression(const char* name)
++    {
++        if (!GetStackChan().hasAvatar()) {
++            return;
++        }
++
++        LvglLockGuard lock;
++        auto& avatar = GetStackChan().avatar();
++        if (std::strcmp(name, "happy") == 0) {
++            avatar.setEmotion(stackchan::avatar::Emotion::Happy);
++            avatar.setSpeech("Stacky");
++        } else if (std::strcmp(name, "thinking") == 0) {
++            avatar.setEmotion(stackchan::avatar::Emotion::Doubt);
++            avatar.setSpeech("taenker");
++        } else if (std::strcmp(name, "listening") == 0) {
++            avatar.setEmotion(stackchan::avatar::Emotion::Neutral);
++            avatar.setSpeech("lytter");
++        } else if (std::strcmp(name, "speaking") == 0) {
++            avatar.setEmotion(stackchan::avatar::Emotion::Happy);
++            avatar.setSpeech("taler");
++        } else {
++            avatar.setEmotion(stackchan::avatar::Emotion::Neutral);
++            avatar.setSpeech("Stacky");
++        }
++    }
++
++    void showSpeaking(bool active)
++    {
++        if (!GetStackChan().hasAvatar()) {
++            return;
++        }
++
++        LvglLockGuard lock;
++        auto& avatar = GetStackChan().avatar();
++        if (active) {
++            avatar.setEmotion(stackchan::avatar::Emotion::Happy);
++            avatar.setSpeech("taler");
++        } else {
++            avatar.setEmotion(stackchan::avatar::Emotion::Neutral);
++            avatar.setSpeech("Stacky");
++        }
++    }
++
 +    bool sendBytes(const void* data, size_t size)
 +    {
 +        if (!send_mutex_) {
@@ -576,37 +780,40 @@ index 0000000..6a8f164
 +}
 diff --git a/firmware/main/hal/stacky_bridge.h b/firmware/main/hal/stacky_bridge.h
 new file mode 100644
-index 0000000..3392e82
+index 0000000..e69a3f1
 --- /dev/null
 +++ b/firmware/main/hal/stacky_bridge.h
-@@ -0,0 +1,9 @@
+@@ -0,0 +1,10 @@
 +#pragma once
 +
 +class StackyBridge {
 +public:
 +    virtual ~StackyBridge() = default;
 +    virtual void start() = 0;
++    virtual void stop() = 0;
 +};
 +
 +StackyBridge& GetStackyBridge();
 diff --git a/firmware/main/main.cpp b/firmware/main/main.cpp
-index 164a751..b3c2941 100644
+index 164a751..e6c28d4 100644
 --- a/firmware/main/main.cpp
 +++ b/firmware/main/main.cpp
-@@ -9,6 +9,7 @@
- #include <mooncake.h>
- #include <apps/apps.h>
- #include <hal/hal.h>
-+#include <hal/stacky_bridge.h>
+@@ -26,15 +26,9 @@ extern "C" void app_main(void)
+     ui_hal::on_delay([](uint32_t ms) { GetHAL().delay(ms); });
+     ui_hal::on_get_tick([]() { return GetHAL().millis(); });
  
- using namespace mooncake;
- using namespace smooth_ui_toolkit;
-@@ -36,6 +37,8 @@ extern "C" void app_main(void)
-     GetMooncake().installApp(std::make_unique<AppDance>());
-     GetMooncake().installApp(std::make_unique<AppSetup>());
+-    // Install apps
+-    GetMooncake().installApp(std::make_unique<AppLauncher>());
+-    GetMooncake().installApp(std::make_unique<AppAiAgent>());
+-    GetMooncake().installApp(std::make_unique<AppAvatar>());
+-    GetMooncake().installApp(std::make_unique<AppEspnowControl>());
+-    GetMooncake().installApp(std::make_unique<AppAppCenter>());
+-    GetMooncake().installApp(std::make_unique<AppEzdata>());
+-    GetMooncake().installApp(std::make_unique<AppDance>());
+-    GetMooncake().installApp(std::make_unique<AppSetup>());
++    // Stacky firmware variant: boot directly into the local Stacky body app.
++    const int stacky_app_id = GetMooncake().installApp(std::make_unique<AppStacky>());
++    GetMooncake().openApp(stacky_app_id);
  
-+    GetStackyBridge().start();
-+
      // Main loop
      while (1) {
-         GetHAL().feedTheDog();
