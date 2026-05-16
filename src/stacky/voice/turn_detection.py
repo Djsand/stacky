@@ -88,15 +88,15 @@ class EnergyTurnDetector:
         self._speech_ms = 0
         self._silence_ms = 0
         self._utterance_ms = 0
-        self._noise_rms = float(threshold) * 0.45
+        self._noise_rms = float(threshold)
 
     def push(self, pcm: bytes, *, sample_rate: int, channels: int = 1) -> AudioTurn | None:
         if not pcm:
             return None
         duration_ms = _duration_ms(pcm, sample_rate=sample_rate, channels=channels)
         rms = pcm16_rms(pcm)
-        start_threshold = self._start_threshold()
-        is_voice = rms >= (self.threshold if self._active else start_threshold)
+        voice_threshold = self._active_threshold() if self._active else self._start_threshold()
+        is_voice = rms >= voice_threshold
 
         if not self._active:
             if not is_voice:
@@ -155,6 +155,9 @@ class EnergyTurnDetector:
 
     def _start_threshold(self) -> int:
         return int(max(self.threshold, self._noise_rms * 2.0, self._noise_rms + 170))
+
+    def _active_threshold(self) -> int:
+        return int(max(self.threshold, self._noise_rms * 1.35, self._noise_rms + 120))
 
     def _update_noise_floor(self, rms: int) -> None:
         if rms <= 0:

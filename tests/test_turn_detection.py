@@ -44,6 +44,28 @@ class TurnDetectionTest(unittest.TestCase):
         self.assertIsNotNone(turn)
         self.assertGreater(len(turn.pcm), 0)
 
+    def test_detector_treats_learned_noise_floor_as_silence_after_speech(self) -> None:
+        detector = EnergyTurnDetector(
+            threshold=280,
+            min_speech_ms=100,
+            start_speech_ms=80,
+            end_silence_ms=220,
+            preroll_ms=0,
+        )
+        sample_rate = 16000
+
+        for _ in range(20):
+            self.assertIsNone(detector.push(pcm_sample(340, 320), sample_rate=sample_rate))
+        self.assertIsNone(detector.push(pcm_sample(1800, 1600), sample_rate=sample_rate))
+        turn = None
+        for _ in range(12):
+            turn = detector.push(pcm_sample(340, 320), sample_rate=sample_rate)
+            if turn is not None:
+                break
+
+        self.assertIsNotNone(turn)
+        self.assertLess((len(turn.pcm) // 2) / sample_rate, 2.0)
+
     def test_signal_quality_rejects_sparse_keyboard_clicks(self) -> None:
         quality = analyze_turn_signal(pcm_pulse(14000, 16000, every=1600), sample_rate=16000)
 
