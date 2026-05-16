@@ -89,6 +89,8 @@ Accepted hands-free turns now default to trusted Stacky conversation: they persi
 
 Hands-free replies default to short live speech: `--reply-chars 180` and `--detail-reply-chars 320`. Stacky should answer test observations directly, avoid automatic follow-up questions, and avoid bringing up bedtime/time unless asked.
 
+The Danish speech adapter also shapes TTS rhythm before synthesis: short markers such as "Okay" and "Fedt" get a comma, and clauses before "men", "hvis", "når", and relevant "så" get clearer pauses. The default Supertonic `quick` profile is tuned for less rushed Danish speech: speed `1.18`, chunk length `180`, silence `0.04`.
+
 The hands-free VAD is tuned for the official Stacky bridge: default `--vad-threshold 280`, `--start-speech-ms 120`, and `--min-speech-ms 220`. It rejects sparse clicks and high-frequency noise before STT; use `--debug-audio` to see `[audio] ... reason='højfrekvent støj'` / `klik/percussiv støj` lines.
 The start detector also ignores high-frequency mic noise as a voice candidate, so Stacky should not lock into 9-second noise turns before you speak.
 

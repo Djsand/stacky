@@ -13,6 +13,7 @@ Updated 2026-05-16 after the hands-free memory/personality and motion-control pa
   - Accepted StackChan hands-free turns now default to trusted session persistence and safe memory/personality writes. Use `--voice-trust session-only` for context-only logging or `--voice-trust off` for old untrusted STT debugging.
   - Local hands-free commands such as volume, calibration, motion, and pause are recorded into the infinite session without an extra brain-model call.
   - Hands-free replies now default to `--reply-chars 180` and `--detail-reply-chars 320`; Stacky should answer test observations directly instead of steering into smalltalk or bedtime/time comments.
+  - Speech rhythm is shaped before TTS: marker commas and pauses before `men`/`hvis`/`når`/relevant `så`; Supertonic `quick` is now speed `1.18`, chunk length `180`, silence `0.04`.
   - Danish STT hotwords, live transcript correction, stricter clipped-noise gate, benchmark live-gate mode.
   - StackChan firmware `official-0.1.10` with PC-controlled mic gain.
   - Handsfree/capture default `--mic-channel 0`; official CoreS3 sends the real mic on channel 0 and a reference/noise path on channel 1.

@@ -10,6 +10,10 @@ _VOICE_LABEL_RE = re.compile(r"\b([FM])\s*([1-5])\b", re.IGNORECASE)
 _LEADING_NAME_GREETING_RE = re.compile(r"^\s*hej\s+nicolai\s*[,!.]?\s*", re.IGNORECASE)
 _AFTER_GREETING_RE = re.compile(r"^Hej\. ([a-zæøå])")
 _DUPLICATE_WORD_RE = re.compile(r"\b([A-Za-zæøåÆØÅ]{4,})\b\s+\1\b", re.IGNORECASE)
+_LEADING_MARKER_RE = re.compile(
+    r"^(Ja|Nej|Okay|Fedt|Klart|Præcis|Godt|Fint|Det giver mening|Det lyder godt)\s+(?=[a-zæøå])",
+    re.IGNORECASE,
+)
 
 _DANISH_DIGITS = {
     "1": "en",
@@ -46,6 +50,7 @@ def adapt_for_danish_speech(text: str) -> str:
         spoken = re.sub(re.escape(source), target, spoken, flags=re.IGNORECASE)
     spoken = _AFTER_GREETING_RE.sub(lambda match: f"Hej. {match.group(1).upper()}", spoken)
     spoken = _collapse_duplicate_words(spoken)
+    spoken = _shape_rhythm(spoken)
     spoken = _SPACE_RE.sub(" ", spoken)
     spoken = _soften_punctuation(spoken)
     return spoken.strip()
@@ -65,6 +70,16 @@ def _collapse_duplicate_words(text: str) -> str:
         previous = current
         current = _DUPLICATE_WORD_RE.sub(lambda match: match.group(1), current)
     return current
+
+
+def _shape_rhythm(text: str) -> str:
+    text = _LEADING_MARKER_RE.sub(lambda match: f"{match.group(1)}, ", text)
+    text = re.sub(r"(?<![,.;:!?])\s+men\s+", ", men ", text, flags=re.IGNORECASE)
+    text = re.sub(r"(?<![,.;:!?])\s+så\s+(?=(jeg|du|vi|det|bare|sig|kan|skal)\b)", ", så ", text, flags=re.IGNORECASE)
+    text = re.sub(r"(?<![,.;:!?])\s+hvis\s+", ", hvis ", text, flags=re.IGNORECASE)
+    text = re.sub(r"(?<![,.;:!?])\s+når\s+", ", når ", text, flags=re.IGNORECASE)
+    text = re.sub(r"(?<![,.;:!?])\s+medmindre\s+", ", medmindre ", text, flags=re.IGNORECASE)
+    return text
 
 
 def split_for_speech(text: str, *, max_chars: int = 220) -> list[str]:

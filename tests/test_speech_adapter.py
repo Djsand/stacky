@@ -30,6 +30,21 @@ class SpeechAdapterTest(unittest.TestCase):
 
         self.assertEqual(spoken, "Det skal være dansk og roligt.")
 
+    def test_rhythm_punctuation_for_live_speech(self) -> None:
+        spoken = adapt_for_danish_speech("Okay det giver mening men jeg venter hvis du tester.")
+
+        self.assertEqual(spoken, "Okay, det giver mening, men jeg venter, hvis du tester.")
+
+    def test_rhythm_does_not_break_intensifier_saa(self) -> None:
+        spoken = adapt_for_danish_speech("Det er så fedt.")
+
+        self.assertEqual(spoken, "Det er så fedt.")
+
+    def test_rhythm_adds_pause_before_saa_clause(self) -> None:
+        spoken = adapt_for_danish_speech("Det giver mening så jeg venter.")
+
+        self.assertEqual(spoken, "Det giver mening, så jeg venter.")
+
     def test_split_for_speech(self) -> None:
         chunks = split_for_speech("Hej. " * 100, max_chars=40)
 
