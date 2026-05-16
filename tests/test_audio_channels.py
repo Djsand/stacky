@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from stacky.voice.channels import apply_pcm16_gain, select_pcm16_channel
+from stacky.voice.channels import Pcm16ChannelSelector, apply_pcm16_gain, select_pcm16_channel
 
 
 def pcm_sample(value: int) -> bytes:
@@ -42,12 +42,35 @@ class AudioChannelTest(unittest.TestCase):
         self.assertEqual(channels, 2)
         self.assertEqual(selected, pcm)
 
-    def test_applies_pcm16_gain_with_clipping(self) -> None:
+    def test_applies_pcm16_gain_without_clipping_when_near_limit(self) -> None:
         pcm = pcm_sample(1000) + pcm_sample(-20000) + pcm_sample(20000)
 
         amplified = apply_pcm16_gain(pcm, gain=2.0)
 
-        self.assertEqual(amplified, pcm_sample(2000) + pcm_sample(-32768) + pcm_sample(32767))
+        self.assertEqual(amplified, pcm_sample(1500) + pcm_sample(-30000) + pcm_sample(30000))
+
+    def test_stateful_auto_channel_does_not_switch_on_one_loud_chunk(self) -> None:
+        selector = Pcm16ChannelSelector("auto")
+        left_loud = pcm_sample(800) + pcm_sample(100) + pcm_sample(700) + pcm_sample(120)
+        right_loud = pcm_sample(100) + pcm_sample(1200) + pcm_sample(120) + pcm_sample(1000)
+
+        first, _ = selector.select(left_loud, channels=2)
+        second, _ = selector.select(right_loud, channels=2)
+
+        self.assertEqual(first, pcm_sample(800) + pcm_sample(700))
+        self.assertEqual(second, pcm_sample(100) + pcm_sample(120))
+
+    def test_stateful_auto_channel_switches_after_sustained_advantage(self) -> None:
+        selector = Pcm16ChannelSelector("auto")
+        left_loud = pcm_sample(800) + pcm_sample(100) + pcm_sample(700) + pcm_sample(120)
+        right_loud = pcm_sample(100) + pcm_sample(2200) + pcm_sample(120) + pcm_sample(2000)
+
+        selector.select(left_loud, channels=2)
+        selected = b""
+        for _ in range(18):
+            selected, _ = selector.select(right_loud, channels=2)
+
+        self.assertEqual(selected, pcm_sample(2200) + pcm_sample(2000))
 
 
 if __name__ == "__main__":

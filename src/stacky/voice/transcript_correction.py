@@ -34,6 +34,8 @@ _ENTITY_REPLACEMENTS: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"\b(?:hore|høre|harer|hører|here)\b", re.IGNORECASE), "høre"),
     (re.compile(r"\b(?:tideligt|tydelig|tydelige|dideligt|tidelig)\b", re.IGNORECASE), "tydeligt"),
     (re.compile(r"\b(?:latinska|latinske|latens|latens i|laneside|latenstider)\b", re.IGNORECASE), "latency"),
+    (re.compile(r"\bgået lidt i stol\b", re.IGNORECASE), "gået lidt i stå"),
+    (re.compile(r"\bgaaet lidt i stol\b", re.IGNORECASE), "gået lidt i stå"),
 )
 
 _EXACT_PHRASE_KEYS: dict[str, str] = {
@@ -48,6 +50,12 @@ _EXACT_PHRASE_KEYS: dict[str, str] = {
     "hejd": "Hej Stacky",
     "nejstakke": "Hej Stacky",
     "nejstacky": "Hej Stacky",
+    "ej": "Hej.",
+    "tog": "Tak.",
+    "detkanoptillovligthvadmeddig": "Det går stille og roligt, hvad med dig?",
+    "detkanoptilovligthvadmeddig": "Det går stille og roligt, hvad med dig?",
+    "somhvader": "Som hvad?",
+    "vedduhvadklokkenerd": "Ved du hvad klokken er?",
     "oligopoly": "Skru lidt op for lyden.",
     "oligodtforlyden": "Skru lidt op for lyden.",
     "ogligeopilyn": "Skru lidt op for lyden.",

@@ -2,7 +2,7 @@
 
 ## Current Snapshot
 
-Updated 2026-05-16 after the StackChan mic-gain/auto-channel hotfix and second STT research pass.
+Updated 2026-05-16 after the StackChan channel-0/STT input hotfix and third STT research pass.
 
 - Branch: `official-firmware-base`
 - Latest branch head: run `git log --oneline -1` after pull.
@@ -12,7 +12,7 @@ Updated 2026-05-16 after the StackChan mic-gain/auto-channel hotfix and second S
   - Trusted text/chat turns can evolve style notes and convictions. Untrusted StackChan voice turns still do not write long-term memory or session history, and now also cannot create personality rules.
   - Danish STT hotwords, live transcript correction, stricter clipped-noise gate, benchmark live-gate mode.
   - StackChan firmware `official-0.1.10` with PC-controlled mic gain.
-  - Handsfree/capture default `--mic-channel auto` instead of fixed channel `0`.
+  - Handsfree/capture default `--mic-channel 0`; official CoreS3 sends the real mic on channel 0 and a reference/noise path on channel 1.
   - Handsfree VAD dynamic threshold was lowered after mic preamp raised the noise floor; normal speech should start more easily without weakening the post-turn noise gate.
   - Follow-up VAD fix: high-frequency mic noise is no longer allowed to start a voice turn or train the noise floor. Sustained noisy speech can still reach STT if it contains enough low-ZCR voice-band frames.
   - Roest STT loading is cache-first. `transformers` uses `local_files_only=True` first and only falls back to Hugging Face when the model is missing locally.
@@ -36,7 +36,7 @@ Latest verification:
 - `git diff --check -- . ':!patches/official-stackchan/0001-stacky-bridge.patch'` -> clean apart from CRLF warnings. The patch file itself contains normal unified-diff context blank lines that `git diff --check` reports as trailing whitespace when treating the patch as a text file.
 - ESP-IDF build passed via `S:\` / `I:\`.
 - Flash to `COM3` passed for `official-0.1.10`.
-- `python -m stacky body-server --duration 4` connected and reported `firmware=official-0.1.10`, `micGain=75.0`, `micChannels=2`, and `audio.in raw 24000 Hz 2 ch 1920 bytes`. The live CLI now overrides codec mic gain to `100` after connect.
+- `python -m stacky body-server --duration 4` connected and reported `firmware=official-0.1.10`, `micGain=75.0`, `micChannels=2`, and `audio.in raw 24000 Hz 2 ch 1920 bytes`. The live CLI now overrides codec mic gain to `85` after connect.
 
 Runtime state:
 
@@ -50,9 +50,10 @@ Next engineering priority:
 
 1. Test the new live STT path on real StackChan hardware:
    - `python -m stacky handsfree --tts-engine supertonic --speaker stackchan`
-   - Expected startup should print `Using StackChan mic channel: auto`, `Setting StackChan mic gain: 100`, and `Applying StackChan mic preamp: 2.50x`.
+   - Expected startup should print `Using StackChan mic channel: 0`, `Setting StackChan mic gain: 85`, and `Applying StackChan mic preamp: 2.00x`.
    - speak normal Danish first, then fast, then slightly mumbled.
 2. If live behavior is still wrong, run listen-only with channel probes before changing model code:
+   - `python -m stacky handsfree --listen-only --debug-audio --mic-channel 0`
    - `python -m stacky handsfree --listen-only --debug-audio --mic-channel auto`
    - `python -m stacky handsfree --listen-only --debug-audio --mic-channel 1`
    - `python -m stacky handsfree --listen-only --debug-audio --mic-channel mix`
@@ -70,9 +71,9 @@ Next engineering priority:
 ## Latest Mic/STT Hotfix
 
 - Firmware patch regenerated for `official-0.1.10`.
-- Python now sends `audio.input_gain` at connect time; default CLI gain is `100`.
-- `handsfree` and `stt-capture` apply default digital `--mic-preamp 2.5` before VAD/STT; use `--mic-preamp 1.0` to disable.
-- `handsfree` and `stt-capture` default to `--mic-channel auto`; `auto`/`best` selects the loudest channel per PCM chunk when firmware sends stereo mic audio.
+- Python now sends `audio.input_gain` at connect time; default CLI gain is `85` to avoid clipping.
+- `handsfree` and `stt-capture` apply default digital `--mic-preamp 2.0` before VAD/STT; the gain limiter avoids PCM clipping; use `--mic-preamp 1.0` to disable.
+- `handsfree` and `stt-capture` default to `--mic-channel 0`; `auto`/`best` is sticky diagnostics only because channel 1 is a reference/noise path on CoreS3 official firmware.
 - Signal quality now accepts shorter soft speech runs (`180ms`) so quiet real speech is less likely to be thrown away before STT.
 - Observed live failures now have conservative transcript corrections:
   - `hej den i` / `hej d` -> `Hej Stacky`
@@ -88,6 +89,11 @@ Second STT candidate check:
   - 1.7B on the next normal clips produced wrong/foreign-language text, so it is not a usable replacement.
 - Parakeet TDT 0.6B v3 ONNX was very fast, but failed Danish StackChan audio (`I`, English hallucinations).
 - Canary 1B v2 ONNX was fast and accepted `language='da'`, but still mistranscribed StackChan audio badly.
+- Third STT candidate check:
+  - `capacit-ai/saga` via isolated `.venv-qwen-asr` loaded on CPU but was too slow and not better on StackChan clips (`Hej Stakke`, `Der laver du lige med`, noise hallucination).
+  - `pluttodk/Milo-ASR` via `qwen_asr` was also too slow on CPU and not better on StackChan clips.
+  - `syvai/faster-hviske-v3-conversation` CTranslate2 was benchmarked because it is Danish conversational, but it was slower and worse than Roest on the captured StackChan dataset.
+  - Current best next move is channel-0 input hygiene and a fresh capture with the new defaults, not another model swap.
 - Practical conclusion remains: fix StackChan mic/channel/preprocessing first. Blind model swapping is not supported by the benchmark evidence.
 
 ## Latest Danish STT Research/Fix
@@ -141,7 +147,7 @@ Reality check:
 - Qwen3-ASR 0.6B was tested in an isolated venv at `C:\Users\nicol\.stacky-qwen-asr` to avoid main-venv dependency conflicts. On the first 10 normal channel-0 clips it produced `mean_wer=100.0%`, `mean_cer=71.5%`, and was slower than Røst after warm-up.
 - Conclusion: do not keep swapping models blindly. The current evidence points to StackChan audio/channel quality or mic-path selection. Official firmware now streams both input channels so channel 1 can be measured.
 - `TurnSignalQuality` now rejects clipped/percussive noise with `peak>=32000`, high crest factor, and short active runs.
-- `handsfree` and `stt-capture` accept `--mic-channel auto|best|0|1|mix|all`; default is now `auto`.
+- `handsfree` and `stt-capture` accept `--mic-channel auto|best|0|1|mix|all`; default is now `0`.
 - `scripts/mic_listener.py` now handles multichannel WAV output and prints `micChannels` from status.
 
 ## Latest Session And Memory Update

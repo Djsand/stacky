@@ -47,6 +47,19 @@ class TranscriptCorrectionTest(unittest.TestCase):
 
         self.assertEqual(correction.text, "Kig op.")
 
+    def test_corrects_observed_live_danish_failures(self) -> None:
+        cases = {
+            "tog": "Tak.",
+            "det kan op til lovligt hvad med dig": "Det går stille og roligt, hvad med dig?",
+            "jeg føler jeg er gået lidt i stol": "jeg føler jeg er gået lidt i stå",
+            "som hvad er": "Som hvad?",
+            "ved du hvad klokken er d": "Ved du hvad klokken er?",
+        }
+
+        for raw, expected in cases.items():
+            with self.subTest(raw=raw):
+                self.assertEqual(correct_danish_transcript(raw).text, expected)
+
     def test_does_not_force_unrelated_chat_into_command(self) -> None:
         correction = correct_danish_transcript("regnede dig")
 

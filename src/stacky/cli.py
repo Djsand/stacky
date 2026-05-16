@@ -31,7 +31,7 @@ from .voice.output import (
     create_stackchan_supertonic_output,
     create_supertonic_output,
 )
-from .voice.channels import apply_pcm16_gain, select_pcm16_channel
+from .voice.channels import Pcm16ChannelSelector, apply_pcm16_gain
 from .voice.supertonic_tts import SupertonicVoice, supertonic_voice_preset
 from .voice.runtime import LocalTextVoiceRuntime
 from .voice.stt import STTResult, create_danish_stt, resolve_stt_model_name, wav_audio_stats, write_pcm_wav
@@ -84,8 +84,8 @@ def main(argv: list[str] | None = None) -> int:
     handsfree.add_argument(
         "--mic-channel",
         choices=("auto", "best", "0", "1", "mix", "all"),
-        default="auto",
-        help="StackChan input channel to use after firmware capture. auto/best chooses the loudest channel per chunk; all keeps multichannel WAVs for diagnostics.",
+        default="0",
+        help="StackChan input channel to use after firmware capture. CoreS3 official firmware sends mic on channel 0 and reference/noise on channel 1; auto/best is diagnostics only.",
     )
     handsfree.add_argument("--listen-only", action="store_true", help="Only print StackChan STT results; do not call the brain or TTS.")
     handsfree.add_argument("--debug-audio", action="store_true", help="Print live StackChan mic RMS/peak while listening.")
@@ -114,8 +114,8 @@ def main(argv: list[str] | None = None) -> int:
     handsfree.add_argument("--stackchan-target-rms", type=int, default=9000, help="Target active PCM RMS for StackChan speaker loudness.")
     handsfree.add_argument("--stackchan-max-gain", type=float, default=4.0, help="Maximum StackChan speaker PCM gain before clipping.")
     handsfree.add_argument("--stackchan-volume", type=int, default=80, help="Initial StackChan codec volume, 0-100.")
-    handsfree.add_argument("--stackchan-mic-gain", type=int, default=100, help="Initial StackChan codec mic gain, 0-100.")
-    handsfree.add_argument("--mic-preamp", type=float, default=2.5, help="Digital PCM gain before VAD/STT. Use 1.0 to disable.")
+    handsfree.add_argument("--stackchan-mic-gain", type=int, default=85, help="Initial StackChan codec mic gain, 0-100.")
+    handsfree.add_argument("--mic-preamp", type=float, default=2.0, help="Digital PCM gain before VAD/STT. Limited to avoid PCM clipping; use 1.0 to disable.")
     handsfree.add_argument("--reply-chars", type=int, default=260, help="Default spoken reply character budget for low-latency live chat.")
     handsfree.add_argument("--detail-reply-chars", type=int, default=420, help="Spoken reply character budget when the user asks for details.")
     stt_capture = sub.add_parser("stt-capture", help="Record labelled StackChan mic clips for Danish STT evaluation.")
@@ -140,12 +140,12 @@ def main(argv: list[str] | None = None) -> int:
     stt_capture.add_argument(
         "--mic-channel",
         choices=("auto", "best", "0", "1", "mix", "all"),
-        default="auto",
-        help="StackChan input channel to record. Use 0 and 1 in separate captures to compare mic channels.",
+        default="0",
+        help="StackChan input channel to record. Channel 0 is the CoreS3 mic; use 1/mix/auto only for diagnostics.",
     )
     stt_capture.add_argument("--debug-audio", action="store_true", help="Print accepted/rejected signal quality while capturing.")
-    stt_capture.add_argument("--stackchan-mic-gain", type=int, default=100, help="Initial StackChan codec mic gain, 0-100.")
-    stt_capture.add_argument("--mic-preamp", type=float, default=2.5, help="Digital PCM gain before VAD/STT. Use 1.0 to disable.")
+    stt_capture.add_argument("--stackchan-mic-gain", type=int, default=85, help="Initial StackChan codec mic gain, 0-100.")
+    stt_capture.add_argument("--mic-preamp", type=float, default=2.0, help="Digital PCM gain before VAD/STT. Limited to avoid PCM clipping; use 1.0 to disable.")
     stt_bench = sub.add_parser("stt-bench", help="Benchmark local Danish STT models on saved StackChan WAV turns.")
     stt_bench.add_argument("--audio", action="append", default=[], help="WAV file, directory, or glob. Defaults to artifacts/handsfree_turns/*.wav.")
     stt_bench.add_argument("--dataset", default="", help="JSONL/TSV manifest from stt-capture. Provides expected text for scoring.")
@@ -592,6 +592,7 @@ async def _stt_capture(
     audio_queue: asyncio.Queue[tuple[bytes, int, int]] = asyncio.Queue(maxsize=80)
     accepting_audio = False
     audio_meter = {"last_at": 0.0, "max_rms": 0, "max_peak": 0, "chunks": 0}
+    channel_selector = Pcm16ChannelSelector(mic_channel)
 
     def on_event(event) -> None:
         if event.type == "status":
@@ -608,7 +609,7 @@ async def _stt_capture(
             print(f"[StackChan] bad audio.in: {exc}", flush=True)
             return
         try:
-            pcm, channels = select_pcm16_channel(pcm, channels=channels, selection=mic_channel)
+            pcm, channels = channel_selector.select(pcm, channels=channels)
         except ValueError as exc:
             print(f"[StackChan] bad mic channel: {exc}", flush=True)
             return
@@ -1169,6 +1170,7 @@ async def _handsfree(
     audio_queue: asyncio.Queue[tuple[bytes, int, int]] = asyncio.Queue(maxsize=80)
     accepting_audio = False
     audio_meter = {"last_at": 0.0, "max_rms": 0, "max_peak": 0, "chunks": 0}
+    channel_selector = Pcm16ChannelSelector(mic_channel)
     body_status: dict[str, object] = {}
     body_calibration = load_body_calibration(config.data_dir)
     body_director: BodyDirector | None = None
@@ -1195,7 +1197,7 @@ async def _handsfree(
             print(f"[StackChan] bad audio.in: {exc}", flush=True)
             return
         try:
-            pcm, channels = select_pcm16_channel(pcm, channels=channels, selection=mic_channel)
+            pcm, channels = channel_selector.select(pcm, channels=channels)
         except ValueError as exc:
             print(f"[StackChan] bad mic channel: {exc}", flush=True)
             return
@@ -1594,6 +1596,8 @@ def _accept_stt_result(
         return False, "kendt hallucination"
     if signal_quality is not None and not signal_quality.speech_like:
         return False, signal_quality.reason
+    if signal_quality is not None and _is_short_high_frequency_stt_fragment(transcript, signal_quality):
+        return False, "kort højfrekvent STT-fragment"
     if trusted_transcript:
         return True, "trusted transcript correction"
     if key in {"ja", "nej", "ok", "okay"} and result.avg_logprob < -0.8:
@@ -1660,6 +1664,36 @@ def _is_short_uncertain_stt_fragment(transcript: str, result: STTResult) -> bool
     if any(token in key for token in ("volumen", "volume", "hojre", "venstre")):
         return False
     return result.avg_logprob < -0.55
+
+
+def _is_short_high_frequency_stt_fragment(transcript: str, signal_quality: TurnSignalQuality) -> bool:
+    words = [word for word in transcript.split() if word]
+    if len(words) > 2:
+        return False
+    key = _transcript_key(transcript)
+    if key in {
+        "vent",
+        "ventlige",
+        "stop",
+        "stoplige",
+        "pause",
+        "skruop",
+        "skruned",
+        "kigop",
+        "kigned",
+        "center",
+        "ligeud",
+    }:
+        return False
+    if any(token in key for token in ("volumen", "volume", "hojre", "venstre")):
+        return False
+    if signal_quality.zero_crossing_rate < 0.38:
+        return False
+    return (
+        signal_quality.peak >= 30000
+        or signal_quality.active_ratio < 0.35
+        or signal_quality.max_speech_band_run_ms < 260
+    )
 
 
 def _parse_local_realtime_reply(text: str) -> str | None:

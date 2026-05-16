@@ -202,6 +202,40 @@ class HandsfreeHelpersTest(unittest.TestCase):
         self.assertFalse(accepted)
         self.assertEqual(reason, "støjfyldt højfrekvent transcript")
 
+    def test_rejects_short_trusted_correction_from_high_frequency_noise(self) -> None:
+        result = STTResult(
+            text="ej",
+            audio=AudioStats(duration_seconds=1.12, rms=1185, peak=8748, sample_rate=24000, channels=1),
+            avg_logprob=-0.10,
+            no_speech_prob=0.0,
+            compression_ratio=0.0,
+        )
+        quality = TurnSignalQuality(
+            duration_seconds=1.12,
+            median_rms=654,
+            p80_rms=1100,
+            p95_rms=2525,
+            peak=8748,
+            active_ratio=0.21,
+            active_ms=240,
+            max_active_run_ms=240,
+            crest_factor=9.0,
+            active_threshold=1136,
+            zero_crossing_rate=0.43,
+            speech_band_ms=240,
+            max_speech_band_run_ms=240,
+        )
+
+        accepted, reason = _accept_stt_result(
+            result,
+            text="Hej.",
+            signal_quality=quality,
+            trusted_transcript=True,
+        )
+
+        self.assertFalse(accepted)
+        self.assertEqual(reason, "kort højfrekvent STT-fragment")
+
     def test_local_realtime_reply_bypasses_brain_for_wait_commands(self) -> None:
         self.assertEqual(_parse_local_realtime_reply("vent lige"), "Jeg venter.")
         self.assertEqual(_parse_local_realtime_reply("stop lige"), "Jeg venter.")
