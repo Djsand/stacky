@@ -87,11 +87,15 @@ def _shape_rhythm(text: str) -> str:
     return text
 
 
-def split_for_speech(text: str, *, max_chars: int = 220) -> list[str]:
+def split_for_speech(text: str, *, max_chars: int = 220, rhythmic: bool = False) -> list[str]:
     """Split into short chunks so we can play speech sooner and keep rhythm."""
     spoken = adapt_for_danish_speech(text)
+    if not spoken:
+        return []
+    if rhythmic:
+        return _split_rhythmic_units(spoken, max_chars=max_chars)
     if len(spoken) <= max_chars:
-        return [spoken] if spoken else []
+        return [spoken]
 
     parts = re.split(r"(?<=[.!?])\s+", spoken)
     chunks: list[str] = []
@@ -112,6 +116,30 @@ def split_for_speech(text: str, *, max_chars: int = 220) -> list[str]:
         current = part
     if current:
         chunks.append(current)
+    return chunks
+
+
+def _split_rhythmic_units(text: str, *, max_chars: int) -> list[str]:
+    sentence_units = [unit.strip() for unit in re.split(r"(?<=[.!?])\s+", text) if unit.strip()]
+    if len(sentence_units) > 1:
+        return _fit_units_to_max(sentence_units, max_chars=max_chars)
+
+    clause_units = [unit.strip() for unit in re.split(r"(?<=[,;:])\s+", text) if unit.strip()]
+    if len(clause_units) > 1:
+        return _fit_units_to_max(clause_units, max_chars=max_chars)
+
+    if len(text) > max_chars:
+        return _split_long_part(text, max_chars=max_chars)
+    return [text]
+
+
+def _fit_units_to_max(units: list[str], *, max_chars: int) -> list[str]:
+    chunks: list[str] = []
+    for unit in units:
+        if len(unit) <= max_chars:
+            chunks.append(unit)
+        else:
+            chunks.extend(_split_long_part(unit, max_chars=max_chars))
     return chunks
 
 

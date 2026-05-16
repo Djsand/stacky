@@ -124,6 +124,8 @@ class StackChanSpeechOutput:
         chunk_chars: int = 280,
         stackchan_sample_rate: int = 24000,
         max_stackchan_pcm_bytes: int = 1_020_000,
+        rhythm_gap_seconds: float = 0.04,
+        rhythmic_chunks: bool = False,
         target_active_rms: int = 9000,
         max_gain: float = 4.0,
         volume_level: int = 80,
@@ -134,6 +136,8 @@ class StackChanSpeechOutput:
         self.chunk_chars = chunk_chars
         self.stackchan_sample_rate = stackchan_sample_rate
         self.max_stackchan_pcm_bytes = max_stackchan_pcm_bytes
+        self.rhythm_gap_seconds = rhythm_gap_seconds
+        self.rhythmic_chunks = rhythmic_chunks
         self.target_active_rms = target_active_rms
         self.max_gain = max_gain
         self.volume_level = clamp_volume_level(volume_level)
@@ -176,7 +180,7 @@ class StackChanSpeechOutput:
                 self._task = None
 
     async def _speak_chunks(self, text: str, utterance_id: int) -> None:
-        chunks = split_for_speech(text, max_chars=self.chunk_chars)
+        chunks = split_for_speech(text, max_chars=self.chunk_chars, rhythmic=self.rhythmic_chunks)
         if not chunks:
             return
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -200,7 +204,12 @@ class StackChanSpeechOutput:
 
         if utterance_id != self._utterance_id or not pcm_chunks or sample_rate is None or channels is None:
             return
-        pcm = join_pcm16_chunks(pcm_chunks, sample_rate=sample_rate, channels=channels)
+        pcm = join_pcm16_chunks(
+            pcm_chunks,
+            sample_rate=sample_rate,
+            channels=channels,
+            gap_seconds=self.rhythm_gap_seconds,
+        )
         duration = await asyncio.to_thread(
             self._send_pcm_to_stackchan,
             pcm,
@@ -328,7 +337,9 @@ def create_stackchan_supertonic_output(
         SupertonicTTS(voice),
         controller,
         output_dir=ROOT / "artifacts" / "stackchan_speech_supertonic",
-        chunk_chars=280,
+        chunk_chars=160,
+        rhythm_gap_seconds=0.16,
+        rhythmic_chunks=True,
         target_active_rms=target_active_rms,
         max_gain=max_gain,
         volume_level=volume_level,

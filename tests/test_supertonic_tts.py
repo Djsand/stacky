@@ -24,9 +24,9 @@ class SupertonicVoiceTest(unittest.TestCase):
     def test_quick_profile_keeps_natural_rhythm(self) -> None:
         voice = supertonic_voice_preset("quick")
 
-        self.assertLessEqual(voice.speed, 1.12)
-        self.assertGreaterEqual(voice.silence_duration, 0.055)
-        self.assertLessEqual(voice.max_chunk_length, 160)
+        self.assertLessEqual(voice.speed, 1.08)
+        self.assertGreaterEqual(voice.silence_duration, 0.07)
+        self.assertLessEqual(voice.max_chunk_length, 140)
 
 
 if __name__ == "__main__":

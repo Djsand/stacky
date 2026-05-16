@@ -209,7 +209,7 @@ def main(argv: list[str] | None = None) -> int:
     speaker_test.add_argument(
         "--supertonic-profile",
         choices=("stacky", "calm", "clear", "quick"),
-        default="stacky",
+        default="quick",
         help="Supertonic tuning profile for Stacky's Danish voice.",
     )
     speaker_test.add_argument("--supertonic-voice", default="", help="Override Supertonic voice style: F1-F5 or M1-M5.")

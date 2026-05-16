@@ -13,7 +13,7 @@ Updated 2026-05-16 after the hands-free memory/personality and motion-control pa
   - Accepted StackChan hands-free turns now default to trusted session persistence and safe memory/personality writes. Use `--voice-trust session-only` for context-only logging or `--voice-trust off` for old untrusted STT debugging.
   - Local hands-free commands such as volume, calibration, motion, and pause are recorded into the infinite session without an extra brain-model call.
   - Hands-free replies now default to `--reply-chars 180` and `--detail-reply-chars 320`; Stacky should answer test observations directly instead of steering into smalltalk or bedtime/time comments.
-  - Speech rhythm is shaped before TTS: marker sentence-pauses and pauses before `men`/`hvis`/`når`/relevant `så`; Supertonic `quick` is now speed `1.12`, chunk length `160`, silence `0.055`.
+  - Speech rhythm is shaped before TTS: marker sentence-pauses and pauses before `men`/`hvis`/`når`/relevant `så`; StackChan Supertonic uses rhythmic chunks with real PCM gaps. Supertonic `quick` is now speed `1.08`, chunk length `140`, silence `0.07`.
   - Volume parser catches soft spoken commands like `skrue lyden ned`, `ned til 65`, and `skrue meget længere ned` locally before the brain model.
   - Danish STT hotwords, live transcript correction, stricter clipped-noise gate, benchmark live-gate mode.
   - StackChan firmware `official-0.1.10` with PC-controlled mic gain.
@@ -436,14 +436,15 @@ ssh nicolai@192.168.50.208 'powershell -Command "Get-Process python -ErrorAction
 
 Local APIs only. Avoid paid cloud TTS/STT by default.
 
-Current preferred TTS is Supertonic with the `stacky` profile:
+Current preferred live TTS is Supertonic with the `quick` profile:
 
 - Voice: `F2`
 - Language: Danish
-- Speed: `1.18`
-- Steps: `8`
-- Max chunk length: `240`
-- Silence duration: `0.035`
+- Speed: `1.08`
+- Steps: `6`
+- Max chunk length: `140`
+- Silence duration: `0.07`
+- StackChan PCM rhythm gap: `0.16`
 
 Pronunciation adapter currently rewrites:
 

@@ -10,6 +10,7 @@ from stacky.voice.output import (
     PiperSpeechOutput,
     StackChanSpeechOutput,
     boost_pcm16_for_stackchan,
+    create_stackchan_supertonic_output,
     join_pcm16_chunks,
     split_pcm16_segments,
 )
@@ -121,9 +122,18 @@ class VoiceOutputTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertLessEqual(output.chunk_chars, 300)
         self.assertGreaterEqual(output.max_stackchan_pcm_bytes, 1_000_000)
+        self.assertEqual(output.rhythm_gap_seconds, 0.04)
+        self.assertFalse(output.rhythmic_chunks)
         self.assertEqual(output.target_active_rms, 9000)
         self.assertEqual(output.max_gain, 4.0)
         self.assertEqual(output.volume_level, 80)
+
+    def test_stackchan_supertonic_output_uses_rhythmic_chunks(self) -> None:
+        output = create_stackchan_supertonic_output(FakeController())  # type: ignore[arg-type]
+
+        self.assertEqual(output.chunk_chars, 160)
+        self.assertGreaterEqual(output.rhythm_gap_seconds, 0.14)
+        self.assertTrue(output.rhythmic_chunks)
 
     def test_stackchan_output_can_change_volume(self) -> None:
         controller = FakeController()
