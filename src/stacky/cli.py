@@ -10,6 +10,7 @@ import subprocess
 import time
 import wave
 from dataclasses import dataclass
+from io import BytesIO
 from pathlib import Path
 from slugify import slugify
 
@@ -240,6 +241,21 @@ def main(argv: list[str] | None = None) -> int:
     camera_test.add_argument("--quality", type=int, default=50, help="JPEG quality from 5 to 80. Lower is smaller/faster.")
     camera_test.add_argument("--discard-frames", type=int, default=4, help="Frames to discard before saving a capture.")
     camera_test.add_argument("--settle-ms", type=int, default=30, help="Delay between discarded camera frames.")
+    camera_test.add_argument("--ae-level", type=int, default=2, help="GC0308 auto-exposure target level from -2 to 2.")
+    camera_test.add_argument("--sensor-gain", type=int, default=None, help="Optional manual GC0308 gain from 0 to 30.")
+    camera_test.add_argument("--sensor-exposure", type=int, default=None, help="Optional manual GC0308 exposure from 0 to 1200.")
+    camera_test.add_argument(
+        "--enhance",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Save an auto-brightened JPEG and keep the raw copy alongside it.",
+    )
+    camera_test.add_argument(
+        "--enhance-target",
+        type=float,
+        default=96.0,
+        help="Target mean luminance for camera-test auto-enhance.",
+    )
     camera_test.add_argument("--count", type=int, default=1, help="Number of frames to capture.")
     camera_test.add_argument("--delay-ms", type=int, default=250, help="Delay between captures when --count is above 1.")
     camera_test.add_argument(
@@ -305,6 +321,11 @@ def main(argv: list[str] | None = None) -> int:
                 quality=args.quality,
                 discard_frames=args.discard_frames,
                 settle_ms=args.settle_ms,
+                ae_level=args.ae_level,
+                sensor_gain=args.sensor_gain,
+                sensor_exposure=args.sensor_exposure,
+                enhance=args.enhance,
+                enhance_target=args.enhance_target,
                 count=args.count,
                 delay_ms=args.delay_ms,
                 output=args.output,
@@ -1207,6 +1228,11 @@ async def _camera_test(
     quality: int,
     discard_frames: int,
     settle_ms: int,
+    ae_level: int,
+    sensor_gain: int | None,
+    sensor_exposure: int | None,
+    enhance: bool,
+    enhance_target: float,
     count: int,
     delay_ms: int,
     output: str,
@@ -1243,7 +1269,9 @@ async def _camera_test(
             frame_future = loop.create_future()
             print(
                 f"Requesting camera frame {index + 1}/{capture_count} "
-                f"{width}x{height} quality={quality} discard={discard_frames} settle={settle_ms}ms.",
+                f"{width}x{height} quality={quality} discard={discard_frames} settle={settle_ms}ms "
+                f"ae={ae_level} gain={sensor_gain if sensor_gain is not None else 'auto'} "
+                f"exposure={sensor_exposure if sensor_exposure is not None else 'auto'}.",
                 flush=True,
             )
             if not controller.capture_vision_frame(
@@ -1252,6 +1280,9 @@ async def _camera_test(
                 quality=quality,
                 discard_frames=discard_frames,
                 settle_ms=settle_ms,
+                ae_level=ae_level,
+                sensor_gain=sensor_gain,
+                sensor_exposure=sensor_exposure,
             ):
                 print("Failed to send vision.capture.", flush=True)
                 return 1
@@ -1275,17 +1306,29 @@ async def _camera_test(
             frame_path = output_path
             if capture_count > 1:
                 frame_path = output_path.with_name(f"{output_path.stem}-{index + 1:02d}{output_path.suffix}")
-            frame_path.write_bytes(jpeg)
             metadata = {key: value for key, value in payload.items() if key != "data"}
+            raw_path: Path | None = None
+            saved_jpeg = jpeg
+            if enhance:
+                raw_path = frame_path.with_name(f"{frame_path.stem}-raw{frame_path.suffix}")
+                raw_path.write_bytes(jpeg)
+                saved_jpeg = _enhance_camera_jpeg(jpeg, target_mean=enhance_target)
+                metadata["enhanced"] = True
+                metadata["rawPath"] = str(raw_path)
+                metadata["enhanceTargetMean"] = enhance_target
+            else:
+                metadata["enhanced"] = False
+            frame_path.write_bytes(saved_jpeg)
             frame_path.with_suffix(".json").write_text(
                 json.dumps(metadata, ensure_ascii=False, indent=2) + "\n",
                 encoding="utf-8",
             )
+            raw_note = f", raw={raw_path} stats={_image_stats(raw_path)}" if raw_path is not None else ""
             print(
                 f"Saved camera frame: {frame_path} "
-                f"({payload.get('width')}x{payload.get('height')}, jpeg={len(jpeg)} bytes, "
+                f"({payload.get('width')}x{payload.get('height')}, jpeg={len(saved_jpeg)} bytes, "
                 f"source={_fourcc(payload.get('sourceFormat'))}/{payload.get('sourceBytes')} bytes, "
-                f"stats={_image_stats(frame_path)}).",
+                f"stats={_image_stats(frame_path)}{raw_note}).",
                 flush=True,
             )
             if index + 1 < capture_count and delay_ms > 0:
@@ -1305,6 +1348,27 @@ def _fourcc(value: object) -> str:
     chars = "".join(chr((number >> shift) & 0xFF) for shift in (0, 8, 16, 24))
     printable = "".join(char if 32 <= ord(char) <= 126 else "." for char in chars)
     return f"{printable}/0x{number:08x}"
+
+
+def _enhance_camera_jpeg(jpeg: bytes, *, target_mean: float = 96.0) -> bytes:
+    try:
+        from PIL import Image, ImageEnhance, ImageOps, ImageStat
+
+        with Image.open(BytesIO(jpeg)) as image:
+            rgb = image.convert("RGB")
+        stat = ImageStat.Stat(rgb)
+        luma = 0.2126 * stat.mean[0] + 0.7152 * stat.mean[1] + 0.0722 * stat.mean[2]
+        if luma <= 1:
+            return jpeg
+        factor = min(4.0, max(1.0, float(target_mean) / luma))
+        enhanced = ImageEnhance.Brightness(rgb).enhance(factor)
+        enhanced = ImageEnhance.Contrast(enhanced).enhance(1.12)
+        enhanced = ImageOps.autocontrast(enhanced, cutoff=1)
+        output = BytesIO()
+        enhanced.save(output, format="JPEG", quality=85, optimize=True)
+        return output.getvalue()
+    except Exception:
+        return jpeg
 
 
 def _image_stats(path: Path) -> str:

@@ -216,18 +216,24 @@ def vision_capture(
     quality: int = 50,
     discard_frames: int = 4,
     settle_ms: int = 30,
+    ae_level: int = 2,
+    sensor_gain: int | None = None,
+    sensor_exposure: int | None = None,
 ) -> BodyCommand:
-    return BodyCommand(
-        "vision.capture",
-        {
-            "width": max(64, min(1280, int(width))),
-            "height": max(64, min(720, int(height))),
-            "format": format,
-            "quality": max(5, min(80, int(quality))),
-            "discardFrames": max(0, min(12, int(discard_frames))),
-            "settleMs": max(0, min(250, int(settle_ms))),
-        },
-    )
+    payload: dict[str, Any] = {
+        "width": max(64, min(1280, int(width))),
+        "height": max(64, min(720, int(height))),
+        "format": format,
+        "quality": max(5, min(80, int(quality))),
+        "discardFrames": max(0, min(12, int(discard_frames))),
+        "settleMs": max(0, min(250, int(settle_ms))),
+        "aeLevel": max(-2, min(2, int(ae_level))),
+    }
+    if sensor_gain is not None:
+        payload["sensorGain"] = max(0, min(30, int(sensor_gain)))
+    if sensor_exposure is not None:
+        payload["sensorExposure"] = max(0, min(1200, int(sensor_exposure)))
+    return BodyCommand("vision.capture", payload)
 
 
 def decode_pcm_payload(payload: dict[str, Any]) -> tuple[bytes, int, int]:

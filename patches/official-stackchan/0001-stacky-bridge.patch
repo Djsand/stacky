@@ -124,15 +124,99 @@ index 77cc9b7..06e2ab4 100644
  #include "app_ai_agent/app_ai_agent.h"
  #include "app_avatar/app_avatar.h"
  #include "app_setup/app_setup.h"
+diff --git a/firmware/main/hal/board/stackchan_camera.cc b/firmware/main/hal/board/stackchan_camera.cc
+index 5ae1912..4c6ec4e 100644
+--- a/firmware/main/hal/board/stackchan_camera.cc
++++ b/firmware/main/hal/board/stackchan_camera.cc
+@@ -5,11 +5,13 @@
+ #include <unistd.h>
+ #include <errno.h>
+ #include <esp_heap_caps.h>
++#include <algorithm>
+ #include <cstdio>
+ #include <cstring>
+ 
+ #include "esp_imgfx_color_convert.h"
+ #include "esp_video_device.h"
++#include "esp_video_ioctl.h"
+ #include "esp_video_init.h"
+ #include "linux/videodev2.h"
+ 
+@@ -1024,6 +1026,41 @@ bool StackChanCamera::SetVFlip(bool enabled)
+  * @note 函数会等待之前的编码线程完成后再开始新的处理
+  * @warning 如果摄像头缓冲区为空或网络连接失败，将返回错误信息
+  */
++bool StackChanCamera::SetControl(uint32_t id, int32_t value, uint32_t ctrl_class)
++{
++    if (video_fd_ < 0) return false;
++    struct v4l2_ext_controls ctrls = {};
++    struct v4l2_ext_control ctrl   = {};
++    ctrl.id                        = id;
++    ctrl.value                     = value;
++    ctrls.ctrl_class               = ctrl_class;
++    ctrls.count                    = 1;
++    ctrls.controls                 = &ctrl;
++    if (ioctl(video_fd_, VIDIOC_S_EXT_CTRLS, &ctrls) != 0) {
++        ESP_LOGW(TAG, "set camera control failed id=0x%08lx value=%ld", id, static_cast<long>(value));
++        return false;
++    }
++    return true;
++}
++
++bool StackChanCamera::SetAutoExposureLevel(int level)
++{
++    level = std::clamp(level, -2, 2);
++    return SetControl(V4L2_CID_CAMERA_AE_LEVEL, level, V4L2_CTRL_CLASS_CAMERA);
++}
++
++bool StackChanCamera::SetSensorGain(int gain)
++{
++    gain = std::clamp(gain, 0, 30);
++    return SetControl(V4L2_CID_GAIN, gain, V4L2_CTRL_CLASS_USER);
++}
++
++bool StackChanCamera::SetSensorExposure(int exposure)
++{
++    exposure = std::clamp(exposure, 0, 1200);
++    return SetControl(V4L2_CID_EXPOSURE, exposure, V4L2_CTRL_CLASS_USER);
++}
++
+ std::string StackChanCamera::Explain(const std::string& question)
+ {
+     if (explain_url_.empty()) {
+diff --git a/firmware/main/hal/board/stackchan_camera.h b/firmware/main/hal/board/stackchan_camera.h
+index 1f80c1f..e2b45a6 100644
+--- a/firmware/main/hal/board/stackchan_camera.h
++++ b/firmware/main/hal/board/stackchan_camera.h
+@@ -51,6 +51,9 @@ public:
+     virtual void SetExplainUrl(const std::string& url, const std::string& token);
+     virtual bool Capture() override;
+     bool StreamCaptures();
++    bool SetAutoExposureLevel(int level);
++    bool SetSensorGain(int gain);
++    bool SetSensorExposure(int exposure);
+ 
+     // 翻转控制函数
+     virtual bool SetHMirror(bool enabled) override;
+@@ -77,6 +80,9 @@ public:
+     {
+         return frame_.format;
+     }
++
++private:
++    bool SetControl(uint32_t id, int32_t value, uint32_t ctrl_class);
+ };
+ 
+ #endif  // ndef CONFIG_IDF_TARGET_ESP32
 diff --git a/firmware/main/hal/hal.h b/firmware/main/hal/hal.h
-index 5f9efcf..8b506eb 100644
+index 5f9efcf..6edbd46 100644
 --- a/firmware/main/hal/hal.h
 +++ b/firmware/main/hal/hal.h
 @@ -132,6 +132,8 @@ enum class MicTestStatus {
      Failed,
  };
  
-+inline constexpr const char* STACKY_BOOT_VERSION = "official-0.1.15";
++inline constexpr const char* STACKY_BOOT_VERSION = "official-0.1.16";
 +
  /**
   * @brief
@@ -225,10 +309,10 @@ index 5f9efcf..8b506eb 100644
      std::unique_ptr<uitk::lvgl_cpp::Label> _label_version;
 diff --git a/firmware/main/hal/stacky_bridge.cpp b/firmware/main/hal/stacky_bridge.cpp
 new file mode 100644
-index 0000000..d45f096
+index 0000000..19c25e0
 --- /dev/null
 +++ b/firmware/main/hal/stacky_bridge.cpp
-@@ -0,0 +1,980 @@
+@@ -0,0 +1,1008 @@
 +#include "stacky_bridge.h"
 +
 +#include "hal.h"
@@ -297,7 +381,7 @@ index 0000000..d45f096
 +namespace {
 +
 +constexpr const char* TAG = "StackyBridge";
-+constexpr const char* STACKY_BRIDGE_VERSION = "official-0.1.15";
++constexpr const char* STACKY_BRIDGE_VERSION = "official-0.1.16";
 +constexpr size_t MIC_FRAME_COUNT = 480;       // 20 ms at 24 kHz
 +constexpr int MIC_WARMUP_DISCARD_FRAMES = 12;
 +constexpr size_t PLAYBACK_CHUNK_SAMPLES = 960;
@@ -883,6 +967,22 @@ index 0000000..d45f096
 +            sendVisionUnavailable("camera_unavailable");
 +            return;
 +        }
++        const int ae_level = std::clamp(payload["aeLevel"] | 2, -2, 2);
++        const bool ae_ok   = camera->SetAutoExposureLevel(ae_level);
++        bool gain_ok       = true;
++        bool exposure_ok   = true;
++        int sensor_gain    = -1;
++        int sensor_exposure = -1;
++        JsonVariantConst gain_payload = payload["sensorGain"];
++        if (!gain_payload.isNull()) {
++            sensor_gain = std::clamp(gain_payload.as<int>(), 0, 30);
++            gain_ok     = camera->SetSensorGain(sensor_gain);
++        }
++        JsonVariantConst exposure_payload = payload["sensorExposure"];
++        if (!exposure_payload.isNull()) {
++            sensor_exposure = std::clamp(exposure_payload.as<int>(), 0, 1200);
++            exposure_ok     = camera->SetSensorExposure(sensor_exposure);
++        }
 +        const int discard_frames = std::clamp(payload["discardFrames"] | 4, 0, 12);
 +        const int settle_ms      = std::clamp(payload["settleMs"] | 30, 0, 250);
 +        for (int i = 0; i <= discard_frames; ++i) {
@@ -939,7 +1039,7 @@ index 0000000..d45f096
 +        free(jpeg_data);
 +
 +        std::string line;
-+        line.reserve(jpeg_base64.size() + 360);
++        line.reserve(jpeg_base64.size() + 520);
 +        line += "{\"type\":\"vision.frame\",\"payload\":{\"available\":true,\"format\":\"jpeg\",\"encoding\":\"base64\",\"width\":";
 +        line += std::to_string(width);
 +        line += ",\"height\":";
@@ -956,6 +1056,18 @@ index 0000000..d45f096
 +        line += std::to_string(discard_frames);
 +        line += ",\"settleMs\":";
 +        line += std::to_string(settle_ms);
++        line += ",\"aeLevel\":";
++        line += std::to_string(ae_level);
++        line += ",\"aeOk\":";
++        line += ae_ok ? "true" : "false";
++        line += ",\"sensorGain\":";
++        line += std::to_string(sensor_gain);
++        line += ",\"sensorGainOk\":";
++        line += gain_ok ? "true" : "false";
++        line += ",\"sensorExposure\":";
++        line += std::to_string(sensor_exposure);
++        line += ",\"sensorExposureOk\":";
++        line += exposure_ok ? "true" : "false";
 +        line += ",\"data\":\"";
 +        line += jpeg_base64;
 +        line += "\"},\"ts\":";

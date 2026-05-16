@@ -149,6 +149,7 @@ class BodyControllerRawAudioTest(unittest.TestCase):
         self.assertEqual(sent[0].payload["width"], 320)
         self.assertEqual(sent[0].payload["height"], 240)
         self.assertEqual(sent[0].payload["quality"], 35)
+        self.assertEqual(sent[0].payload["aeLevel"], 2)
 
     def test_processes_raw_audio_in_header_and_binary_body(self) -> None:
         events = []
