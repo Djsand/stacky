@@ -1436,6 +1436,30 @@ async def _handsfree(
                 set_body_state("listening")
                 accepting_audio = True
                 continue
+            if _parse_battery_status_command(text):
+                reply_started = time.perf_counter()
+                ok = controller.request_status()
+                await asyncio.sleep(0.12)
+                reply_seconds = time.perf_counter() - reply_started
+                print(f"[Stacky] battery_status ok={ok} status={_battery_status_debug(body_status)}", flush=True)
+                set_body_state("happy")
+                speak_started = time.perf_counter()
+                spoken_reply = _format_battery_status_reply(body_status) if ok else "Jeg kunne ikke hente batteristatus lige nu."
+                record_local_turn(text, spoken_reply)
+                await output.speak(spoken_reply)
+                await output.wait()
+                speak_seconds = time.perf_counter() - speak_started
+                print(
+                    f"[timing] stt={stt_seconds:.2f}s command={reply_seconds:.2f}s "
+                    f"tts_send={speak_seconds:.2f}s total={time.perf_counter() - pipeline_started:.2f}s",
+                    flush=True,
+                )
+                _drain_queue(audio_queue)
+                detector.reset()
+                await asyncio.sleep(0.25)
+                set_body_state("listening")
+                accepting_audio = True
+                continue
             volume_command = _parse_volume_command(text, current_level=getattr(output, "volume_level", stackchan_volume))
             if volume_command is not None and hasattr(output, "set_volume"):
                 volume_level, spoken = volume_command
@@ -1781,7 +1805,7 @@ def _is_short_uncertain_stt_fragment(transcript: str, result: STTResult) -> bool
         "ligeud",
     }:
         return False
-    if any(token in key for token in ("volumen", "volume", "hojre", "venstre")):
+    if any(token in key for token in ("volumen", "volume", "hojre", "venstre", "batteri", "status", "strom")):
         return False
     return result.avg_logprob < -0.55
 
@@ -1833,7 +1857,7 @@ def _is_short_high_frequency_stt_fragment(transcript: str, signal_quality: TurnS
         "ligeud",
     }:
         return False
-    if any(token in key for token in ("volumen", "volume", "hojre", "venstre")):
+    if any(token in key for token in ("volumen", "volume", "hojre", "venstre", "batteri", "status", "strom")):
         return False
     if key in {"jegkan", "jegkanher"} and (
         signal_quality.crest_factor >= 12.0
@@ -1861,6 +1885,59 @@ def _parse_local_realtime_reply(text: str) -> str | None:
     key = _transcript_key(text)
     if key in {"vent", "ventlige", "stop", "stoplige", "pause", "holdpause"}:
         return "Jeg venter."
+    return None
+
+
+def _parse_battery_status_command(text: str) -> bool:
+    key = _motion_text_key(text)
+    if not key:
+        return False
+    has_battery_context = any(token in key for token in ("batteri", "battery", "strom", "stroem", "oplad"))
+    if not has_battery_context:
+        return False
+    return any(token in key for token in ("status", "niveau", "procent", "hvormeget", "hvorer", "vis", "fortael", "tjek"))
+
+
+def _format_battery_status_reply(status: dict[str, object]) -> str:
+    level = _coerce_int_status(status.get("batteryLevel"))
+    charging = _coerce_bool_status(status.get("batteryCharging"))
+    if level is None:
+        return "Jeg har ikke fået batteridata fra firmware endnu."
+
+    state = ""
+    if charging is True:
+        state = " og jeg oplader"
+    elif charging is False:
+        state = " og jeg kører på batteri"
+    if level <= 20:
+        state += ", så det er lavt"
+    return f"Mit batteri er på {level} procent{state}."
+
+
+def _battery_status_debug(status: dict[str, object]) -> str:
+    level = status.get("batteryLevel", "?")
+    charging = status.get("batteryCharging", "?")
+    return f"level={level} charging={charging}"
+
+
+def _coerce_int_status(value: object) -> int | None:
+    if isinstance(value, bool):
+        return None
+    try:
+        return _clamp_percent(int(value))
+    except (TypeError, ValueError):
+        return None
+
+
+def _coerce_bool_status(value: object) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"true", "1", "yes", "ja"}:
+            return True
+        if lowered in {"false", "0", "no", "nej"}:
+            return False
     return None
 
 

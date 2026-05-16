@@ -7,6 +7,7 @@ from stacky.body.protocol import (
     audio_chunk,
     audio_end,
     audio_start,
+    body_status,
     decode_pcm_payload,
     display_brightness,
     expression,
@@ -100,6 +101,11 @@ class BodyProtocolTest(unittest.TestCase):
         self.assertIn("display.brightness", raw)
         self.assertEqual(command.payload["level"], 1)
         self.assertFalse(command.payload["permanent"])
+
+    def test_body_status_command_encodes(self) -> None:
+        raw = body_status().to_json()
+
+        self.assertIn("body.status", raw)
 
     def test_vision_capture_command_encodes(self) -> None:
         command = vision_capture(width=20, height=900, format="jpeg")

@@ -225,10 +225,10 @@ index 5f9efcf..0b53a45 100644
      std::unique_ptr<uitk::lvgl_cpp::Label> _label_version;
 diff --git a/firmware/main/hal/stacky_bridge.cpp b/firmware/main/hal/stacky_bridge.cpp
 new file mode 100644
-index 0000000..9e405cf
+index 0000000..b8f24cb
 --- /dev/null
 +++ b/firmware/main/hal/stacky_bridge.cpp
-@@ -0,0 +1,847 @@
+@@ -0,0 +1,851 @@
 +#include "stacky_bridge.h"
 +
 +#include "hal.h"
@@ -293,7 +293,7 @@ index 0000000..9e405cf
 +namespace {
 +
 +constexpr const char* TAG = "StackyBridge";
-+constexpr const char* STACKY_BRIDGE_VERSION = "official-0.1.11";
++constexpr const char* STACKY_BRIDGE_VERSION = "official-0.1.12";
 +constexpr size_t MIC_FRAME_COUNT = 480;       // 20 ms at 24 kHz
 +constexpr int MIC_WARMUP_DISCARD_FRAMES = 12;
 +constexpr size_t PLAYBACK_CHUNK_SAMPLES = 960;
@@ -890,17 +890,21 @@ index 0000000..9e405cf
 +        const auto angles = GetStackChan().motion().getCurrentAngles();
 +        auto* codec = Board::GetInstance().GetAudioCodec();
 +        const int mic_channels = codec ? std::max(codec->input_channels(), 1) : 1;
++        const int battery_level = std::clamp(static_cast<int>(GetHAL().getBatteryLevel()), 0, 100);
++        const bool battery_charging = GetHAL().isBatteryCharging();
 +        display_brightness_.store(std::clamp(static_cast<int>(GetHAL().getBackLightBrightness()), 1, 100));
-+        char line[560];
++        char line[680];
 +        const int len = std::snprintf(
 +            line,
 +            sizeof(line),
-+            "{\"type\":\"status\",\"payload\":{\"device\":\"stackchan-cores3-official\",\"expression\":\"%s\",\"firmware\":\"%s\",\"speakerVolume\":%d,\"micGain\":%.1f,\"displayBrightness\":%d,\"micChannels\":%d,\"yaw\":%d,\"pitch\":%d,\"centerYaw\":%d,\"centerPitch\":%d,\"wheelsEnabled\":false,\"cameraAvailable\":false},\"ts\":%.3f}\n",
++            "{\"type\":\"status\",\"payload\":{\"device\":\"stackchan-cores3-official\",\"expression\":\"%s\",\"firmware\":\"%s\",\"speakerVolume\":%d,\"micGain\":%.1f,\"displayBrightness\":%d,\"batteryLevel\":%d,\"batteryCharging\":%s,\"micChannels\":%d,\"yaw\":%d,\"pitch\":%d,\"centerYaw\":%d,\"centerPitch\":%d,\"wheelsEnabled\":false,\"cameraAvailable\":false},\"ts\":%.3f}\n",
 +            expression,
 +            STACKY_BRIDGE_VERSION,
 +            output_volume_.load(),
 +            static_cast<float>(input_gain_.load()),
 +            display_brightness_.load(),
++            battery_level,
++            battery_charging ? "true" : "false",
 +            mic_channels,
 +            angles.x,
 +            angles.y,

@@ -204,6 +204,10 @@ def display_brightness(level: int, *, permanent: bool = True) -> BodyCommand:
     )
 
 
+def body_status() -> BodyCommand:
+    return BodyCommand("body.status", {})
+
+
 def vision_capture(*, width: int = 320, height: int = 240, format: str = "jpeg") -> BodyCommand:
     return BodyCommand(
         "vision.capture",

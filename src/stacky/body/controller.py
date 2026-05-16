@@ -12,6 +12,7 @@ from .protocol import (
     audio_chunk,
     audio_end,
     audio_start,
+    body_status,
     display_brightness,
     expression,
     gesture,
@@ -188,6 +189,9 @@ class StackChanBodyController:
 
     def set_display_brightness(self, level: int, *, permanent: bool = True) -> bool:
         return self.send(display_brightness(level, permanent=permanent))
+
+    def request_status(self) -> bool:
+        return self.send(body_status())
 
     def capture_vision_frame(self, *, width: int = 320, height: int = 240, format: str = "jpeg") -> bool:
         return self.send(vision_capture(width=width, height=height, format=format))

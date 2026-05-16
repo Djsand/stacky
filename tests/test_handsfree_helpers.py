@@ -8,6 +8,8 @@ from stacky.cli import (
     _clean_transcript,
     _is_likely_hallucination,
     _parse_calibration_command,
+    _format_battery_status_reply,
+    _parse_battery_status_command,
     _parse_display_brightness_command,
     _parse_local_realtime_reply,
     _parse_motion_command,
@@ -430,6 +432,25 @@ class HandsfreeHelpersTest(unittest.TestCase):
         self.assertEqual(down.direction if down else None, -1)
         self.assertEqual(absolute.level if absolute else None, 35)
         self.assertEqual(followup.level if followup else None, 50)
+
+    def test_parse_battery_status_command(self) -> None:
+        self.assertTrue(_parse_battery_status_command("batteri status="))
+        self.assertTrue(_parse_battery_status_command("hvor meget strom er der"))
+        self.assertFalse(_parse_battery_status_command("status på lyden"))
+
+    def test_format_battery_status_reply(self) -> None:
+        self.assertEqual(
+            _format_battery_status_reply({"batteryLevel": 78, "batteryCharging": True}),
+            "Mit batteri er på 78 procent og jeg oplader.",
+        )
+        self.assertEqual(
+            _format_battery_status_reply({"batteryLevel": 15, "batteryCharging": False}),
+            "Mit batteri er på 15 procent og jeg kører på batteri, så det er lavt.",
+        )
+        self.assertEqual(
+            _format_battery_status_reply({}),
+            "Jeg har ikke fået batteridata fra firmware endnu.",
+        )
 
     def test_parse_stt_bench_aliases(self) -> None:
         self.assertEqual(_parse_stt_bench_spec("roest"), ("wav2vec2", "roest"))

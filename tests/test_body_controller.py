@@ -119,6 +119,20 @@ class BodyControllerRawAudioTest(unittest.TestCase):
         self.assertEqual(sent[0].payload["level"], 35)
         self.assertTrue(sent[0].payload["permanent"])
 
+    def test_controller_sends_status_request_command(self) -> None:
+        sent = []
+        controller = StackChanBodyController()
+
+        def send(command) -> bool:
+            sent.append(command)
+            return True
+
+        controller.send = send  # type: ignore[method-assign]
+
+        self.assertTrue(controller.request_status())
+
+        self.assertEqual(sent[0].type, "body.status")
+
     def test_controller_sends_vision_capture_command(self) -> None:
         sent = []
         controller = StackChanBodyController()
