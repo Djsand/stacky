@@ -70,6 +70,7 @@ def main() -> None:
     sock_file = conn.makefile("rb", buffering=0)
 
     sample_rate = 16000
+    channels = 1
     pcm_chunks: list[bytes] = []
     rms_values: list[int] = []
     peak_values: list[int] = []
@@ -100,6 +101,7 @@ def main() -> None:
             if mtype == "audio.in" and payload.get("transport") == "raw":
                 n = int(payload.get("bytes", 0))
                 sample_rate = int(payload.get("sampleRate", sample_rate))
+                channels = int(payload.get("channels", channels))
                 pcm = read_exact(sock_file, n)
                 if pcm is None:
                     print("[disconnect] peer closed mid-frame")
@@ -110,7 +112,7 @@ def main() -> None:
                 pcm_chunks.append(pcm)
                 frame_count += 1
                 if frame_count % 25 == 0:
-                    captured_sec = (frame_count * (n // 2)) / sample_rate
+                    captured_sec = (frame_count * (n // max(2, channels * 2))) / sample_rate
                     avg_rms = statistics.mean(rms_values[-25:])
                     max_peak = max(peak_values[-25:])
                     clipping = "CLIP" if max_peak >= 32700 else "ok"
@@ -121,7 +123,8 @@ def main() -> None:
             elif mtype == "status":
                 fw = payload.get("firmware", "?")
                 expr = payload.get("expression", "?")
-                print(f"[status] firmware={fw} expression={expr}")
+                mic_channels = payload.get("micChannels", "?")
+                print(f"[status] firmware={fw} expression={expr} micChannels={mic_channels}")
             elif mtype == "touch":
                 print(f"[touch] {payload}")
             else:
@@ -139,11 +142,11 @@ def main() -> None:
 
     total_pcm = b"".join(pcm_chunks)
     with wave.open(args.output, "wb") as wf:
-        wf.setnchannels(1)
+        wf.setnchannels(channels)
         wf.setsampwidth(2)
         wf.setframerate(sample_rate)
         wf.writeframes(total_pcm)
-    duration = len(total_pcm) / 2 / sample_rate
+    duration = len(total_pcm) / max(2, channels * 2) / sample_rate
     elapsed = time.time() - started_at
     print()
     print(f"[wav]      wrote {args.output}  {duration:.2f}s @ {sample_rate} Hz")

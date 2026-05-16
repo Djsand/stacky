@@ -86,6 +86,8 @@ The wav2vec2 default is `CoRal-project/roest-v3-wav2vec2-315m`. First startup is
 
 The hands-free VAD is tuned for the official Stacky bridge: default `--vad-threshold 280`, `--start-speech-ms 120`, and `--min-speech-ms 220`. It rejects sparse clicks and high-frequency noise before STT; use `--debug-audio` to see `[audio] ... reason='højfrekvent støj'` / `klik/percussiv støj` lines.
 
+Firmware `official-0.1.9` streams all StackChan mic input channels. Use `--mic-channel 0` or `--mic-channel 1` in `handsfree` and `stt-capture` to compare channels; `--mic-channel mix` averages them, and `--mic-channel all` keeps multichannel diagnostic WAVs.
+
 Important safety rule while STT is unstable: hands-free voice turns use session context but do not write to the infinite session thread or long-term memory. Trusted text/chat turns persist to `data/stacky/sessions/stacky-infinite-thread.jsonl`; rolled blocks become `stacky-infinite-thread.001.jsonl`, etc.
 
 ## Danish STT Dataset Loop
@@ -96,6 +98,7 @@ Use StackChan itself to capture labelled Danish clips before changing STT models
 .\.venv\Scripts\python.exe -m stacky stt-capture --limit 12 --debug-audio
 .\.venv\Scripts\python.exe -m stacky stt-capture --phrases-file .\artifacts\stt_phrases.txt --noise-count 3 --debug-audio
 .\.venv\Scripts\python.exe -m stacky stt-capture --limit 16 --speech-style normal --speech-style fast --speech-style mumble --noise-count 5 --debug-audio
+.\.venv\Scripts\python.exe -m stacky stt-capture --limit 10 --speech-style normal --noise-count 3 --mic-channel 1 --output-dir .\artifacts\stt_dataset\stackchan-ch1 --debug-audio
 ```
 
 This writes WAV clips plus `artifacts/stt_dataset/stackchan/manifest.jsonl`. Speech clips have the expected Danish sentence; noise clips have an empty expected text so false positives score as errors.
@@ -108,7 +111,7 @@ Run local candidates against the captured dataset:
 .\.venv\Scripts\python.exe -m stacky stt-bench --dataset .\artifacts\stt_dataset\stackchan\manifest.jsonl --engine roest-v3 --engine roest-v2 --include-heavy
 ```
 
-Benchmark output includes load time, inference time, realtime factor, WER, CER, and a JSONL report when `--report` is set.
+Benchmark output includes load time, inference time, realtime factor, WER, CER, per-style summaries, and a JSONL report when `--report` is set. `stt-bench` tests all dataset clips by default; pass `--limit N` only for quick smoke runs.
 
 Stacky's STT benchmark defaults are Danish-specific: Røst v3 315M and Røst v2 315M. Heavy mode adds Røst v2 1B/2B before the non-Røst experimental candidates. Use the `fast`, `mumble`, and `quiet` capture styles to test whether a model handles everyday unclear Danish rather than only clean read-aloud clips.
 

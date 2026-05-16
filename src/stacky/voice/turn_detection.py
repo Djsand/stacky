@@ -37,11 +37,17 @@ class TurnSignalQuality:
             return False
         if self.zero_crossing_rate >= 0.32 and self.active_ratio <= 0.75:
             return False
-        if self.crest_factor >= 28.0 and (self.active_ratio <= 0.20 or self.max_active_run_ms < 120):
+        if self.percussive_noise_like:
             return False
         if self.active_ratio <= 0.12 and self.max_active_run_ms < 180:
             return False
         return self.active_ms >= 220 or self.max_active_run_ms >= 220
+
+    @property
+    def percussive_noise_like(self) -> bool:
+        if self.peak >= 32000 and self.crest_factor >= 24.0 and self.max_active_run_ms <= 160:
+            return True
+        return self.crest_factor >= 28.0 and (self.active_ratio <= 0.35 or self.max_active_run_ms <= 160)
 
     @property
     def reason(self) -> str:
@@ -53,7 +59,7 @@ class TurnSignalQuality:
             return "lavt signal"
         if self.zero_crossing_rate >= 0.45 or (self.zero_crossing_rate >= 0.32 and self.active_ratio <= 0.75):
             return "højfrekvent støj"
-        if self.crest_factor >= 28.0 and (self.active_ratio <= 0.20 or self.max_active_run_ms < 120):
+        if self.percussive_noise_like:
             return "klik/percussiv støj"
         if self.active_ratio <= 0.12 and self.max_active_run_ms < 180:
             return "for lidt sammenhængende tale"

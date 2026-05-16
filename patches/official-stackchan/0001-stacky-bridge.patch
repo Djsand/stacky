@@ -116,41 +116,65 @@ diff --git a/firmware/main/apps/apps.h b/firmware/main/apps/apps.h
 index 77cc9b7..06e2ab4 100644
 --- a/firmware/main/apps/apps.h
 +++ b/firmware/main/apps/apps.h
-@@ -7,0 +8 @@
+@@ -5,6 +5,7 @@
+  */
+ #pragma once
+ #include "app_launcher/app_launcher.h"
 +#include "app_stacky/app_stacky.h"
+ #include "app_ai_agent/app_ai_agent.h"
+ #include "app_avatar/app_avatar.h"
+ #include "app_setup/app_setup.h"
 diff --git a/firmware/main/hal/hal.h b/firmware/main/hal/hal.h
-index 5f9efcf..a5ef1af 100644
+index 5f9efcf..879879c 100644
 --- a/firmware/main/hal/hal.h
 +++ b/firmware/main/hal/hal.h
-@@ -134,0 +135,2 @@ enum class MicTestStatus {
-+inline constexpr const char* STACKY_BOOT_VERSION = "official-0.1.8";
+@@ -132,6 +132,8 @@ enum class MicTestStatus {
+     Failed,
+ };
+ 
++inline constexpr const char* STACKY_BOOT_VERSION = "official-0.1.9";
 +
-@@ -147 +149,2 @@ public:
+ /**
+  * @brief
+  *
+@@ -144,30 +146,77 @@ public:
+         _panel->setSize(320, 240);
+         _panel->setAlign(LV_ALIGN_CENTER);
+         _panel->setBorderWidth(0);
 -        _panel->setBgOpa(0);
 +        _panel->setBgColor(lv_color_hex(0x001510));
 +        _panel->setBgOpa(255);
-@@ -149,0 +153,2 @@ public:
+         _panel->setPaddingAll(0);
+ 
 +        createStackyLogo();
 +
-@@ -152,3 +157,3 @@ public:
+         _label_logo = std::make_unique<uitk::lvgl_cpp::Label>(_panel->get());
+         _label_logo->setTextFont(&lv_font_montserrat_24);
 -        _label_logo->setTextColor(lv_color_hex(0xFFFFFF));
 -        _label_logo->align(LV_ALIGN_CENTER, 0, -14);
 -        _label_logo->setText("STACKCHAN");
 +        _label_logo->setTextColor(lv_color_hex(0xF8F7EA));
 +        _label_logo->align(LV_ALIGN_CENTER, 0, 26);
 +        _label_logo->setText("STACKY");
-@@ -158,2 +163,2 @@ public:
+ 
+         _label_msg = std::make_unique<uitk::lvgl_cpp::Label>(_panel->get());
+         _label_msg->setTextFont(&lv_font_montserrat_16);
 -        _label_msg->setTextColor(lv_color_hex(0xBFBFBF));
 -        _label_msg->align(LV_ALIGN_CENTER, 0, 14);
 +        _label_msg->setTextColor(lv_color_hex(0xA7B9B0));
 +        _label_msg->align(LV_ALIGN_CENTER, 0, 54);
-@@ -164 +169 @@ public:
+         _label_msg->setText("Starting up ...");
+ 
+         _label_version = std::make_unique<uitk::lvgl_cpp::Label>(_panel->get());
+         _label_version->setTextFont(&lv_font_montserrat_14);
 -        _label_version->setTextColor(lv_color_hex(0x8B8B8B));
 +        _label_version->setTextColor(lv_color_hex(0x638176));
-@@ -166 +171 @@ public:
+         _label_version->align(LV_ALIGN_BOTTOM_RIGHT, -7, -6);
 -        _label_version->setText("V" FIRMWARE_VERSION);
 +        _label_version->setText(STACKY_BOOT_VERSION);
-@@ -169,0 +175,39 @@ private:
+     }
+ 
+ private:
 +    void styleLogoPart(uitk::lvgl_cpp::Container& part, uint32_t color, int radius)
 +    {
 +        part.setBorderWidth(0);
@@ -190,15 +214,18 @@ index 5f9efcf..a5ef1af 100644
 +        styleLogoPart(*_logo_right_eye, cut_color, LV_RADIUS_CIRCLE);
 +    }
 +
-@@ -170,0 +215,5 @@ private:
+     std::unique_ptr<uitk::lvgl_cpp::Container> _panel;
 +    std::unique_ptr<uitk::lvgl_cpp::Container> _logo_tail;
 +    std::unique_ptr<uitk::lvgl_cpp::Container> _logo_body;
 +    std::unique_ptr<uitk::lvgl_cpp::Container> _logo_chin;
 +    std::unique_ptr<uitk::lvgl_cpp::Container> _logo_left_eye;
 +    std::unique_ptr<uitk::lvgl_cpp::Container> _logo_right_eye;
+     std::unique_ptr<uitk::lvgl_cpp::Label> _label_logo;
+     std::unique_ptr<uitk::lvgl_cpp::Label> _label_msg;
+     std::unique_ptr<uitk::lvgl_cpp::Label> _label_version;
 diff --git a/firmware/main/hal/stacky_bridge.cpp b/firmware/main/hal/stacky_bridge.cpp
 new file mode 100644
-index 0000000..cec9ff1
+index 0000000..197c944
 --- /dev/null
 +++ b/firmware/main/hal/stacky_bridge.cpp
 @@ -0,0 +1,793 @@
@@ -266,7 +293,7 @@ index 0000000..cec9ff1
 +namespace {
 +
 +constexpr const char* TAG = "StackyBridge";
-+constexpr const char* STACKY_BRIDGE_VERSION = "official-0.1.8";
++constexpr const char* STACKY_BRIDGE_VERSION = "official-0.1.9";
 +constexpr size_t MIC_FRAME_COUNT = 480;       // 20 ms at 24 kHz
 +constexpr int MIC_WARMUP_DISCARD_FRAMES = 12;
 +constexpr size_t PLAYBACK_CHUNK_SAMPLES = 960;
@@ -688,7 +715,6 @@ index 0000000..cec9ff1
 +    void micTask()
 +    {
 +        std::vector<int16_t> input;
-+        std::vector<int16_t> mono;
 +        bool input_enabled_by_bridge = false;
 +        int warmup_frames_remaining = 0;
 +
@@ -718,7 +744,6 @@ index 0000000..cec9ff1
 +
 +            const int input_channels = std::max(codec->input_channels(), 1);
 +            input.resize(MIC_FRAME_COUNT * input_channels);
-+            mono.resize(MIC_FRAME_COUNT);
 +
 +            xSemaphoreTake(audio_mutex_, portMAX_DELAY);
 +            if (!codec->input_enabled()) {
@@ -739,22 +764,21 @@ index 0000000..cec9ff1
 +                continue;
 +            }
 +
-+            for (size_t i = 0; i < MIC_FRAME_COUNT; ++i) {
-+                mono[i] = input[i * input_channels];
-+            }
-+            sendAudioIn(mono.data(), mono.size());
++            sendAudioIn(input.data(), MIC_FRAME_COUNT, input_channels);
 +        }
 +    }
 +
-+    void sendAudioIn(const int16_t* samples, size_t sample_count)
++    void sendAudioIn(const int16_t* samples, size_t frame_count, int channels)
 +    {
 +        char header[256];
-+        const size_t byte_count = sample_count * sizeof(int16_t);
++        channels = std::max(channels, 1);
++        const size_t byte_count = frame_count * static_cast<size_t>(channels) * sizeof(int16_t);
 +        const int len = std::snprintf(
 +            header,
 +            sizeof(header),
-+            "{\"type\":\"audio.in\",\"payload\":{\"encoding\":\"pcm16le\",\"transport\":\"raw\",\"sampleRate\":%d,\"channels\":1,\"bytes\":%u},\"ts\":%.3f}\n",
++            "{\"type\":\"audio.in\",\"payload\":{\"encoding\":\"pcm16le\",\"transport\":\"raw\",\"sampleRate\":%d,\"channels\":%d,\"bytes\":%u},\"ts\":%.3f}\n",
 +            AUDIO_INPUT_SAMPLE_RATE,
++            channels,
 +            static_cast<unsigned>(byte_count),
 +            now_seconds());
 +        if (len <= 0 || static_cast<size_t>(len) >= sizeof(header)) {
@@ -812,15 +836,18 @@ index 0000000..cec9ff1
 +    void sendStatus(const char* expression)
 +    {
 +        const auto angles = GetStackChan().motion().getCurrentAngles();
-+        char line[420];
++        auto* codec = Board::GetInstance().GetAudioCodec();
++        const int mic_channels = codec ? std::max(codec->input_channels(), 1) : 1;
++        char line[460];
 +        const int len = std::snprintf(
 +            line,
 +            sizeof(line),
-+            "{\"type\":\"status\",\"payload\":{\"device\":\"stackchan-cores3-official\",\"expression\":\"%s\",\"firmware\":\"%s\",\"speakerVolume\":%d,\"micGain\":%.1f,\"yaw\":%d,\"pitch\":%d,\"centerYaw\":%d,\"centerPitch\":%d,\"wheelsEnabled\":false},\"ts\":%.3f}\n",
++            "{\"type\":\"status\",\"payload\":{\"device\":\"stackchan-cores3-official\",\"expression\":\"%s\",\"firmware\":\"%s\",\"speakerVolume\":%d,\"micGain\":%.1f,\"micChannels\":%d,\"yaw\":%d,\"pitch\":%d,\"centerYaw\":%d,\"centerPitch\":%d,\"wheelsEnabled\":false},\"ts\":%.3f}\n",
 +            expression,
 +            STACKY_BRIDGE_VERSION,
 +            output_volume_.load(),
 +            STACKY_MIC_INPUT_GAIN,
++            mic_channels,
 +            angles.x,
 +            angles.y,
 +            center_yaw_.load(),
@@ -1015,7 +1042,10 @@ diff --git a/firmware/main/main.cpp b/firmware/main/main.cpp
 index 164a751..e6c28d4 100644
 --- a/firmware/main/main.cpp
 +++ b/firmware/main/main.cpp
-@@ -29,9 +29,3 @@ extern "C" void app_main(void)
+@@ -26,15 +26,9 @@ extern "C" void app_main(void)
+     ui_hal::on_delay([](uint32_t ms) { GetHAL().delay(ms); });
+     ui_hal::on_get_tick([]() { return GetHAL().millis(); });
+ 
 -    // Install apps
 -    GetMooncake().installApp(std::make_unique<AppLauncher>());
 -    GetMooncake().installApp(std::make_unique<AppAiAgent>());
@@ -1028,3 +1058,6 @@ index 164a751..e6c28d4 100644
 +    // Stacky firmware variant: boot directly into the local Stacky body app.
 +    const int stacky_app_id = GetMooncake().installApp(std::make_unique<AppStacky>());
 +    GetMooncake().openApp(stacky_app_id);
+ 
+     // Main loop
+     while (1) {

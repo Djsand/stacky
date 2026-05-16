@@ -3,7 +3,7 @@ from __future__ import annotations
 import math
 import unittest
 
-from stacky.voice.turn_detection import EnergyTurnDetector, analyze_turn_signal, pcm16_rms
+from stacky.voice.turn_detection import EnergyTurnDetector, TurnSignalQuality, analyze_turn_signal, pcm16_rms
 
 
 def pcm_sample(value: int, count: int) -> bytes:
@@ -71,6 +71,24 @@ class TurnDetectionTest(unittest.TestCase):
 
         self.assertFalse(quality.speech_like)
         self.assertIn(quality.reason, {"klik/percussiv støj", "for lidt sammenhængende tale"})
+
+    def test_signal_quality_rejects_clipped_percussive_noise(self) -> None:
+        quality = TurnSignalQuality(
+            duration_seconds=4.82,
+            median_rms=250,
+            p80_rms=520,
+            p95_rms=2200,
+            peak=32768,
+            active_ratio=0.29,
+            active_ms=1400,
+            max_active_run_ms=120,
+            crest_factor=40.0,
+            active_threshold=520,
+            zero_crossing_rate=0.2,
+        )
+
+        self.assertFalse(quality.speech_like)
+        self.assertEqual(quality.reason, "klik/percussiv støj")
 
     def test_signal_quality_rejects_high_frequency_noise(self) -> None:
         quality = analyze_turn_signal(pcm_tone(5000, 1.0), sample_rate=16000)

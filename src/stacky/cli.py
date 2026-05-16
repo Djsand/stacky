@@ -29,6 +29,7 @@ from .voice.output import (
     create_stackchan_supertonic_output,
     create_supertonic_output,
 )
+from .voice.channels import select_pcm16_channel
 from .voice.supertonic_tts import SupertonicVoice, supertonic_voice_preset
 from .voice.runtime import LocalTextVoiceRuntime
 from .voice.stt import STTResult, create_danish_stt, resolve_stt_model_name, write_pcm_wav
@@ -76,6 +77,12 @@ def main(argv: list[str] | None = None) -> int:
     handsfree.add_argument("--start-speech-ms", type=int, default=120, help="Continuous speech needed before a turn starts.")
     handsfree.add_argument("--end-silence-ms", type=int, default=850, help="Silence duration that ends a voice turn.")
     handsfree.add_argument("--min-speech-ms", type=int, default=220, help="Minimum voiced audio before accepting a turn.")
+    handsfree.add_argument(
+        "--mic-channel",
+        choices=("0", "1", "mix", "all"),
+        default="0",
+        help="StackChan input channel to use after firmware capture. 'all' keeps multichannel WAVs for diagnostics.",
+    )
     handsfree.add_argument("--listen-only", action="store_true", help="Only print StackChan STT results; do not call the brain or TTS.")
     handsfree.add_argument("--debug-audio", action="store_true", help="Print live StackChan mic RMS/peak while listening.")
     handsfree.add_argument(
@@ -124,12 +131,18 @@ def main(argv: list[str] | None = None) -> int:
     stt_capture.add_argument("--start-speech-ms", type=int, default=120, help="Continuous speech needed before a turn starts.")
     stt_capture.add_argument("--end-silence-ms", type=int, default=850, help="Silence duration that ends a voice turn.")
     stt_capture.add_argument("--min-speech-ms", type=int, default=220, help="Minimum voiced audio before accepting a turn.")
+    stt_capture.add_argument(
+        "--mic-channel",
+        choices=("0", "1", "mix", "all"),
+        default="0",
+        help="StackChan input channel to record. Use 0 and 1 in separate captures to compare mic channels.",
+    )
     stt_capture.add_argument("--debug-audio", action="store_true", help="Print accepted/rejected signal quality while capturing.")
     stt_bench = sub.add_parser("stt-bench", help="Benchmark local Danish STT models on saved StackChan WAV turns.")
     stt_bench.add_argument("--audio", action="append", default=[], help="WAV file, directory, or glob. Defaults to artifacts/handsfree_turns/*.wav.")
     stt_bench.add_argument("--dataset", default="", help="JSONL/TSV manifest from stt-capture. Provides expected text for scoring.")
     stt_bench.add_argument("--engine", action="append", default=[], help="Model spec: roest, roest-v2, roest-v2-1b, roest-v2-2b, qwen3, saga, milo, or engine:model.")
-    stt_bench.add_argument("--limit", type=int, default=8, help="Maximum number of WAV files to test.")
+    stt_bench.add_argument("--limit", type=int, default=0, help="Maximum number of WAV files to test. 0 tests all.")
     stt_bench.add_argument("--include-heavy", action="store_true", help="Also test heavier Qwen3-ASR candidates.")
     stt_bench.add_argument("--refs", default="", help="Optional tab-separated references file: wav_filename<TAB>expected text.")
     stt_bench.add_argument("--report", default="", help="Optional JSONL report output path.")
@@ -253,6 +266,7 @@ def main(argv: list[str] | None = None) -> int:
                 start_speech_ms=args.start_speech_ms,
                 end_silence_ms=args.end_silence_ms,
                 min_speech_ms=args.min_speech_ms,
+                mic_channel=args.mic_channel,
                 speaker=args.speaker,
                 tts_engine=args.tts_engine,
                 supertonic_profile=args.supertonic_profile,
@@ -285,6 +299,7 @@ def main(argv: list[str] | None = None) -> int:
                 start_speech_ms=args.start_speech_ms,
                 end_silence_ms=args.end_silence_ms,
                 min_speech_ms=args.min_speech_ms,
+                mic_channel=args.mic_channel,
                 debug_audio=args.debug_audio,
             )
         )
@@ -340,6 +355,36 @@ _STT_SPEC_ALIASES = {
 }
 
 
+@dataclass
+class _SttBenchStats:
+    count: int = 0
+    scored: int = 0
+    total_audio: float = 0.0
+    total_infer: float = 0.0
+    wer_sum: float = 0.0
+    cer_sum: float = 0.0
+
+    def add(self, *, duration: float, infer_seconds: float, wer: float | None, cer: float | None) -> None:
+        self.count += 1
+        self.total_audio += duration
+        self.total_infer += infer_seconds
+        if wer is not None:
+            self.scored += 1
+            self.wer_sum += wer
+        if cer is not None:
+            self.cer_sum += cer
+
+    def summary(self, label: str) -> str:
+        rtf = self.total_infer / max(self.total_audio, 0.001)
+        line = (
+            f"  {label}: count={self.count} scored={self.scored} "
+            f"audio={self.total_audio:.2f}s infer={self.total_infer:.2f}s rtf={rtf:.2f}"
+        )
+        if self.scored:
+            line += f" mean_wer={self.wer_sum / self.scored:.1%} mean_cer={self.cer_sum / self.scored:.1%}"
+        return line
+
+
 async def _stt_bench(
     *,
     audio_patterns: list[str],
@@ -363,8 +408,9 @@ async def _stt_bench(
     scored_count = sum(1 for item in items if item.expected_text is not None)
     print(f"Benchmarking {len(items)} StackChan WAV file(s), scored={scored_count}.", flush=True)
     for item in items:
+        style = f" [{item.speech_style}]" if item.speech_style else ""
         expected = "" if item.expected_text is None else f" :: ref={item.expected_text!r}"
-        print(f"- {item.audio_path}{expected}", flush=True)
+        print(f"- {item.audio_path}{style}{expected}", flush=True)
 
     for engine, requested_model in specs:
         model_name = resolve_stt_model_name(engine, requested_model)
@@ -379,10 +425,8 @@ async def _stt_bench(
         load_seconds = time.perf_counter() - started
         print(f"  load={load_seconds:.2f}s", flush=True)
 
-        total_audio = 0.0
-        total_infer = 0.0
-        wer_values: list[float] = []
-        cer_values: list[float] = []
+        total_stats = _SttBenchStats()
+        style_stats: dict[str, _SttBenchStats] = {}
         for item in items:
             path = item.audio_path
             started = time.perf_counter()
@@ -393,8 +437,6 @@ async def _stt_bench(
                 continue
             infer_seconds = time.perf_counter() - started
             duration = max(result.audio.duration_seconds, 0.001)
-            total_audio += duration
-            total_infer += infer_seconds
             rtf = infer_seconds / duration
             expected = item.expected_text
             score = ""
@@ -403,9 +445,15 @@ async def _stt_bench(
             if expected is not None:
                 wer = word_error_rate(expected, result.text)
                 cer = char_error_rate(expected, result.text)
-                wer_values.append(wer)
-                cer_values.append(cer)
                 score = f" wer={wer:.1%} cer={cer:.1%}"
+            total_stats.add(duration=duration, infer_seconds=infer_seconds, wer=wer, cer=cer)
+            style_label = item.speech_style or "unlabeled"
+            style_stats.setdefault(style_label, _SttBenchStats()).add(
+                duration=duration,
+                infer_seconds=infer_seconds,
+                wer=wer,
+                cer=cer,
+            )
             print(
                 f"  {path.name}: dur={duration:.2f}s infer={infer_seconds:.2f}s "
                 f"rtf={rtf:.2f} logprob={result.avg_logprob:.2f}{score} :: {result.text}",
@@ -423,13 +471,11 @@ async def _stt_bench(
                     cer=cer,
                 )
 
-        if total_audio > 0 and total_infer > 0:
-            summary = f"  total_audio={total_audio:.2f}s total_infer={total_infer:.2f}s rtf={total_infer / total_audio:.2f}"
-            if wer_values:
-                summary += f" mean_wer={sum(wer_values) / len(wer_values):.1%}"
-            if cer_values:
-                summary += f" mean_cer={sum(cer_values) / len(cer_values):.1%}"
-            print(summary, flush=True)
+        if total_stats.count:
+            print(total_stats.summary("total"), flush=True)
+            if len(style_stats) > 1:
+                for style_label in sorted(style_stats):
+                    print(style_stats[style_label].summary(f"style[{style_label}]"), flush=True)
     if report_file is not None:
         print(f"\nReport: {report_file}", flush=True)
     return 0
@@ -450,6 +496,7 @@ async def _stt_capture(
     start_speech_ms: int,
     end_silence_ms: int,
     min_speech_ms: int,
+    mic_channel: str,
     debug_audio: bool,
 ) -> int:
     config = load_config(config_path)
@@ -480,6 +527,11 @@ async def _stt_capture(
             pcm, sample_rate, channels = decode_pcm_payload(event.payload)
         except ValueError as exc:
             print(f"[StackChan] bad audio.in: {exc}", flush=True)
+            return
+        try:
+            pcm, channels = select_pcm16_channel(pcm, channels=channels, selection=mic_channel)
+        except ValueError as exc:
+            print(f"[StackChan] bad mic channel: {exc}", flush=True)
             return
         if debug_audio:
             rms = pcm16_rms(pcm)
@@ -520,6 +572,7 @@ async def _stt_capture(
     address = controller.client_address
     where = f"{address[0]}:{address[1]}" if address else "StackChan"
     print(f"StackChan connected from {where}", flush=True)
+    print(f"Using StackChan mic channel: {mic_channel}", flush=True)
     selected_styles = _resolve_capture_speech_styles(speech_styles)
     capture_items = [
         (_capture_prompt_for_style(phrase, style), phrase, False, style)
@@ -971,6 +1024,7 @@ async def _handsfree(
     stackchan_volume: int,
     reply_chars: int,
     detail_reply_chars: int,
+    mic_channel: str,
     listen_only: bool,
     debug_audio: bool,
 ) -> int:
@@ -1009,6 +1063,11 @@ async def _handsfree(
             pcm, sample_rate, channels = decode_pcm_payload(event.payload)
         except ValueError as exc:
             print(f"[StackChan] bad audio.in: {exc}", flush=True)
+            return
+        try:
+            pcm, channels = select_pcm16_channel(pcm, channels=channels, selection=mic_channel)
+        except ValueError as exc:
+            print(f"[StackChan] bad mic channel: {exc}", flush=True)
             return
         if debug_audio or listen_only:
             rms = pcm16_rms(pcm)
@@ -1049,6 +1108,7 @@ async def _handsfree(
     address = controller.client_address
     where = f"{address[0]}:{address[1]}" if address else "StackChan"
     print(f"StackChan connected from {where}", flush=True)
+    print(f"Using StackChan mic channel: {mic_channel}", flush=True)
     body_director = BodyDirector(controller, body_calibration)
     body_director.apply_calibration()
 

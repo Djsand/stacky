@@ -2,24 +2,30 @@
 
 ## Current Snapshot
 
-Updated 2026-05-16 after adding the STT dataset/benchmark loop.
+Updated 2026-05-16 after the STT benchmark and dual-channel official firmware pass.
 
 - Branch: `official-firmware-base`
 - Latest branch head: run `git log --oneline -1` after pull.
 - Recent implementation commits:
+  - latest: Add dual-channel mic STT diagnostics
+  - `efcff5c Fix VAD noise floor endpointing`
+  - `f50b3b3 Prioritize Danish Røst STT evaluation`
   - `ac5cd41 Add StackChan STT dataset benchmark loop`
   - `2a26d35 Add Stacky infinite sessions and safe memory gating`
 - Remote: `origin https://github.com/Djsand/stacky.git`
 - Push status: `official-firmware-base` pushed to `origin`
-- Local `git status --short`: clean after resetting the official submodule.
+- Local `git status --short`: expected to show only `m vendor/m5stack-stackchan` while the official patch is applied for build/flash.
 - To recreate the Stacky firmware files on another PC, run `.\scripts\apply-official-firmware-patch.ps1`. The script initializes `vendor/m5stack-stackchan` and applies `patches/official-stackchan/0001-stacky-bridge.patch`.
 - No live hands-free server should be assumed running.
 
 Latest verification:
 
-- `.\.venv\Scripts\python.exe -m unittest discover -s tests` -> `106 OK`
+- `.\.venv\Scripts\python.exe -m unittest discover -s tests` -> `114 OK`
 - `.\.venv\Scripts\python.exe -m pip check` -> no broken requirements
-- `git diff --check` / `git diff --cached --check` -> clean when run before commit
+- `git diff --check -- . ':!patches/official-stackchan/0001-stacky-bridge.patch'` -> clean apart from CRLF warnings. The patch file itself contains normal unified-diff context blank lines that `git diff --check` reports as trailing whitespace when treating the patch as a text file.
+- ESP-IDF build passed via `S:\` / `I:\`.
+- Flash to `COM3` passed for `official-0.1.9`.
+- `scripts\mic_listener.py --output artifacts\official_019_dual_channel_smoke.wav --seconds 6` connected and reported `firmware=official-0.1.9`, `micChannels=2`.
 
 Runtime state:
 
@@ -35,8 +41,23 @@ Next engineering priority:
    - `python -m stacky stt-capture --limit 12 --debug-audio`
    - `python -m stacky stt-capture --phrases-file .\artifacts\stt_phrases.txt --noise-count 3 --debug-audio`
    - `python -m stacky stt-bench --dataset .\artifacts\stt_dataset\stackchan\manifest.jsonl --report .\artifacts\stt_dataset\stt-report.jsonl`
-3. Fix input quality/session trust first: Danish STT is still unstable enough that StackChan voice must remain an untrusted source.
-4. Once STT is reliable, flip hands-free voice from untrusted to trusted session persistence deliberately, with a test.
+3. Capture and benchmark channel 1 separately before changing more ASR code:
+   - `python -m stacky stt-capture --limit 10 --speech-style normal --speech-style fast --speech-style mumble --noise-count 5 --mic-channel 1 --output-dir .\artifacts\stt_dataset\stackchan-ch1 --debug-audio`
+   - `python -m stacky stt-bench --dataset .\artifacts\stt_dataset\stackchan-ch1\manifest.jsonl --engine roest-v3 --report .\artifacts\stt_dataset\stt-ch1-roest-v3.jsonl`
+4. Fix input quality/session trust first: Danish STT is still unstable enough that StackChan voice must remain an untrusted source.
+5. Once STT is reliable, flip hands-free voice from untrusted to trusted session persistence deliberately, with a test.
+
+## Latest STT/Mic Channel Update
+
+- The user captured 35 StackChan clips: 10 normal, 10 fast, 10 mumble, 5 noise.
+- `stt-bench` now tests all clips by default (`--limit 0`) and prints per-`speechStyle` summaries.
+- Røst v3 on the full channel-0 dataset: `mean_wer=72.2%`, `mean_cer=49.5%`, `rtf=0.15`. This is not usable for daily voice.
+- Røst v2 315M/1B/2B were also poor on the first 8 normal clips; bigger Røst did not fix it.
+- Qwen3-ASR 0.6B was tested in an isolated venv at `C:\Users\nicol\.stacky-qwen-asr` to avoid main-venv dependency conflicts. On the first 10 normal channel-0 clips it produced `mean_wer=100.0%`, `mean_cer=71.5%`, and was slower than Røst after warm-up.
+- Conclusion: do not keep swapping models blindly. The current evidence points to StackChan audio/channel quality or mic-path selection. Official firmware now streams both input channels so channel 1 can be measured.
+- `TurnSignalQuality` now rejects clipped/percussive noise with `peak>=32000`, high crest factor, and short active runs.
+- `handsfree` and `stt-capture` accept `--mic-channel 0|1|mix|all`; default remains `0` for backward compatibility.
+- `scripts/mic_listener.py` now handles multichannel WAV output and prints `micChannels` from status.
 
 ## Latest Session And Memory Update
 
@@ -73,8 +94,8 @@ Active body base:
 - Official submodule: `vendor/m5stack-stackchan`
 - Repro patch: `patches/official-stackchan/0001-stacky-bridge.patch`
 - Patch apply script: `scripts/apply-official-firmware-patch.ps1`
-- Latest body patch: official StackChan `1.4.1` with `AppStacky` and bridge `official-0.1.8`
-- Bridge `official-0.1.8` includes `body.look_at`, `body.gesture`, runtime `body.motion_config` head calibration, and Stacky-branded boot screen. Default social center is `yaw=90`, `pitch=260`.
+- Latest body patch: official StackChan `1.4.1` with `AppStacky` and bridge `official-0.1.9`
+- Bridge `official-0.1.9` includes `body.look_at`, `body.gesture`, runtime `body.motion_config` head calibration, dual-channel mic streaming, and Stacky-branded boot screen. Default social center is `yaw=90`, `pitch=260`.
 - PC body server: `192.168.50.208:8765`
 - StackChan IP in tests: `192.168.50.2`
 
@@ -87,7 +108,7 @@ Firmware variant changes:
 - `StackyBridge` now sets CoreS3 codec output volume to 100 during playback.
 - `StackyBridge` now accepts `audio.volume`, reports `speakerVolume`, uses mic gain 60, and drops the first 12 mic frames after input enable to avoid clipped warmup transients.
 - `StackyBridge` now accepts `body.motion_config` and reports `centerYaw` / `centerPitch`.
-- Boot screen now says `STACKY`, shows `official-0.1.8`, and uses a small LVGL-drawn Stacky logo mark.
+- Boot screen now says `STACKY`, shows `official-0.1.9`, and uses a small LVGL-drawn Stacky logo mark.
 - Python StackChan TTS output has tunable loudness: `--stackchan-target-rms` and `--stackchan-max-gain` default to `9000` / `4.0`.
 - Handsfree catches Danish volume commands before the LLM, e.g. `skru op`, `skru ned`, `sæt volumen til 60 procent`.
 - Handsfree catches Danish center calibration commands before the LLM: `lidt mere til højre`, `lidt mere til venstre`, `lidt op`, `lidt ned`, `gem den her position som center`.
@@ -97,7 +118,7 @@ Firmware variant changes:
 
 Bridge support:
 
-- `audio.in` raw PCM16 mono at 24 kHz from StackChan to PC
+- `audio.in` raw PCM16 at 24 kHz from StackChan to PC; firmware `official-0.1.9` sends all codec input channels and Python selects `--mic-channel`.
 - `audio.start` / binary `audio.raw` / `audio.end` playback from PC to StackChan
 - `audio.tone`, `audio.stop`, `audio.hold`, `body.status`, `body.set_expression`, `body.look_at`, `body.gesture`, `body.motion_config`
 
@@ -132,7 +153,7 @@ Important: opening `COM3` with `scripts/serial_log.py` resets the CoreS3 via USB
 
 ## Stop Point
 
-Stop here after official Stacky app variant `official-0.1.8`. The old custom Arduino speaker-crash investigation is no longer the active path unless the same failure reproduces on official firmware.
+Stop here after official Stacky app variant `official-0.1.9`. The old custom Arduino speaker-crash investigation is no longer the active path unless the same failure reproduces on official firmware.
 
 ## Current Direction
 
@@ -158,7 +179,7 @@ Do not import or reuse Moss identity, Moss memories, Moss sessions, or the Moss 
 - StackChan IP seen during tests: `192.168.50.2`
 - PC IP used during tests: `192.168.50.208`
 - USB serial seen during tests: `/dev/cu.usbmodem1101` or `cu.usbmodem101` on Mac, `COM3` on Windows
-- Latest body patch version: official StackChan `1.4.1` with `AppStacky` / Stacky bridge `official-0.1.8`
+- Latest body patch version: official StackChan `1.4.1` with `AppStacky` / Stacky bridge `official-0.1.9`
 
 The old custom Arduino firmware remains as fallback/reference. The active hardware path is official ESP-IDF firmware; old speaker-crash assumptions should be re-tested before using them.
 

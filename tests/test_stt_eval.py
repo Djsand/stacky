@@ -72,6 +72,16 @@ class STTEvalTest(unittest.TestCase):
 
         self.assertEqual(paths, [new.resolve()])
 
+    def test_resolve_audio_inputs_limit_zero_returns_all(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            first = write_pcm_wav(root / "first.wav", b"\x00\x00" * 160, sample_rate=16000)
+            second = write_pcm_wav(root / "second.wav", b"\x01\x00" * 160, sample_rate=16000)
+
+            paths = resolve_audio_inputs([str(root)], default_pattern="", limit=0)
+
+        self.assertEqual(set(paths), {first.resolve(), second.resolve()})
+
     def test_apply_references_accepts_empty_reference_for_noise_clip(self) -> None:
         item = STTDatasetItem(Path("noise.wav"), expected_text=None)
 
