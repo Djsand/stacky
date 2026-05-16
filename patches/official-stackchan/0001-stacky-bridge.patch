@@ -125,14 +125,14 @@ index 77cc9b7..06e2ab4 100644
  #include "app_avatar/app_avatar.h"
  #include "app_setup/app_setup.h"
 diff --git a/firmware/main/hal/hal.h b/firmware/main/hal/hal.h
-index 5f9efcf..0b53a45 100644
+index 5f9efcf..8c6065c 100644
 --- a/firmware/main/hal/hal.h
 +++ b/firmware/main/hal/hal.h
 @@ -132,6 +132,8 @@ enum class MicTestStatus {
      Failed,
  };
  
-+inline constexpr const char* STACKY_BOOT_VERSION = "official-0.1.11";
++inline constexpr const char* STACKY_BOOT_VERSION = "official-0.1.12";
 +
  /**
   * @brief
