@@ -208,7 +208,15 @@ def body_status() -> BodyCommand:
     return BodyCommand("body.status", {})
 
 
-def vision_capture(*, width: int = 320, height: int = 240, format: str = "jpeg", quality: int = 20) -> BodyCommand:
+def vision_capture(
+    *,
+    width: int = 320,
+    height: int = 240,
+    format: str = "jpeg",
+    quality: int = 50,
+    discard_frames: int = 4,
+    settle_ms: int = 30,
+) -> BodyCommand:
     return BodyCommand(
         "vision.capture",
         {
@@ -216,6 +224,8 @@ def vision_capture(*, width: int = 320, height: int = 240, format: str = "jpeg",
             "height": max(64, min(720, int(height))),
             "format": format,
             "quality": max(5, min(80, int(quality))),
+            "discardFrames": max(0, min(12, int(discard_frames))),
+            "settleMs": max(0, min(250, int(settle_ms))),
         },
     )
 

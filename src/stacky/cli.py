@@ -237,7 +237,11 @@ def main(argv: list[str] | None = None) -> int:
     camera_test.add_argument("--frame-timeout", type=float, default=8.0, help="Seconds to wait for a camera frame.")
     camera_test.add_argument("--width", type=int, default=320, help="Requested frame width metadata.")
     camera_test.add_argument("--height", type=int, default=240, help="Requested frame height metadata.")
-    camera_test.add_argument("--quality", type=int, default=20, help="JPEG quality from 5 to 80. Lower is smaller/faster.")
+    camera_test.add_argument("--quality", type=int, default=50, help="JPEG quality from 5 to 80. Lower is smaller/faster.")
+    camera_test.add_argument("--discard-frames", type=int, default=4, help="Frames to discard before saving a capture.")
+    camera_test.add_argument("--settle-ms", type=int, default=30, help="Delay between discarded camera frames.")
+    camera_test.add_argument("--count", type=int, default=1, help="Number of frames to capture.")
+    camera_test.add_argument("--delay-ms", type=int, default=250, help="Delay between captures when --count is above 1.")
     camera_test.add_argument(
         "--output",
         default=str(ROOT / "artifacts" / "vision" / "stackchan-latest.jpg"),
@@ -299,6 +303,10 @@ def main(argv: list[str] | None = None) -> int:
                 width=args.width,
                 height=args.height,
                 quality=args.quality,
+                discard_frames=args.discard_frames,
+                settle_ms=args.settle_ms,
+                count=args.count,
+                delay_ms=args.delay_ms,
                 output=args.output,
             )
         )
@@ -1197,17 +1205,22 @@ async def _camera_test(
     width: int,
     height: int,
     quality: int,
+    discard_frames: int,
+    settle_ms: int,
+    count: int,
+    delay_ms: int,
     output: str,
 ) -> int:
     config = load_config(config_path)
     loop = asyncio.get_running_loop()
-    frame_future: asyncio.Future[dict[str, object]] = loop.create_future()
+    frame_future: asyncio.Future[dict[str, object]] | None = None
 
     def on_event(event) -> None:
+        nonlocal frame_future
         if event.type == "status":
             print(f"[StackChan] status: {event.payload}", flush=True)
             return
-        if event.type == "vision.frame" and not frame_future.done():
+        if event.type == "vision.frame" and frame_future is not None and not frame_future.done():
             loop.call_soon_threadsafe(frame_future.set_result, dict(event.payload))
 
     controller = StackChanBodyController(port=config.stackchan.port, on_event=on_event)
@@ -1222,39 +1235,89 @@ async def _camera_test(
         where = f"{address[0]}:{address[1]}" if address else "StackChan"
         print(f"StackChan connected from {where}", flush=True)
         controller.set_expression("thinking")
-        print(f"Requesting camera frame {width}x{height} quality={quality}.", flush=True)
-        if not controller.capture_vision_frame(width=width, height=height, quality=quality):
-            print("Failed to send vision.capture.", flush=True)
-            return 1
-
-        try:
-            payload = await asyncio.wait_for(frame_future, timeout=frame_timeout)
-        except TimeoutError:
-            print("Timed out waiting for vision.frame.", flush=True)
-            return 1
-
-        if not bool(payload.get("available", False)):
-            print(f"Camera unavailable: {payload.get('reason', 'unknown')}", flush=True)
-            return 1
-
-        try:
-            jpeg = decode_vision_frame_payload(payload)
-        except ValueError as exc:
-            print(f"Invalid vision frame: {exc}", flush=True)
-            return 1
-
         output_path = Path(output)
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        output_path.write_bytes(jpeg)
-        print(
-            f"Saved camera frame: {output_path} "
-            f"({payload.get('width')}x{payload.get('height')}, {len(jpeg)} bytes).",
-            flush=True,
-        )
+        capture_count = max(1, int(count))
+
+        for index in range(capture_count):
+            frame_future = loop.create_future()
+            print(
+                f"Requesting camera frame {index + 1}/{capture_count} "
+                f"{width}x{height} quality={quality} discard={discard_frames} settle={settle_ms}ms.",
+                flush=True,
+            )
+            if not controller.capture_vision_frame(
+                width=width,
+                height=height,
+                quality=quality,
+                discard_frames=discard_frames,
+                settle_ms=settle_ms,
+            ):
+                print("Failed to send vision.capture.", flush=True)
+                return 1
+
+            try:
+                payload = await asyncio.wait_for(frame_future, timeout=frame_timeout)
+            except TimeoutError:
+                print("Timed out waiting for vision.frame.", flush=True)
+                return 1
+
+            if not bool(payload.get("available", False)):
+                print(f"Camera unavailable: {payload.get('reason', 'unknown')}", flush=True)
+                return 1
+
+            try:
+                jpeg = decode_vision_frame_payload(payload)
+            except ValueError as exc:
+                print(f"Invalid vision frame: {exc}", flush=True)
+                return 1
+
+            frame_path = output_path
+            if capture_count > 1:
+                frame_path = output_path.with_name(f"{output_path.stem}-{index + 1:02d}{output_path.suffix}")
+            frame_path.write_bytes(jpeg)
+            metadata = {key: value for key, value in payload.items() if key != "data"}
+            frame_path.with_suffix(".json").write_text(
+                json.dumps(metadata, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            print(
+                f"Saved camera frame: {frame_path} "
+                f"({payload.get('width')}x{payload.get('height')}, jpeg={len(jpeg)} bytes, "
+                f"source={_fourcc(payload.get('sourceFormat'))}/{payload.get('sourceBytes')} bytes, "
+                f"stats={_image_stats(frame_path)}).",
+                flush=True,
+            )
+            if index + 1 < capture_count and delay_ms > 0:
+                await asyncio.sleep(delay_ms / 1000)
+
         controller.set_expression("happy")
         return 0
     finally:
         controller.stop()
+
+
+def _fourcc(value: object) -> str:
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return str(value)
+    chars = "".join(chr((number >> shift) & 0xFF) for shift in (0, 8, 16, 24))
+    printable = "".join(char if 32 <= ord(char) <= 126 else "." for char in chars)
+    return f"{printable}/0x{number:08x}"
+
+
+def _image_stats(path: Path) -> str:
+    try:
+        from PIL import Image, ImageStat
+
+        with Image.open(path) as image:
+            stat = ImageStat.Stat(image.convert("RGB"))
+        mean = ",".join(f"{value:.1f}" for value in stat.mean)
+        extrema = ",".join(f"{low}-{high}" for low, high in stat.extrema)
+        return f"mean={mean} range={extrema}"
+    except Exception:
+        return "n/a"
 
 
 async def _handsfree(

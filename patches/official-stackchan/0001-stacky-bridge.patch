@@ -125,14 +125,14 @@ index 77cc9b7..06e2ab4 100644
  #include "app_avatar/app_avatar.h"
  #include "app_setup/app_setup.h"
 diff --git a/firmware/main/hal/hal.h b/firmware/main/hal/hal.h
-index 5f9efcf..2157ce0 100644
+index 5f9efcf..8b506eb 100644
 --- a/firmware/main/hal/hal.h
 +++ b/firmware/main/hal/hal.h
 @@ -132,6 +132,8 @@ enum class MicTestStatus {
      Failed,
  };
  
-+inline constexpr const char* STACKY_BOOT_VERSION = "official-0.1.14";
++inline constexpr const char* STACKY_BOOT_VERSION = "official-0.1.15";
 +
  /**
   * @brief
@@ -225,10 +225,10 @@ index 5f9efcf..2157ce0 100644
      std::unique_ptr<uitk::lvgl_cpp::Label> _label_version;
 diff --git a/firmware/main/hal/stacky_bridge.cpp b/firmware/main/hal/stacky_bridge.cpp
 new file mode 100644
-index 0000000..ffd86db
+index 0000000..d45f096
 --- /dev/null
 +++ b/firmware/main/hal/stacky_bridge.cpp
-@@ -0,0 +1,967 @@
+@@ -0,0 +1,980 @@
 +#include "stacky_bridge.h"
 +
 +#include "hal.h"
@@ -297,7 +297,7 @@ index 0000000..ffd86db
 +namespace {
 +
 +constexpr const char* TAG = "StackyBridge";
-+constexpr const char* STACKY_BRIDGE_VERSION = "official-0.1.14";
++constexpr const char* STACKY_BRIDGE_VERSION = "official-0.1.15";
 +constexpr size_t MIC_FRAME_COUNT = 480;       // 20 ms at 24 kHz
 +constexpr int MIC_WARMUP_DISCARD_FRAMES = 12;
 +constexpr size_t PLAYBACK_CHUNK_SAMPLES = 960;
@@ -883,9 +883,16 @@ index 0000000..ffd86db
 +            sendVisionUnavailable("camera_unavailable");
 +            return;
 +        }
-+        if (!camera->StreamCaptures()) {
-+            sendVisionUnavailable("camera_capture_failed");
-+            return;
++        const int discard_frames = std::clamp(payload["discardFrames"] | 4, 0, 12);
++        const int settle_ms      = std::clamp(payload["settleMs"] | 30, 0, 250);
++        for (int i = 0; i <= discard_frames; ++i) {
++            if (!camera->StreamCaptures()) {
++                sendVisionUnavailable("camera_capture_failed");
++                return;
++            }
++            if (i < discard_frames && settle_ms > 0) {
++                vTaskDelay(pdMS_TO_TICKS(settle_ms));
++            }
 +        }
 +
 +        const uint8_t* frame_data = camera->GetFrameData();
@@ -893,7 +900,7 @@ index 0000000..ffd86db
 +        const int width           = camera->GetFrameWidth();
 +        const int height          = camera->GetFrameHeight();
 +        const int format          = camera->GetFrameFormat();
-+        const int quality         = std::clamp(payload["quality"] | 20, 5, 80);
++        const int quality         = std::clamp(payload["quality"] | 50, 5, 80);
 +        if (!frame_data || frame_size == 0 || width <= 0 || height <= 0) {
 +            sendVisionUnavailable("camera_empty_frame");
 +            return;
@@ -932,7 +939,7 @@ index 0000000..ffd86db
 +        free(jpeg_data);
 +
 +        std::string line;
-+        line.reserve(jpeg_base64.size() + 280);
++        line.reserve(jpeg_base64.size() + 360);
 +        line += "{\"type\":\"vision.frame\",\"payload\":{\"available\":true,\"format\":\"jpeg\",\"encoding\":\"base64\",\"width\":";
 +        line += std::to_string(width);
 +        line += ",\"height\":";
@@ -943,6 +950,12 @@ index 0000000..ffd86db
 +        line += std::to_string(jpeg_size);
 +        line += ",\"sourceFormat\":";
 +        line += std::to_string(format);
++        line += ",\"sourceBytes\":";
++        line += std::to_string(frame_size);
++        line += ",\"discardFrames\":";
++        line += std::to_string(discard_frames);
++        line += ",\"settleMs\":";
++        line += std::to_string(settle_ms);
 +        line += ",\"data\":\"";
 +        line += jpeg_base64;
 +        line += "\"},\"ts\":";

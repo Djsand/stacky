@@ -116,7 +116,9 @@ class BodyProtocolTest(unittest.TestCase):
         self.assertEqual(command.payload["width"], 64)
         self.assertEqual(command.payload["height"], 720)
         self.assertEqual(command.payload["format"], "jpeg")
-        self.assertEqual(command.payload["quality"], 20)
+        self.assertEqual(command.payload["quality"], 50)
+        self.assertEqual(command.payload["discardFrames"], 4)
+        self.assertEqual(command.payload["settleMs"], 30)
 
     def test_vision_capture_command_clamps_quality(self) -> None:
         command = vision_capture(quality=100)
