@@ -2,14 +2,16 @@
 
 ## Current Snapshot
 
-Updated 2026-05-16 after the StackChan channel-0/STT input hotfix and third STT research pass.
+Updated 2026-05-16 after the hands-free memory/personality and motion-control pass.
 
 - Branch: `official-firmware-base`
 - Latest branch head: run `git log --oneline -1` after pull.
 - Recent implementation work:
   - Stacky-native personality/self-model at `data/stacky/personality/`, inspired by the proven Moss architecture but with no Moss identity, memory, session, or name import.
   - `stacky self-status` shows continuity, Nicolai-model, trusted style notes, and convictions.
-  - Trusted text/chat turns can evolve style notes and convictions. Untrusted StackChan voice turns still do not write long-term memory or session history, and now also cannot create personality rules.
+  - Trusted text/chat turns can evolve style notes and convictions.
+  - Accepted StackChan hands-free turns now default to trusted session persistence and safe memory/personality writes. Use `--voice-trust session-only` for context-only logging or `--voice-trust off` for old untrusted STT debugging.
+  - Local hands-free commands such as volume, calibration, motion, and pause are recorded into the infinite session without an extra brain-model call.
   - Danish STT hotwords, live transcript correction, stricter clipped-noise gate, benchmark live-gate mode.
   - StackChan firmware `official-0.1.10` with PC-controlled mic gain.
   - Handsfree/capture default `--mic-channel 0`; official CoreS3 sends the real mic on channel 0 and a reference/noise path on channel 1.
@@ -17,6 +19,8 @@ Updated 2026-05-16 after the StackChan channel-0/STT input hotfix and third STT 
   - Follow-up VAD fix: high-frequency mic noise is no longer allowed to start a voice turn or train the noise floor. Sustained noisy speech can still reach STT if it contains enough low-ZCR voice-band frames.
   - Roest STT loading is cache-first. `transformers` uses `local_files_only=True` first and only falls back to Hugging Face when the model is missing locally.
   - Live replies now default to 2-3 concrete Danish sentences and explicitly avoid generic endings such as "hvad har du på hjerte" unless useful.
+  - Brain prompt now treats StackChan wireless/battery/audio/mic comments as Stacky's own body status, not Nicolai's body.
+  - Body director is calmer: no automatic `look_up` during thinking, slower listening recenter, and a smaller less frequent nod on happy.
   - Short spoken fallback when the brain endpoint is down, so TTS does not read a long exception.
   - `body-server` now parses raw `audio.in` frames safely and no longer sends a status feedback loop.
   - `efcff5c Fix VAD noise floor endpointing`
@@ -31,7 +35,7 @@ Updated 2026-05-16 after the StackChan channel-0/STT input hotfix and third STT 
 
 Latest verification:
 
-- `.\.venv\Scripts\python.exe -m pytest tests` -> `133 passed`
+- `.\.venv\Scripts\python.exe -m pytest tests` -> `157 passed`
 - `.\.venv\Scripts\python.exe -m pip check` -> no broken requirements
 - `git diff --check -- . ':!patches/official-stackchan/0001-stacky-bridge.patch'` -> clean apart from CRLF warnings. The patch file itself contains normal unified-diff context blank lines that `git diff --check` reports as trailing whitespace when treating the patch as a text file.
 - ESP-IDF build passed via `S:\` / `I:\`.
@@ -65,8 +69,14 @@ Next engineering priority:
 5. Capture and benchmark channel 1 separately before changing more ASR code:
    - `python -m stacky stt-capture --limit 10 --speech-style normal --speech-style fast --speech-style mumble --noise-count 5 --mic-channel 1 --output-dir .\artifacts\stt_dataset\stackchan-ch1 --debug-audio`
    - `python -m stacky stt-bench --dataset .\artifacts\stt_dataset\stackchan-ch1\manifest.jsonl --engine roest-v3 --report .\artifacts\stt_dataset\stt-ch1-roest-v3.jsonl`
-6. Voice remains an untrusted session source. Do not write handsfree transcripts into memory/infinite sessions until live STT is stable across normal daily speech.
-7. Once STT is reliable, flip hands-free voice from untrusted to trusted session persistence deliberately, with a test.
+6. Continue personality + voice tuning before adding more agent skills:
+   - tune Supertonic profile/voice/speed/steps/silence in `voice-lab` and then test through StackChan speaker.
+   - inspect `python -m stacky self-status` after live conversation to verify style notes/memory are evolving from real trusted turns.
+7. Next body-control backlog, after personality/voice feels stable:
+   - battery status, screen brightness, speaker volume/mic gain commands.
+   - top LEDs, touch surface, NFC events.
+   - richer face states and speaking/listening mouth animation.
+8. Agent skills and Sandcode integration come after the body/personality foundation is stable.
 
 ## Latest Mic/STT Hotfix
 
