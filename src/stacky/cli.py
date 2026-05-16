@@ -1156,15 +1156,10 @@ async def _motion_test(config_path: str, *, body_timeout: float, gesture_name: s
     try:
         calibration = load_body_calibration(config.data_dir)
         BodyDirector(controller, calibration).apply_calibration()
+        actor = BodyDirector(controller, calibration)
         controller.set_expression("happy")
-        if gesture_name == "demo":
-            sequence = ["center", "look_left", "look_right", "look_up", "look_down", "nod", "shake", "center"]
-        else:
-            sequence = [gesture_name]
-        for name in sequence:
-            print(f"Motion: {name}", flush=True)
-            controller.gesture(name, speed=speed)
-            await asyncio.sleep(0.75 if name in {"nod", "shake"} else 0.45)
+        print(f"Motion: {gesture_name}", flush=True)
+        _run_motion_gesture(actor, gesture_name, speed=speed)
         controller.set_expression("listening")
         return 0
     finally:
@@ -1498,17 +1493,17 @@ async def _handsfree(
                 continue
             motion_command = _parse_motion_command(text)
             if motion_command is not None:
-                reply_started = time.perf_counter()
-                ok = _run_motion_gesture(body_director or controller, motion_command.gesture)
-                reply_seconds = time.perf_counter() - reply_started
-                print(f"[Stacky] motion={motion_command.gesture} ok={ok}", flush=True)
-                set_body_state("happy")
                 speak_started = time.perf_counter()
-                spoken_reply = motion_command.spoken if ok else "Jeg kunne ikke bevæge hovedet lige nu."
+                controller.set_expression("happy")
+                spoken_reply = motion_command.spoken
                 record_local_turn(text, spoken_reply)
                 await output.speak(spoken_reply)
                 await output.wait()
                 speak_seconds = time.perf_counter() - speak_started
+                reply_started = time.perf_counter()
+                ok = _run_motion_gesture(body_director or controller, motion_command.gesture)
+                reply_seconds = time.perf_counter() - reply_started
+                print(f"[Stacky] motion={motion_command.gesture} ok={ok}", flush=True)
                 print(
                     f"[timing] stt={stt_seconds:.2f}s command={reply_seconds:.2f}s "
                     f"tts_send={speak_seconds:.2f}s total={time.perf_counter() - pipeline_started:.2f}s",
@@ -1873,21 +1868,30 @@ class BrightnessCommand:
 def _run_motion_gesture(actor: BodyDirector | StackChanBodyController | None, gesture_name: str, *, speed: int = 550) -> bool:
     if actor is None:
         return False
+    profiles = {
+        "center": (0.12, min(speed, 200)),
+        "look_left": (0.16, min(speed, 220)),
+        "look_right": (0.16, min(speed, 220)),
+        "look_up": (0.12, min(speed, 200)),
+        "look_down": (0.12, min(speed, 200)),
+        "nod": (0.12, min(speed, 210)),
+        "shake": (0.10, min(speed, 190)),
+    }
     if gesture_name == "demo":
-        sequence = ["center", "look_left", "look_right", "look_up", "look_down", "nod", "shake", "center"]
+        sequence = ["center", "look_left", "center", "look_right", "center", "look_up", "look_down", "nod", "shake", "center"]
     elif gesture_name == "dance":
-        sequence = ["look_left", "look_right", "look_left", "look_right", "nod", "shake", "center"]
-        speed = max(speed, 680)
+        sequence = ["look_left", "center", "look_right", "center", "nod", "center"]
     else:
         sequence = [gesture_name]
     ok = True
     for index, name in enumerate(sequence):
-        ok = actor.gesture(name, speed=speed) and ok
+        intensity, step_speed = profiles.get(name, (0.12, min(speed, 220)))
+        ok = actor.gesture(name, intensity=intensity, speed=step_speed) and ok
         if index + 1 < len(sequence):
             time.sleep(
-                0.18
-                if gesture_name == "dance" and name not in {"nod", "shake"}
-                else 0.28 if name not in {"nod", "shake"} else 0.55
+                0.36
+                if gesture_name == "dance"
+                else 0.34 if name not in {"nod", "shake"} else 0.62
             )
     return ok
 
@@ -1928,7 +1932,7 @@ def _parse_motion_command(text: str) -> MotionCommand | None:
     if _has_brightness_context(key):
         return None
     if "dans" in key:
-        return MotionCommand("dance", "Okay, jeg danser lidt.")
+        return MotionCommand("dance", "Okay.")
     if any(token in key for token in ("provnoget", "provenbevaegelse", "bevaegdig", "bevaegelsekommando", "bevaegelseskommando")):
         return MotionCommand("demo", "Okay, jeg prøver en bevægelse.")
     if "nik" in lowered or "nod" in key:
@@ -2069,6 +2073,7 @@ _VOLUME_WORDS = {
 def _parse_volume_command(text: str, *, current_level: int) -> tuple[int, str] | None:
     lowered = text.lower()
     key = _transcript_key(lowered)
+    compact = _motion_text_key(lowered)
     if not key:
         return None
     current_level = _clamp_volume_level(current_level)
@@ -2078,7 +2083,10 @@ def _parse_volume_command(text: str, *, current_level: int) -> tuple[int, str] |
         level = _clamp_volume_level(int(directional_level.group(1)))
         return level, f"Okay, min volumen er nu {level} procent."
 
-    explicit_level = re.search(r"\b(?:sæt|saet|set|juster|justerer|justere|skru|skrue)\b.*\btil\s+(\d{1,3})\b", lowered)
+    explicit_level = re.search(
+        r"\b(?:sæt|saet|set|juster|justerer|justere|skru|skrue|kronet|krone|skole)\b.*\btil\s+(\d{1,3})\b",
+        lowered,
+    )
     if explicit_level:
         level = _clamp_volume_level(int(explicit_level.group(1)))
         return level, f"Okay, min volumen er nu {level} procent."
@@ -2099,7 +2107,7 @@ def _parse_volume_command(text: str, *, current_level: int) -> tuple[int, str] |
             "justerer",
             "justere",
         )
-    )
+    ) or any(token in compact for token in ("lyd", "lydstyrk", "volumen", "volume"))
     if not volume_context:
         return None
 
@@ -2128,6 +2136,8 @@ def _parse_volume_command(text: str, *, current_level: int) -> tuple[int, str] |
     if (
         any(phrase in lowered for phrase in ("skru ned", "skru lidt ned", "skru en smule ned", "lavere", "dæmp", "daemp", "mindre lyd", "for høj", "for hoj"))
         or re.search(r"\bskru(?:e)?\b.*\bned\b", lowered)
+        or ("lydstyrk" in compact and "ned" in compact)
+        or ("skole" in compact and "lyd" in compact and "ned" in compact)
     ):
         step = 35 if any(word in lowered for word in ("meget", "langt", "længere", "laengere", "mindre")) else 15
         level = _clamp_volume_level(current_level - step)

@@ -15,6 +15,7 @@ from stacky.cli import (
     _parse_volume_command,
     _resolve_capture_speech_styles,
     _resolve_stt_bench_specs,
+    _run_motion_gesture,
     _transcript_key,
     _voice_memory_policy,
     _word_error_rate,
@@ -22,6 +23,15 @@ from stacky.cli import (
 from stacky.voice.stt import AudioStats, STTResult
 from stacky.voice.transcript_correction import correct_danish_transcript
 from stacky.voice.turn_detection import TurnSignalQuality
+
+
+class FakeMotionActor:
+    def __init__(self) -> None:
+        self.gestures: list[tuple[str, float, int]] = []
+
+    def gesture(self, name: str, *, intensity: float = 1.0, speed: int = 500) -> bool:
+        self.gestures.append((name, intensity, speed))
+        return True
 
 
 class HandsfreeHelpersTest(unittest.TestCase):
@@ -123,6 +133,16 @@ class HandsfreeHelpersTest(unittest.TestCase):
 
     def test_parse_volume_command_directional_absolute_level(self) -> None:
         self.assertEqual(_parse_volume_command("du ned til 65", current_level=80), (65, "Okay, min volumen er nu 65 procent."))
+
+    def test_parse_volume_command_from_live_stt_mishearings(self) -> None:
+        self.assertEqual(
+            _parse_volume_command("det ser bedre udbrede at skole lydstyrken ned", current_level=80),
+            (65, "Okay, jeg skruer ned til 65 procent."),
+        )
+        self.assertEqual(
+            _parse_volume_command("nej det virkede ikke kronet til 65", current_level=80),
+            (65, "Okay, min volumen er nu 65 procent."),
+        )
 
     def test_parse_volume_command_much_further_down(self) -> None:
         self.assertEqual(
@@ -374,6 +394,13 @@ class HandsfreeHelpersTest(unittest.TestCase):
         self.assertEqual((_parse_motion_command("nik med hovedet") or None).gesture, "nod")
         self.assertEqual((_parse_motion_command("prøv en bevægelse") or None).gesture, "demo")
         self.assertIsNone(_parse_motion_command("skru op"))
+
+    def test_motion_gesture_uses_restrained_physical_profile(self) -> None:
+        actor = FakeMotionActor()
+
+        self.assertTrue(_run_motion_gesture(actor, "shake", speed=900))
+
+        self.assertEqual(actor.gestures, [("shake", 0.10, 190)])
 
     def test_corrected_partial_motion_phrase_reaches_parser(self) -> None:
         text = correct_danish_transcript("lidt til hojre").text
