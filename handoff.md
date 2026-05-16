@@ -13,45 +13,15 @@ Do not import or reuse Moss identity, Moss memories, Moss sessions, or the Moss 
 ## Current Status
 
 - Python package: `src/stacky`
-- Firmware: `firmware/stacky_cores3` (now version `0.3.20`)
+- Firmware: `firmware/stacky_cores3` (now version `0.3.19`)
 - Tests: `tests`
 - Body server port: `8765`
 - StackChan IP seen during tests: `192.168.50.2`
 - PC IP used during tests: `192.168.50.208`
 - USB serial seen during tests: `/dev/cu.usbmodem1101` or `cu.usbmodem101` on Mac, `COM3` on Windows
 - Latest flashed firmware version: `0.3.19`
-- Latest built firmware version on Windows after pull: `0.3.20`
 
 The mic now captures speech reliably. The Danish wav2vec2 STT transcribes correctly. LM Studio brain generates natural Danish replies. Supertonic TTS synthesizes WAV files. The StackChan speaker streaming is the only remaining blocker.
-
-## Windows Follow-Up 2026-05-16
-
-Pulled `origin/main` on Windows after the Mac-side handoff update. Two local uncommitted changes (`cli.py` debug audio counter and `output.py` ffmpeg fallback) were already included in the remote commit, so the duplicate stash was dropped.
-
-### Firmware 0.3.20 - speaker playback strategy change
-
-Changed the main streamed Stacky speech path from `M5.Speaker.playWav()` to the same basic strategy used by the M5Unified CoreS3 microphone example:
-
-1. Stop/pause mic for shared I2S.
-2. Begin speaker.
-3. Play raw PCM via `M5.Speaker.playRaw(...)`.
-4. Block until `M5.Speaker.isPlaying()` becomes false.
-5. End speaker.
-6. Release audio buffer, send `audio.play_done`, then return to listening.
-
-Reason: CoreS3 docs and M5Unified examples explicitly treat mic and speaker as non-simultaneous. The earlier async `playWav()` path kept the firmware event loop alive while the speaker task held a pointer to the audio buffer, which gave more room for I2S and buffer-lifetime races. This is less realtime, but should be a safer no-reboot baseline.
-
-Verified on Windows:
-
-```powershell
-.\.venv\Scripts\python.exe -m unittest discover -s tests
-# 57 tests OK
-
-.\.venv\Scripts\pio.exe run -d firmware\stacky_cores3
-# build success
-```
-
-Not yet flashed/tested on hardware after this change.
 
 ## Mac/Windows Workflow (NEW)
 

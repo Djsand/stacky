@@ -354,12 +354,13 @@ bool wrapAudioOutAsWav() {
 
 bool playBufferedAudioOut() {
   size_t pcmBytes = audioOutLen - (audioOutLen % sizeof(int16_t));
+  if (!wrapAudioOutAsWav()) {
+    return false;
+  }
   prepareSpeakerForAudio(audioOutSampleRate);
-  bool ok = M5.Speaker.playRaw(
-    reinterpret_cast<const int16_t*>(audioOutBytes),
-    pcmBytes / sizeof(int16_t),
-    audioOutSampleRate,
-    false,
+  bool ok = M5.Speaker.playWav(
+    audioOutBytes,
+    audioOutLen,
     1,
     0,
     true
@@ -367,36 +368,17 @@ bool playBufferedAudioOut() {
   if (ok) {
     audioPlayCounter++;
     markAudioPlaybackStarted(pcmBytes);
-    Serial.printf(
-      "audio.play raw blocking id=%u pcm16Bytes=%u rate=%u playing=%s volume=%u\n",
-      static_cast<unsigned>(audioPlayCounter),
-      static_cast<unsigned>(pcmBytes),
-      static_cast<unsigned>(audioOutSampleRate),
-      M5.Speaker.isPlaying() ? "true" : "false",
-      static_cast<unsigned>(M5.Speaker.getVolume())
-    );
-    while (M5.Speaker.isPlaying()) {
-      M5.update();
-      delay(1);
-    }
-    Serial.printf("audio.play raw completed id=%u\n", static_cast<unsigned>(audioPlayCounter));
-    M5.Speaker.end();
-    audioPlaying = false;
-    audioPlaybackDeadlineMs = 0;
-    releaseAudioOut();
-    showStatusLine("Lytter", TFT_YELLOW);
-    sendAudioPlaybackDone("finished");
-    return true;
   }
   Serial.printf(
-    "audio.play raw ok=%s pcm16Bytes=%u rate=%u playing=%s volume=%u\n",
+    "audio.play wav ok=%s pcm16Bytes=%u wavBytes=%u rate=%u playing=%s volume=%u\n",
     ok ? "true" : "false",
     static_cast<unsigned>(pcmBytes),
+    static_cast<unsigned>(audioOutLen),
     static_cast<unsigned>(audioOutSampleRate),
     M5.Speaker.isPlaying() ? "true" : "false",
     static_cast<unsigned>(M5.Speaker.getVolume())
   );
-  return false;
+  return ok;
 }
 
 void handleAudioOut(const String& line) {
@@ -631,6 +613,7 @@ void handleAudioEnd() {
     static_cast<unsigned>(audioOutCapacity)
   );
   if (audioChunkDropped == 0 && playBufferedAudioOut()) {
+    audioPlaying = true;
     return;
   }
   stopAudioPlayback();
