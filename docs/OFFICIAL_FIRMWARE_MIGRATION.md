@@ -16,6 +16,43 @@ The goal is not to import any old identity or memory. Stacky remains a fresh loc
 - Official firmware builds on this PC after applying the official XiaoZhi patch manually and building through short drive aliases.
 - Official firmware was flashed to CoreS3 on `COM3`.
 - Boot was serial-logged for 25 seconds without a reboot. Log: `artifacts/official_firmware_boot.log`.
+- Stacky bridge v0.1 has been added as a local patch on top of official firmware.
+- Repro patch: `patches/official-stackchan/0001-stacky-bridge.patch`
+- Latest flashed body version: official StackChan `1.4.1` plus Stacky bridge `official-0.1.0`.
+
+## Stacky Bridge V0.1
+
+The first official-firmware customization is intentionally small. It keeps the existing Python body-controller protocol so the PC runtime does not need a rewrite before we validate hardware stability.
+
+Changed official firmware files:
+
+- `firmware/main/main.cpp`
+- `firmware/main/hal/stacky_bridge.h`
+- `firmware/main/hal/stacky_bridge.cpp`
+
+The bridge reads local Wi-Fi/host config from `stacky_local_config.h` when present, otherwise from the existing gitignored `firmware/stacky_cores3/include/wifi_secrets.h` compatibility header.
+
+Supported protocol:
+
+- `audio.in`: raw PCM16 mono mic frames at 24 kHz from StackChan to PC
+- `audio.start` / binary `audio.raw` / `audio.end`: buffered PCM16 playback from PC to StackChan
+- `audio.tone`: local firmware-generated tone for speaker smoke tests
+- `audio.stop`, `audio.hold`, `body.status`, `body.set_expression`
+
+Validated locally:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\mic_listener.py --output artifacts\official_bridge_mic.wav --seconds 25
+# captured 24.94s @ 24000 Hz, 1247 frames, no clipping
+
+.\.venv\Scripts\python.exe -m stacky speaker-tone --body-timeout 45 --frequency 880 --duration-ms 350
+# command returned success
+
+.\.venv\Scripts\python.exe -m stacky speaker-test --body-timeout 45 --tts-engine supertonic --text "Hej Nicolai. Det her er official Stacky firmware. Jeg taler gennem StackChan nu."
+# command returned success
+```
+
+Note: opening `COM3` with `scripts/serial_log.py` resets CoreS3. A serial log that begins with `rst:0x15 (USB_UART_CHIP_RESET)` after playback is not evidence of an audio crash.
 
 ## Why Switch Bases
 
@@ -89,6 +126,13 @@ esp_err_t I2cDevice::TryReadRegs(uint8_t reg, uint8_t* buffer, size_t length, in
 ```
 
 After that, `idf.py build` completed and produced `build\stack-chan.bin` plus `build\generated_assets.bin`.
+
+Apply Stacky's local official-firmware bridge patch from the parent repo:
+
+```powershell
+Set-Location C:\Users\nicol\stackchan\vendor\m5stack-stackchan
+git apply ..\..\patches\official-stackchan\0001-stacky-bridge.patch
+```
 
 Flash command used:
 
@@ -168,11 +212,11 @@ Fast fallback path:
 
 ## Immediate Next Steps
 
-1. Install ESP-IDF v5.5.4 on this PC or build from another machine that already has ESP-IDF.
-2. Build and flash untouched official firmware.
-3. Validate official mic/speaker with the built-in mic test.
-4. If audio is stable, add the smallest Stacky-local bridge on top of official firmware.
-5. Only after the body transport is stable, return to STT/TTS quality tuning.
+1. Get Nicolai's subjective confirmation of the latest official bridge speaker output.
+2. If speaker output is audible and stable, run `handsfree --listen-only --debug-audio --body-timeout 45` against official firmware and test Danish speech capture.
+3. If listen-only is acceptable, run full `handsfree --tts-engine supertonic --speaker stackchan` against official firmware.
+4. If playback is choppy or silent, improve `stacky_bridge.cpp` playback buffering before touching STT/TTS.
+5. Only after the body transport is stable, return to Danish STT/TTS quality tuning.
 
 ## Decision Rule
 

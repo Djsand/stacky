@@ -1,0 +1,612 @@
+diff --git a/firmware/main/hal/stacky_bridge.cpp b/firmware/main/hal/stacky_bridge.cpp
+new file mode 100644
+index 0000000..6a8f164
+--- /dev/null
++++ b/firmware/main/hal/stacky_bridge.cpp
+@@ -0,0 +1,570 @@
++#include "stacky_bridge.h"
++
++#include "hal.h"
++#include "hal/board/config.h"
++#include "utils/wifi_connect/wifi_station.h"
++
++#include <ArduinoJson.h>
++#include <audio/audio_codec.h>
++#include <board.h>
++#include <esp_heap_caps.h>
++#include <esp_log.h>
++#include <esp_timer.h>
++#include <freertos/FreeRTOS.h>
++#include <freertos/semphr.h>
++#include <freertos/task.h>
++#include <lwip/errno.h>
++#include <lwip/inet.h>
++#include <lwip/netdb.h>
++#include <lwip/sockets.h>
++
++#include <algorithm>
++#include <atomic>
++#include <cmath>
++#include <cstring>
++#include <memory>
++#include <string>
++#include <vector>
++
++#if __has_include("stacky_local_config.h")
++#include "stacky_local_config.h"
++#elif __has_include("../../../../../firmware/stacky_cores3/include/wifi_secrets.h")
++#include "../../../../../firmware/stacky_cores3/include/wifi_secrets.h"
++#endif
++
++#ifndef STACKY_WIFI_SSID
++#ifdef WIFI_SSID
++#define STACKY_WIFI_SSID WIFI_SSID
++#else
++#define STACKY_WIFI_SSID ""
++#endif
++#endif
++
++#ifndef STACKY_WIFI_PASSWORD
++#ifdef WIFI_PASSWORD
++#define STACKY_WIFI_PASSWORD WIFI_PASSWORD
++#else
++#define STACKY_WIFI_PASSWORD ""
++#endif
++#endif
++
++#ifndef STACKY_HOST
++#define STACKY_HOST ""
++#endif
++
++#ifndef STACKY_PORT
++#define STACKY_PORT 8765
++#endif
++
++namespace {
++
++constexpr const char* TAG = "StackyBridge";
++constexpr const char* STACKY_BRIDGE_VERSION = "official-0.1.0";
++constexpr size_t MIC_FRAME_COUNT = 480;       // 20 ms at 24 kHz
++constexpr size_t PLAYBACK_CHUNK_SAMPLES = 960;
++constexpr double TWO_PI = 6.2831853071795864769;
++
++double now_seconds()
++{
++    return static_cast<double>(esp_timer_get_time()) / 1000000.0;
++}
++
++bool config_available()
++{
++    return std::strlen(STACKY_WIFI_SSID) > 0 && std::strlen(STACKY_HOST) > 0;
++}
++
++}  // namespace
++
++class StackyBridgeImpl : public StackyBridge {
++public:
++    void start() override
++    {
++        if (started_.exchange(true)) {
++            return;
++        }
++        send_mutex_  = xSemaphoreCreateMutex();
++        audio_mutex_ = xSemaphoreCreateMutex();
++        xTaskCreatePinnedToCore(&StackyBridgeImpl::mainTaskThunk, "stacky_bridge", 8192, this, 4, nullptr, 0);
++        xTaskCreatePinnedToCore(&StackyBridgeImpl::micTaskThunk, "stacky_mic", 8192, this, 5, nullptr, 1);
++    }
++
++private:
++    std::atomic<bool> started_{false};
++    std::atomic<bool> connected_{false};
++    std::atomic<bool> audio_hold_{false};
++    std::atomic<bool> playback_active_{false};
++    SemaphoreHandle_t send_mutex_  = nullptr;
++    SemaphoreHandle_t audio_mutex_ = nullptr;
++    std::unique_ptr<StackChanWifiStation> wifi_;
++    int socket_ = -1;
++    std::string rx_line_;
++    std::vector<int16_t> playback_samples_;
++    int playback_sample_rate_ = AUDIO_OUTPUT_SAMPLE_RATE;
++    int playback_channels_    = 1;
++
++    static void mainTaskThunk(void* arg)
++    {
++        static_cast<StackyBridgeImpl*>(arg)->mainTask();
++    }
++
++    static void micTaskThunk(void* arg)
++    {
++        static_cast<StackyBridgeImpl*>(arg)->micTask();
++    }
++
++    void mainTask()
++    {
++        if (!config_available()) {
++            ESP_LOGW(TAG, "Stacky bridge disabled: missing WiFi or host config");
++            vTaskDelete(nullptr);
++            return;
++        }
++
++        ESP_LOGI(TAG, "Stacky bridge starting: host=%s port=%d", STACKY_HOST, STACKY_PORT);
++
++        while (true) {
++            if (!ensureWifi()) {
++                vTaskDelay(pdMS_TO_TICKS(3000));
++                continue;
++            }
++            if (!connectToStacky()) {
++                vTaskDelay(pdMS_TO_TICKS(1500));
++                continue;
++            }
++
++            connected_.store(true);
++            sendStatus("connected");
++            commandLoop();
++            connected_.store(false);
++            audio_hold_.store(false);
++            playback_active_.store(false);
++            closeSocket();
++            vTaskDelay(pdMS_TO_TICKS(1200));
++        }
++    }
++
++    bool ensureWifi()
++    {
++        if (!wifi_) {
++            wifi_ = std::make_unique<StackChanWifiStation>();
++            wifi_->OnConnected([](const std::string& ssid) { ESP_LOGI(TAG, "WiFi connected: %s", ssid.c_str()); });
++            wifi_->OnConnectFailed([](const std::string& ssid) { ESP_LOGW(TAG, "WiFi connect failed: %s", ssid.c_str()); });
++            wifi_->Start();
++            wifi_->SetPowerSaveMode(false);
++        }
++
++        if (wifi_->IsConnected()) {
++            return true;
++        }
++
++        ESP_LOGI(TAG, "Connecting WiFi SSID=%s", STACKY_WIFI_SSID);
++        wifi_->AddAuth(STACKY_WIFI_SSID, STACKY_WIFI_PASSWORD);
++        return wifi_->WaitForConnected(15000);
++    }
++
++    bool connectToStacky()
++    {
++        struct sockaddr_in dest = {};
++        dest.sin_family         = AF_INET;
++        dest.sin_port           = htons(STACKY_PORT);
++        if (inet_pton(AF_INET, STACKY_HOST, &dest.sin_addr) != 1) {
++            ESP_LOGE(TAG, "Invalid Stacky host: %s", STACKY_HOST);
++            return false;
++        }
++
++        int sock = socket(AF_INET, SOCK_STREAM, IPPROTO_IP);
++        if (sock < 0) {
++            ESP_LOGE(TAG, "socket() failed errno=%d", errno);
++            return false;
++        }
++
++        timeval timeout = {};
++        timeout.tv_sec  = 0;
++        timeout.tv_usec = 120000;
++        setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
++
++        ESP_LOGI(TAG, "Connecting Stacky at %s:%d", STACKY_HOST, STACKY_PORT);
++        if (connect(sock, reinterpret_cast<sockaddr*>(&dest), sizeof(dest)) != 0) {
++            ESP_LOGW(TAG, "Stacky connect failed errno=%d", errno);
++            close(sock);
++            return false;
++        }
++
++        xSemaphoreTake(send_mutex_, portMAX_DELAY);
++        socket_ = sock;
++        xSemaphoreGive(send_mutex_);
++        ESP_LOGI(TAG, "Stacky TCP connected");
++        return true;
++    }
++
++    void commandLoop()
++    {
++        while (connected_.load()) {
++            std::string line;
++            const ReadResult result = readLine(line);
++            if (result == ReadResult::Disconnected) {
++                break;
++            }
++            if (result == ReadResult::LineReady) {
++                handleCommand(line);
++            }
++        }
++    }
++
++    enum class ReadResult {
++        NoLine,
++        LineReady,
++        Disconnected,
++    };
++
++    ReadResult readLine(std::string& line)
++    {
++        char ch = 0;
++        int ret = recv(socket_, &ch, 1, 0);
++        if (ret == 1) {
++            if (ch == '\n') {
++                line.swap(rx_line_);
++                rx_line_.clear();
++                return ReadResult::LineReady;
++            }
++            if (rx_line_.size() < 4096) {
++                rx_line_.push_back(ch);
++            } else {
++                rx_line_.clear();
++            }
++            return ReadResult::NoLine;
++        }
++        if (ret == 0) {
++            return ReadResult::Disconnected;
++        }
++        if (errno == EAGAIN || errno == EWOULDBLOCK) {
++            return ReadResult::NoLine;
++        }
++        ESP_LOGW(TAG, "recv failed errno=%d", errno);
++        return ReadResult::Disconnected;
++    }
++
++    bool recvExact(uint8_t* data, size_t size)
++    {
++        size_t offset = 0;
++        while (offset < size && connected_.load()) {
++            int ret = recv(socket_, data + offset, size - offset, 0);
++            if (ret > 0) {
++                offset += static_cast<size_t>(ret);
++                continue;
++            }
++            if (ret == 0) {
++                return false;
++            }
++            if (errno == EAGAIN || errno == EWOULDBLOCK) {
++                continue;
++            }
++            ESP_LOGW(TAG, "recvExact failed errno=%d", errno);
++            return false;
++        }
++        return offset == size;
++    }
++
++    void handleCommand(const std::string& line)
++    {
++        JsonDocument doc;
++        auto err = deserializeJson(doc, line);
++        if (err) {
++            ESP_LOGW(TAG, "bad json command: %s", err.c_str());
++            return;
++        }
++
++        const char* type = doc["type"] | "";
++        JsonVariantConst payload = doc["payload"];
++
++        if (std::strcmp(type, "audio.hold") == 0) {
++            audio_hold_.store(payload["active"] | false);
++            return;
++        }
++        if (std::strcmp(type, "audio.start") == 0) {
++            playback_samples_.clear();
++            playback_sample_rate_ = payload["sampleRate"] | AUDIO_OUTPUT_SAMPLE_RATE;
++            playback_channels_    = payload["channels"] | 1;
++            const size_t total_bytes = payload["totalBytes"] | 0;
++            if (total_bytes > 0 && total_bytes < 2 * 1024 * 1024) {
++                playback_samples_.reserve((total_bytes + 1) / 2);
++            }
++            return;
++        }
++        if (std::strcmp(type, "audio.raw") == 0) {
++            handleAudioRaw(payload);
++            return;
++        }
++        if (std::strcmp(type, "audio.end") == 0) {
++            playBufferedAudio();
++            return;
++        }
++        if (std::strcmp(type, "audio.stop") == 0) {
++            playback_samples_.clear();
++            audio_hold_.store(false);
++            sendPlayDone();
++            return;
++        }
++        if (std::strcmp(type, "audio.tone") == 0) {
++            playTone(payload["frequency"] | 880, payload["durationMs"] | 180);
++            return;
++        }
++        if (std::strcmp(type, "body.status") == 0) {
++            sendStatus("status");
++            return;
++        }
++        if (std::strcmp(type, "body.set_expression") == 0) {
++            sendStatus(payload["name"] | "expression");
++            return;
++        }
++    }
++
++    void handleAudioRaw(JsonVariantConst payload)
++    {
++        const int seq = payload["seq"] | -1;
++        const size_t byte_count = payload["bytes"] | 0;
++        if (byte_count == 0 || (byte_count % 2) != 0 || byte_count > 131072) {
++            sendAudioAck(seq, false);
++            return;
++        }
++
++        const size_t old_samples = playback_samples_.size();
++        playback_samples_.resize(old_samples + byte_count / 2);
++        auto* dest = reinterpret_cast<uint8_t*>(playback_samples_.data() + old_samples);
++        if (!recvExact(dest, byte_count)) {
++            connected_.store(false);
++            return;
++        }
++        sendAudioAck(seq, true);
++    }
++
++    void playTone(int frequency, int duration_ms)
++    {
++        frequency = std::clamp(frequency, 80, 4000);
++        duration_ms = std::clamp(duration_ms, 20, 2000);
++        playback_sample_rate_ = AUDIO_OUTPUT_SAMPLE_RATE;
++        playback_channels_ = 1;
++
++        const size_t sample_count = static_cast<size_t>(AUDIO_OUTPUT_SAMPLE_RATE) * static_cast<size_t>(duration_ms) / 1000;
++        playback_samples_.assign(sample_count, 0);
++        const size_t ramp_samples = std::min<size_t>(240, sample_count / 2);
++        for (size_t i = 0; i < sample_count; ++i) {
++            double gain = 0.22;
++            if (ramp_samples > 0 && i < ramp_samples) {
++                gain *= static_cast<double>(i) / static_cast<double>(ramp_samples);
++            } else if (ramp_samples > 0 && sample_count - i <= ramp_samples) {
++                gain *= static_cast<double>(sample_count - i) / static_cast<double>(ramp_samples);
++            }
++            const double phase = TWO_PI * static_cast<double>(frequency) * static_cast<double>(i) /
++                                 static_cast<double>(AUDIO_OUTPUT_SAMPLE_RATE);
++            playback_samples_[i] = static_cast<int16_t>(std::sin(phase) * 32767.0 * gain);
++        }
++        playBufferedAudio();
++    }
++
++    void playBufferedAudio()
++    {
++        if (playback_samples_.empty()) {
++            sendPlayDone();
++            return;
++        }
++        if (playback_sample_rate_ != AUDIO_OUTPUT_SAMPLE_RATE || playback_channels_ != 1) {
++            ESP_LOGW(TAG, "unsupported playback format sampleRate=%d channels=%d", playback_sample_rate_, playback_channels_);
++            playback_samples_.clear();
++            sendPlayDone();
++            return;
++        }
++
++        playback_active_.store(true);
++        audio_hold_.store(true);
++
++        auto& board = Board::GetInstance();
++        auto* codec = board.GetAudioCodec();
++        if (!codec) {
++            ESP_LOGE(TAG, "audio codec unavailable for playback");
++            playback_samples_.clear();
++            playback_active_.store(false);
++            audio_hold_.store(false);
++            sendPlayDone();
++            return;
++        }
++
++        ESP_LOGI(TAG, "playing %u samples", static_cast<unsigned>(playback_samples_.size()));
++        xSemaphoreTake(audio_mutex_, portMAX_DELAY);
++        if (codec->input_enabled()) {
++            codec->EnableInput(false);
++        }
++        codec->EnableOutput(true);
++        std::vector<int16_t> chunk;
++        for (size_t offset = 0; offset < playback_samples_.size() && connected_.load(); offset += PLAYBACK_CHUNK_SAMPLES) {
++            const size_t count = std::min(PLAYBACK_CHUNK_SAMPLES, playback_samples_.size() - offset);
++            chunk.assign(playback_samples_.begin() + offset, playback_samples_.begin() + offset + count);
++            codec->OutputData(chunk);
++        }
++        codec->EnableOutput(false);
++        xSemaphoreGive(audio_mutex_);
++
++        playback_samples_.clear();
++        playback_active_.store(false);
++        audio_hold_.store(false);
++        sendPlayDone();
++    }
++
++    void micTask()
++    {
++        std::vector<int16_t> input;
++        std::vector<int16_t> mono;
++        bool input_enabled_by_bridge = false;
++
++        while (true) {
++            if (!connected_.load() || audio_hold_.load() || playback_active_.load()) {
++                if (input_enabled_by_bridge) {
++                    auto* codec = Board::GetInstance().GetAudioCodec();
++                    if (codec) {
++                        xSemaphoreTake(audio_mutex_, portMAX_DELAY);
++                        if (codec->input_enabled()) {
++                            codec->EnableInput(false);
++                        }
++                        xSemaphoreGive(audio_mutex_);
++                    }
++                    input_enabled_by_bridge = false;
++                }
++                vTaskDelay(pdMS_TO_TICKS(20));
++                continue;
++            }
++
++            auto* codec = Board::GetInstance().GetAudioCodec();
++            if (!codec) {
++                vTaskDelay(pdMS_TO_TICKS(200));
++                continue;
++            }
++
++            const int input_channels = std::max(codec->input_channels(), 1);
++            input.resize(MIC_FRAME_COUNT * input_channels);
++            mono.resize(MIC_FRAME_COUNT);
++
++            xSemaphoreTake(audio_mutex_, portMAX_DELAY);
++            if (!codec->input_enabled()) {
++                codec->EnableInput(true);
++                input_enabled_by_bridge = true;
++            }
++            const bool ok = codec->InputData(input);
++            xSemaphoreGive(audio_mutex_);
++
++            if (!ok) {
++                vTaskDelay(pdMS_TO_TICKS(20));
++                continue;
++            }
++
++            for (size_t i = 0; i < MIC_FRAME_COUNT; ++i) {
++                mono[i] = input[i * input_channels];
++            }
++            sendAudioIn(mono.data(), mono.size());
++        }
++    }
++
++    void sendAudioIn(const int16_t* samples, size_t sample_count)
++    {
++        char header[256];
++        const size_t byte_count = sample_count * sizeof(int16_t);
++        const int len = std::snprintf(
++            header,
++            sizeof(header),
++            "{\"type\":\"audio.in\",\"payload\":{\"encoding\":\"pcm16le\",\"transport\":\"raw\",\"sampleRate\":%d,\"channels\":1,\"bytes\":%u},\"ts\":%.3f}\n",
++            AUDIO_INPUT_SAMPLE_RATE,
++            static_cast<unsigned>(byte_count),
++            now_seconds());
++        if (len <= 0 || static_cast<size_t>(len) >= sizeof(header)) {
++            return;
++        }
++        if (!sendBytes(header, static_cast<size_t>(len))) {
++            connected_.store(false);
++            return;
++        }
++        if (!sendBytes(samples, byte_count)) {
++            connected_.store(false);
++        }
++    }
++
++    void sendAudioAck(int seq, bool queued)
++    {
++        char line[160];
++        const int len = std::snprintf(
++            line,
++            sizeof(line),
++            "{\"type\":\"audio.chunk_ack\",\"payload\":{\"seq\":%d,\"queued\":%s},\"ts\":%.3f}\n",
++            seq,
++            queued ? "true" : "false",
++            now_seconds());
++        if (len > 0 && static_cast<size_t>(len) < sizeof(line)) {
++            sendBytes(line, static_cast<size_t>(len));
++        }
++    }
++
++    void sendPlayDone()
++    {
++        char line[96];
++        const int len = std::snprintf(line, sizeof(line), "{\"type\":\"audio.play_done\",\"payload\":{},\"ts\":%.3f}\n", now_seconds());
++        if (len > 0 && static_cast<size_t>(len) < sizeof(line)) {
++            sendBytes(line, static_cast<size_t>(len));
++        }
++    }
++
++    void sendStatus(const char* expression)
++    {
++        char line[256];
++        const int len = std::snprintf(
++            line,
++            sizeof(line),
++            "{\"type\":\"status\",\"payload\":{\"device\":\"stackchan-cores3-official\",\"expression\":\"%s\",\"firmware\":\"%s\",\"wheelsEnabled\":false},\"ts\":%.3f}\n",
++            expression,
++            STACKY_BRIDGE_VERSION,
++            now_seconds());
++        if (len > 0 && static_cast<size_t>(len) < sizeof(line)) {
++            sendBytes(line, static_cast<size_t>(len));
++        }
++    }
++
++    bool sendBytes(const void* data, size_t size)
++    {
++        if (!send_mutex_) {
++            return false;
++        }
++        xSemaphoreTake(send_mutex_, portMAX_DELAY);
++        bool ok = true;
++        const auto* ptr = static_cast<const uint8_t*>(data);
++        size_t sent_total = 0;
++        while (sent_total < size && socket_ >= 0) {
++            const int sent = send(socket_, ptr + sent_total, size - sent_total, 0);
++            if (sent <= 0) {
++                ok = false;
++                break;
++            }
++            sent_total += static_cast<size_t>(sent);
++        }
++        xSemaphoreGive(send_mutex_);
++        return ok;
++    }
++
++    void closeSocket()
++    {
++        xSemaphoreTake(send_mutex_, portMAX_DELAY);
++        const int sock = socket_;
++        socket_ = -1;
++        xSemaphoreGive(send_mutex_);
++
++        if (sock >= 0) {
++            shutdown(sock, 0);
++            close(sock);
++        }
++        rx_line_.clear();
++        playback_samples_.clear();
++    }
++};
++
++StackyBridge& GetStackyBridge()
++{
++    static StackyBridgeImpl bridge;
++    return bridge;
++}
+diff --git a/firmware/main/hal/stacky_bridge.h b/firmware/main/hal/stacky_bridge.h
+new file mode 100644
+index 0000000..3392e82
+--- /dev/null
++++ b/firmware/main/hal/stacky_bridge.h
+@@ -0,0 +1,9 @@
++#pragma once
++
++class StackyBridge {
++public:
++    virtual ~StackyBridge() = default;
++    virtual void start() = 0;
++};
++
++StackyBridge& GetStackyBridge();
+diff --git a/firmware/main/main.cpp b/firmware/main/main.cpp
+index 164a751..b3c2941 100644
+--- a/firmware/main/main.cpp
++++ b/firmware/main/main.cpp
+@@ -9,6 +9,7 @@
+ #include <mooncake.h>
+ #include <apps/apps.h>
+ #include <hal/hal.h>
++#include <hal/stacky_bridge.h>
+ 
+ using namespace mooncake;
+ using namespace smooth_ui_toolkit;
+@@ -36,6 +37,8 @@ extern "C" void app_main(void)
+     GetMooncake().installApp(std::make_unique<AppDance>());
+     GetMooncake().installApp(std::make_unique<AppSetup>());
+ 
++    GetStackyBridge().start();
++
+     // Main loop
+     while (1) {
+         GetHAL().feedTheDog();
