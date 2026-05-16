@@ -13,6 +13,7 @@ DEFAULT_DATA_DIR = ROOT / "data" / "stacky"
 
 @dataclass(frozen=True)
 class LMStudioConfig:
+    provider: str = "lmstudio"
     base_url: str = "http://127.0.0.1:1234/v1"
     api_key: str = ""
     model: str = "qwen3.6-35b"
@@ -96,15 +97,49 @@ def load_config(path: str | Path | None = None) -> StackyConfig:
     data_dir = Path(str(stacky_raw.get("data_dir", os.getenv("STACKY_DATA_DIR", DEFAULT_DATA_DIR))))
     if not data_dir.is_absolute():
         data_dir = ROOT / data_dir
+    configured_provider = str(lm_raw.get("provider", "")).strip().lower()
+    brain_provider = str(lm_raw.get("provider", os.getenv("STACKY_BRAIN_PROVIDER", "lmstudio"))).strip().lower()
+    gemini_key = os.getenv("GEMINI_API_KEY", os.getenv("GOOGLE_API_KEY", ""))
+    lm_api_key = str(lm_raw.get("api_key", os.getenv("LMSTUDIO_API_KEY", "")))
+    api_key = gemini_key if brain_provider == "gemini" and gemini_key else lm_api_key
+    if brain_provider == "gemini" and not gemini_key:
+        api_key = str(lm_raw.get("gemini_api_key", lm_api_key))
+    if brain_provider == "gemini":
+        base_url = str(
+            os.getenv(
+                "STACKY_BRAIN_BASE_URL",
+                os.getenv(
+                    "GEMINI_BASE_URL",
+                    lm_raw.get("base_url", "https://generativelanguage.googleapis.com/v1beta")
+                    if configured_provider == "gemini"
+                    else lm_raw.get("gemini_base_url", "https://generativelanguage.googleapis.com/v1beta"),
+                ),
+            )
+        )
+        model = str(
+            os.getenv(
+                "STACKY_BRAIN_MODEL",
+                os.getenv(
+                    "GEMINI_MODEL",
+                    lm_raw.get("model", "gemini-3.1-flash-lite-preview")
+                    if configured_provider == "gemini"
+                    else lm_raw.get("gemini_model", "gemini-3.1-flash-lite-preview"),
+                ),
+            )
+        )
+    else:
+        base_url = str(lm_raw.get("base_url", os.getenv("LMSTUDIO_BASE_URL", "http://127.0.0.1:1234/v1")))
+        model = str(lm_raw.get("model", os.getenv("LMSTUDIO_MODEL", "qwen3.6-35b")))
 
     return StackyConfig(
         name=str(stacky_raw.get("name", os.getenv("STACKY_NAME", "Stacky"))),
         data_dir=data_dir,
         timezone=str(stacky_raw.get("timezone", os.getenv("STACKY_TIMEZONE", "Europe/Copenhagen"))),
         lmstudio=LMStudioConfig(
-            base_url=str(lm_raw.get("base_url", os.getenv("LMSTUDIO_BASE_URL", "http://127.0.0.1:1234/v1"))),
-            api_key=str(lm_raw.get("api_key", os.getenv("LMSTUDIO_API_KEY", ""))),
-            model=str(lm_raw.get("model", os.getenv("LMSTUDIO_MODEL", "qwen3.6-35b"))),
+            provider=brain_provider,
+            base_url=base_url,
+            api_key=api_key,
+            model=model,
             timeout_seconds=float(lm_raw.get("timeout_seconds", os.getenv("LMSTUDIO_TIMEOUT", "90"))),
         ),
         voice=VoiceConfig(

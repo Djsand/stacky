@@ -69,6 +69,22 @@ Whisper is no longer the default for hands-free mode because it can hallucinate 
 
 The wav2vec2 default is `CoRal-project/roest-v3-wav2vec2-315m`. First startup is slow while the model and language model load; after that, short StackChan turns transcribe in a fraction of a second on the current PC.
 
+To run Stacky's brain through Gemini instead of the local OpenAI-compatible endpoint for latency testing:
+
+```powershell
+$env:STACKY_BRAIN_PROVIDER = "gemini"
+$env:GEMINI_MODEL = "gemini-3.1-flash-lite-preview"
+$env:GEMINI_API_KEY = "<key>"
+.\.venv\Scripts\python.exe -m stacky handsfree --tts-engine supertonic --speaker stackchan
+```
+
+Head motion is available after flashing the official Stacky bridge firmware with motion support:
+
+```powershell
+.\.venv\Scripts\python.exe -m stacky motion-test --gesture demo
+.\.venv\Scripts\python.exe -m stacky motion-test --gesture nod
+```
+
 ## Safety Defaults
 
 - Home Assistant actions are suggest-first unless explicitly allowed by the caller.

@@ -3,6 +3,7 @@ from __future__ import annotations
 import math
 from collections import deque
 from dataclasses import dataclass
+from statistics import median, quantiles
 
 
 @dataclass(frozen=True)
@@ -10,6 +11,46 @@ class AudioTurn:
     pcm: bytes
     sample_rate: int
     channels: int = 1
+
+
+@dataclass(frozen=True)
+class TurnSignalQuality:
+    duration_seconds: float
+    median_rms: int
+    p80_rms: int
+    p95_rms: int
+    peak: int
+    active_ratio: float
+    active_ms: int
+    max_active_run_ms: int
+    crest_factor: float
+    active_threshold: int
+
+    @property
+    def speech_like(self) -> bool:
+        if self.duration_seconds < 0.65:
+            return False
+        if self.p95_rms < 650 and self.peak < 2200:
+            return False
+        if self.crest_factor >= 28.0 and (self.active_ratio <= 0.20 or self.max_active_run_ms < 120):
+            return False
+        if self.active_ratio <= 0.12 and self.max_active_run_ms < 180:
+            return False
+        return self.active_ms >= 180 or self.max_active_run_ms >= 180
+
+    @property
+    def reason(self) -> str:
+        if self.speech_like:
+            return "speech-like"
+        if self.duration_seconds < 0.65:
+            return "for kort signal"
+        if self.p95_rms < 650 and self.peak < 2200:
+            return "lavt signal"
+        if self.crest_factor >= 28.0 and (self.active_ratio <= 0.20 or self.max_active_run_ms < 120):
+            return "klik/percussiv støj"
+        if self.active_ratio <= 0.12 and self.max_active_run_ms < 180:
+            return "for lidt sammenhængende tale"
+        return "ikke tale-lignende"
 
 
 class EnergyTurnDetector:
@@ -35,15 +76,19 @@ class EnergyTurnDetector:
         self._speech_ms = 0
         self._silence_ms = 0
         self._utterance_ms = 0
+        self._noise_rms = float(threshold) * 0.45
 
     def push(self, pcm: bytes, *, sample_rate: int, channels: int = 1) -> AudioTurn | None:
         if not pcm:
             return None
         duration_ms = _duration_ms(pcm, sample_rate=sample_rate, channels=channels)
         rms = pcm16_rms(pcm)
-        is_voice = rms >= self.threshold
+        start_threshold = self._start_threshold()
+        is_voice = rms >= (self.threshold if self._active else start_threshold)
 
         if not self._active:
+            if not is_voice:
+                self._update_noise_floor(rms)
             self._remember_preroll(pcm, duration_ms, sample_rate)
             if not is_voice:
                 return None
@@ -88,6 +133,17 @@ class EnergyTurnDetector:
         self._speech_ms = 0
         self._silence_ms = 0
         self._utterance_ms = 0
+        self._noise_rms = max(self._noise_rms, 1.0)
+
+    def _start_threshold(self) -> int:
+        return int(max(self.threshold, self._noise_rms * 2.15, self._noise_rms + 260))
+
+    def _update_noise_floor(self, rms: int) -> None:
+        if rms <= 0:
+            return
+        if rms > self._start_threshold():
+            return
+        self._noise_rms = self._noise_rms * 0.96 + float(rms) * 0.04
 
 
 def pcm16_rms(pcm: bytes) -> int:
@@ -99,6 +155,85 @@ def pcm16_rms(pcm: bytes) -> int:
         sample = int.from_bytes(pcm[index : index + 2], "little", signed=True)
         total += sample * sample
     return int(math.sqrt(total / count))
+
+
+def analyze_turn_signal(pcm: bytes, *, sample_rate: int, channels: int = 1, frame_ms: int = 20) -> TurnSignalQuality:
+    if not pcm or sample_rate <= 0 or channels <= 0:
+        return TurnSignalQuality(0.0, 0, 0, 0, 0, 0.0, 0, 0, 0.0, 0)
+
+    frame_samples = max(1, int(sample_rate * frame_ms / 1000))
+    values = _pcm16_mono_samples(pcm, channels=channels)
+    frame_rms: list[int] = []
+    frame_peak: list[int] = []
+    for offset in range(0, len(values), frame_samples):
+        frame = values[offset : offset + frame_samples]
+        if not frame:
+            continue
+        frame_rms.append(int(math.sqrt(sum(sample * sample for sample in frame) / len(frame))))
+        frame_peak.append(max(abs(sample) for sample in frame))
+
+    if not frame_rms:
+        return TurnSignalQuality(0.0, 0, 0, 0, 0, 0.0, 0, 0, 0.0, 0)
+
+    med = int(median(frame_rms))
+    p80 = _percentile(frame_rms, 80)
+    p95 = _percentile(frame_rms, 95)
+    peak = max(frame_peak)
+    sorted_rms = sorted(frame_rms)
+    quiet_count = max(1, len(sorted_rms) // 5)
+    quiet_floor = int(median(sorted_rms[:quiet_count]))
+    noise_based_threshold = max(650, quiet_floor * 2.4, quiet_floor + 350)
+    signal_based_cap = max(650, p80 * 0.55, p95 * 0.45)
+    active_threshold = int(min(noise_based_threshold, signal_based_cap))
+    active = [rms >= active_threshold for rms in frame_rms]
+    active_count = sum(1 for item in active if item)
+    active_ratio = active_count / len(active)
+    active_ms = active_count * frame_ms
+    max_active_run_ms = _max_true_run(active) * frame_ms
+    avg_rms = sum(frame_rms) / len(frame_rms)
+    crest_factor = peak / max(avg_rms, 1.0)
+    duration_seconds = len(values) / sample_rate
+    return TurnSignalQuality(
+        duration_seconds=duration_seconds,
+        median_rms=med,
+        p80_rms=p80,
+        p95_rms=p95,
+        peak=peak,
+        active_ratio=active_ratio,
+        active_ms=active_ms,
+        max_active_run_ms=max_active_run_ms,
+        crest_factor=crest_factor,
+        active_threshold=active_threshold,
+    )
+
+
+def _pcm16_mono_samples(pcm: bytes, *, channels: int) -> list[int]:
+    frame_bytes = max(2, channels * 2)
+    values: list[int] = []
+    for index in range(0, len(pcm) - frame_bytes + 1, frame_bytes):
+        values.append(int.from_bytes(pcm[index : index + 2], "little", signed=True))
+    return values
+
+
+def _percentile(values: list[int], percentile: int) -> int:
+    if not values:
+        return 0
+    if len(values) < 5:
+        return int(max(values))
+    index = max(0, min(99, percentile)) - 1
+    return int(quantiles(values, n=100)[index])
+
+
+def _max_true_run(values: list[bool]) -> int:
+    best = 0
+    current = 0
+    for value in values:
+        if value:
+            current += 1
+            best = max(best, current)
+        else:
+            current = 0
+    return best
 
 
 def _duration_ms(pcm: bytes, *, sample_rate: int, channels: int) -> int:

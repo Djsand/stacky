@@ -124,6 +124,9 @@ class StackChanSpeechOutput:
         chunk_chars: int = 280,
         stackchan_sample_rate: int = 24000,
         max_stackchan_pcm_bytes: int = 1_020_000,
+        target_active_rms: int = 9000,
+        max_gain: float = 4.0,
+        volume_level: int = 80,
     ) -> None:
         self.tts = tts
         self.controller = controller
@@ -131,11 +134,21 @@ class StackChanSpeechOutput:
         self.chunk_chars = chunk_chars
         self.stackchan_sample_rate = stackchan_sample_rate
         self.max_stackchan_pcm_bytes = max_stackchan_pcm_bytes
+        self.target_active_rms = target_active_rms
+        self.max_gain = max_gain
+        self.volume_level = clamp_volume_level(volume_level)
         self._task: asyncio.Task[None] | None = None
         self._utterance_id = 0
 
     async def preload(self) -> None:
         await asyncio.to_thread(self.tts.load)
+        self.controller.set_volume(self.volume_level)
+
+    def set_volume(self, level: int) -> bool:
+        self.volume_level = clamp_volume_level(level)
+        self.target_active_rms = target_rms_for_stackchan_volume(self.volume_level)
+        self.max_gain = max_gain_for_stackchan_volume(self.volume_level)
+        return self.controller.set_volume(self.volume_level)
 
     async def speak(self, text: str) -> None:
         await self.stop()
@@ -203,7 +216,11 @@ class StackChanSpeechOutput:
 
     def _send_pcm_to_stackchan(self, pcm: bytes, *, sample_rate: int, channels: int) -> float:
         started = time.perf_counter()
-        pcm = boost_pcm16_for_stackchan(pcm)
+        pcm = boost_pcm16_for_stackchan(
+            pcm,
+            target_active_rms=self.target_active_rms,
+            max_gain=self.max_gain,
+        )
         self.controller.hold_audio(True)
         try:
             for segment in split_pcm16_segments(
@@ -283,20 +300,51 @@ class StackChanSpeechOutput:
         return output_path
 
 
-def create_stackchan_piper_output(controller: StackChanBodyController) -> StackChanSpeechOutput:
-    return StackChanSpeechOutput(FastPiperTTS(ensure_danish_piper_voice()), controller)
+def create_stackchan_piper_output(
+    controller: StackChanBodyController,
+    *,
+    target_active_rms: int = 9000,
+    max_gain: float = 4.0,
+    volume_level: int = 80,
+) -> StackChanSpeechOutput:
+    return StackChanSpeechOutput(
+        FastPiperTTS(ensure_danish_piper_voice()),
+        controller,
+        target_active_rms=target_active_rms,
+        max_gain=max_gain,
+        volume_level=volume_level,
+    )
 
 
 def create_stackchan_supertonic_output(
     controller: StackChanBodyController,
     voice: SupertonicVoice | None = None,
+    *,
+    target_active_rms: int = 9000,
+    max_gain: float = 4.0,
+    volume_level: int = 80,
 ) -> StackChanSpeechOutput:
     return StackChanSpeechOutput(
         SupertonicTTS(voice),
         controller,
         output_dir=ROOT / "artifacts" / "stackchan_speech_supertonic",
         chunk_chars=280,
+        target_active_rms=target_active_rms,
+        max_gain=max_gain,
+        volume_level=volume_level,
     )
+
+
+def clamp_volume_level(level: int) -> int:
+    return max(0, min(100, int(level)))
+
+
+def target_rms_for_stackchan_volume(level: int) -> int:
+    return 1800 + clamp_volume_level(level) * 90
+
+
+def max_gain_for_stackchan_volume(level: int) -> float:
+    return 2.0 + clamp_volume_level(level) * 0.04
 
 
 def boost_pcm16_for_stackchan(

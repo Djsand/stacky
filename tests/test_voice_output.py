@@ -28,6 +28,7 @@ class FakeController:
     def __init__(self) -> None:
         self.audio_calls: list[bytes] = []
         self.hold_states: list[bool] = []
+        self.volume_levels: list[int] = []
 
     def stop_audio(self) -> bool:
         return True
@@ -38,6 +39,10 @@ class FakeController:
 
     def speak_audio_chunks(self, pcm: bytes, **kwargs: object) -> bool:
         self.audio_calls.append(pcm)
+        return True
+
+    def set_volume(self, level: int) -> bool:
+        self.volume_levels.append(level)
         return True
 
 
@@ -116,6 +121,20 @@ class VoiceOutputTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertLessEqual(output.chunk_chars, 300)
         self.assertGreaterEqual(output.max_stackchan_pcm_bytes, 1_000_000)
+        self.assertEqual(output.target_active_rms, 9000)
+        self.assertEqual(output.max_gain, 4.0)
+        self.assertEqual(output.volume_level, 80)
+
+    def test_stackchan_output_can_change_volume(self) -> None:
+        controller = FakeController()
+        output = StackChanSpeechOutput(FakeTTS(), controller)  # type: ignore[arg-type]
+
+        self.assertTrue(output.set_volume(35))
+
+        self.assertEqual(output.volume_level, 35)
+        self.assertEqual(controller.volume_levels, [35])
+        self.assertEqual(output.target_active_rms, 4950)
+        self.assertAlmostEqual(output.max_gain, 3.4)
 
     async def test_stackchan_output_combines_tts_chunks_before_sending(self) -> None:
         controller = FakeController()

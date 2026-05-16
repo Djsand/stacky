@@ -13,8 +13,11 @@ from .protocol import (
     audio_end,
     audio_start,
     expression,
+    gesture,
     hold_audio,
+    look_at,
     speak_audio,
+    speaker_volume,
     speaker_tone,
     stop_audio,
 )
@@ -87,6 +90,12 @@ class StackChanBodyController:
     def set_expression(self, name: str, *, intensity: float = 1.0) -> bool:
         return self.send(expression(name, intensity=intensity))
 
+    def look_at(self, x: float, y: float, *, speed: int = 500) -> bool:
+        return self.send(look_at(x, y, speed=speed))
+
+    def gesture(self, name: str, *, intensity: float = 1.0, speed: int = 500) -> bool:
+        return self.send(gesture(name, intensity=intensity, speed=speed))
+
     def speak_audio(self, pcm: bytes, *, sample_rate: int, channels: int = 1) -> bool:
         return self.send(speak_audio(pcm, sample_rate=sample_rate, channels=channels))
 
@@ -147,6 +156,9 @@ class StackChanBodyController:
 
     def speaker_tone(self, *, frequency: int = 880, duration_ms: int = 180) -> bool:
         return self.send(speaker_tone(frequency=frequency, duration_ms=duration_ms))
+
+    def set_volume(self, level: int) -> bool:
+        return self.send(speaker_volume(level))
 
     def send(self, command: BodyCommand) -> bool:
         payload = (command.to_json() + "\n").encode("utf-8")

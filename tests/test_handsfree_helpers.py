@@ -2,8 +2,20 @@ from __future__ import annotations
 
 import unittest
 
-from stacky.cli import _accept_stt_result, _clean_transcript, _is_likely_hallucination, _transcript_key
+from stacky.cli import (
+    _accept_stt_result,
+    _clean_transcript,
+    _is_likely_hallucination,
+    _parse_local_realtime_reply,
+    _parse_motion_command,
+    _parse_stt_bench_spec,
+    _parse_volume_command,
+    _resolve_stt_bench_specs,
+    _transcript_key,
+    _word_error_rate,
+)
 from stacky.voice.stt import AudioStats, STTResult
+from stacky.voice.turn_detection import TurnSignalQuality
 
 
 class HandsfreeHelpersTest(unittest.TestCase):
@@ -62,6 +74,95 @@ class HandsfreeHelpersTest(unittest.TestCase):
         accepted, _ = _accept_stt_result(result)
 
         self.assertTrue(accepted)
+
+    def test_parse_volume_command_absolute_percent(self) -> None:
+        self.assertEqual(_parse_volume_command("sæt din volumen til 60 procent", current_level=80), (60, "Okay, min volumen er nu 60 procent."))
+
+    def test_parse_volume_command_relative_up(self) -> None:
+        self.assertEqual(_parse_volume_command("skru op", current_level=80), (95, "Okay, jeg skruer op til 95 procent."))
+
+    def test_parse_volume_command_relative_down(self) -> None:
+        self.assertEqual(_parse_volume_command("skru ned", current_level=10), (0, "Okay, jeg skruer ned til 0 procent."))
+
+    def test_rejects_short_unclear_confirmation_from_noisy_signal(self) -> None:
+        result = STTResult(
+            text="ja",
+            audio=AudioStats(duration_seconds=1.0, rms=1500, peak=32767, sample_rate=24000, channels=1),
+            avg_logprob=-1.3,
+            no_speech_prob=0.0,
+            compression_ratio=0.0,
+        )
+        quality = TurnSignalQuality(
+            duration_seconds=1.0,
+            median_rms=300,
+            p80_rms=450,
+            p95_rms=1900,
+            peak=32767,
+            active_ratio=0.10,
+            active_ms=100,
+            max_active_run_ms=80,
+            crest_factor=58.0,
+            active_threshold=650,
+        )
+
+        accepted, reason = _accept_stt_result(result, signal_quality=quality)
+
+        self.assertFalse(accepted)
+        self.assertIn(reason, {"kort uklart svar", "klik/percussiv støj"})
+
+    def test_rejects_incomplete_sparse_stt_fragment(self) -> None:
+        result = STTResult(
+            text="det er",
+            audio=AudioStats(duration_seconds=1.28, rms=492, peak=8356, sample_rate=24000, channels=1),
+            avg_logprob=-0.85,
+            no_speech_prob=0.0,
+            compression_ratio=0.0,
+        )
+        quality = TurnSignalQuality(
+            duration_seconds=1.28,
+            median_rms=292,
+            p80_rms=500,
+            p95_rms=1169,
+            peak=8356,
+            active_ratio=0.14,
+            active_ms=180,
+            max_active_run_ms=40,
+            crest_factor=20.5,
+            active_threshold=650,
+        )
+
+        accepted, reason = _accept_stt_result(result, signal_quality=quality)
+
+        self.assertFalse(accepted)
+        self.assertIn(reason, {"typisk STT-støjfragment", "ufærdigt STT-fragment", "for lidt sammenhængende tale"})
+
+    def test_local_realtime_reply_bypasses_brain_for_wait_commands(self) -> None:
+        self.assertEqual(_parse_local_realtime_reply("vent lige"), "Jeg venter.")
+        self.assertEqual(_parse_local_realtime_reply("stop lige"), "Jeg venter.")
+        self.assertIsNone(_parse_local_realtime_reply("hvad laver du"))
+
+    def test_parse_motion_command(self) -> None:
+        self.assertEqual((_parse_motion_command("kig til venstre") or None).gesture, "look_left")
+        self.assertEqual((_parse_motion_command("kig til højre") or None).gesture, "look_right")
+        self.assertEqual((_parse_motion_command("gik til venstre") or None).gesture, "look_left")
+        self.assertEqual((_parse_motion_command("gik op") or None).gesture, "look_up")
+        self.assertEqual((_parse_motion_command("nik med hovedet") or None).gesture, "nod")
+        self.assertEqual((_parse_motion_command("prøv en bevægelse") or None).gesture, "demo")
+        self.assertIsNone(_parse_motion_command("skru op"))
+
+    def test_parse_stt_bench_aliases(self) -> None:
+        self.assertEqual(_parse_stt_bench_spec("roest"), ("wav2vec2", "roest"))
+        self.assertEqual(_parse_stt_bench_spec("qwen3"), ("qwen3", "qwen3-0.6b"))
+        self.assertEqual(_parse_stt_bench_spec("wav2vec2:custom/model"), ("wav2vec2", "custom/model"))
+
+    def test_stt_bench_specs_default_to_low_latency_models(self) -> None:
+        specs = _resolve_stt_bench_specs([], include_heavy=False)
+
+        self.assertEqual(specs, [("wav2vec2", "roest"), ("wav2vec2", "ftspeech")])
+
+    def test_word_error_rate(self) -> None:
+        self.assertEqual(_word_error_rate("hej med dig", "hej med dig"), 0.0)
+        self.assertAlmostEqual(_word_error_rate("hej med dig", "hej dig"), 1 / 3)
 
 
 if __name__ == "__main__":

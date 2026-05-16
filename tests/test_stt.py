@@ -6,9 +6,11 @@ import wave
 from pathlib import Path
 
 from stacky.voice.stt import (
+    Qwen3DanishSTT,
     Wav2Vec2DanishSTT,
     apply_stt_agc,
     create_danish_stt,
+    resolve_stt_model_name,
     wav_audio_stats,
     wav_to_mono_float32,
     write_pcm_wav,
@@ -61,6 +63,16 @@ class STTTest(unittest.TestCase):
         stt = create_danish_stt("wav2vec2")
 
         self.assertIsInstance(stt, Wav2Vec2DanishSTT)
+
+    def test_resolve_stt_model_aliases(self) -> None:
+        self.assertEqual(resolve_stt_model_name("wav2vec2", "roest"), "CoRal-project/roest-v3-wav2vec2-315m")
+        self.assertEqual(resolve_stt_model_name("wav2vec2", "ftspeech"), "saattrupdan/wav2vec2-xls-r-300m-ftspeech")
+        self.assertEqual(resolve_stt_model_name("qwen3", "saga"), "capacit-ai/saga")
+
+    def test_create_qwen3_stt_without_loading_optional_dependency(self) -> None:
+        stt = create_danish_stt("qwen3", "qwen3-0.6b")
+
+        self.assertIsInstance(stt, Qwen3DanishSTT)
 
 
 if __name__ == "__main__":

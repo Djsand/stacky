@@ -27,6 +27,18 @@ class STTResult:
     compression_ratio: float
 
 
+STT_MODEL_ALIASES = {
+    "roest": "CoRal-project/roest-v3-wav2vec2-315m",
+    "coral": "CoRal-project/roest-v3-wav2vec2-315m",
+    "coral-v3": "CoRal-project/roest-v3-wav2vec2-315m",
+    "ftspeech": "saattrupdan/wav2vec2-xls-r-300m-ftspeech",
+    "qwen3-0.6b": "Qwen/Qwen3-ASR-0.6B",
+    "qwen3": "Qwen/Qwen3-ASR-0.6B",
+    "saga": "capacit-ai/saga",
+    "milo": "pluttodk/milo-asr",
+}
+
+
 class FasterWhisperDanishSTT:
     def __init__(self, model_size: str = "base", *, device: str = "cpu", compute_type: str = "int8") -> None:
         self.model_size = model_size
@@ -171,11 +183,84 @@ class Wav2Vec2DanishSTT:
         )
 
 
+class Qwen3DanishSTT:
+    DEFAULT_MODEL = "Qwen/Qwen3-ASR-0.6B"
+
+    def __init__(self, model_id: str = DEFAULT_MODEL, *, device: str | None = None) -> None:
+        self.model_id = model_id
+        self.device = device
+        self._model = None
+        self._torch = None
+
+    async def preload(self) -> None:
+        await asyncio.to_thread(self.load)
+
+    def load(self) -> None:
+        if self._model is not None:
+            return
+        try:
+            import torch
+            from qwen_asr import Qwen3ASRModel
+        except ImportError as exc:
+            raise RuntimeError(
+                "Qwen3 ASR requires optional dependency 'qwen-asr'. "
+                "Do not install it into the main Stacky venv unless you accept the "
+                "transformers-version conflict with Roest/Chatterbox TTS; use a separate "
+                "benchmark venv for Qwen/Saga/Milo tests."
+            ) from exc
+
+        self._torch = torch
+        device = self.device or ("cuda:0" if torch.cuda.is_available() else "cpu")
+        dtype = torch.bfloat16 if str(device).startswith("cuda") else torch.float32
+        self._model = Qwen3ASRModel.from_pretrained(
+            self.model_id,
+            dtype=dtype,
+            device_map=device,
+        )
+
+    async def transcribe_wav(self, wav_path: Path) -> str:
+        result = await self.transcribe_wav_result(wav_path)
+        return result.text
+
+    async def transcribe_wav_result(self, wav_path: Path) -> STTResult:
+        return await asyncio.to_thread(self._transcribe_wav_result_sync, wav_path)
+
+    def _transcribe_wav_result_sync(self, wav_path: Path) -> STTResult:
+        audio = wav_audio_stats(wav_path)
+        self.load()
+        assert self._model is not None
+        results = self._model.transcribe(audio=str(wav_path), language="Danish")
+        text = _qwen_result_text(results)
+        return STTResult(
+            text=text,
+            audio=audio,
+            avg_logprob=0.0 if text else -10.0,
+            no_speech_prob=0.0 if text else 1.0,
+            compression_ratio=0.0,
+        )
+
+
 def create_danish_stt(engine: str, model_name: str | None = None):
+    model_name = resolve_stt_model_name(engine, model_name)
     if engine == "whisper":
-        return FasterWhisperDanishSTT(model_name or "small")
+        return FasterWhisperDanishSTT(model_name)
     if engine == "wav2vec2":
-        return Wav2Vec2DanishSTT(model_name or Wav2Vec2DanishSTT.DEFAULT_MODEL)
+        return Wav2Vec2DanishSTT(model_name)
+    if engine == "qwen3":
+        return Qwen3DanishSTT(model_name)
+    raise ValueError(f"Unknown STT engine: {engine}")
+
+
+def resolve_stt_model_name(engine: str, model_name: str | None = None) -> str:
+    requested = (model_name or "").strip()
+    if requested:
+        return STT_MODEL_ALIASES.get(requested.lower(), requested)
+    if engine == "whisper":
+        return "small"
+    if engine == "wav2vec2":
+        return Wav2Vec2DanishSTT.DEFAULT_MODEL
+    if engine == "qwen3":
+        return Qwen3DanishSTT.DEFAULT_MODEL
     raise ValueError(f"Unknown STT engine: {engine}")
 
 
@@ -289,6 +374,17 @@ def _decode_ctc_text(processor, logits, predicted_ids) -> str:
         decoded = processor.batch_decode(logits.detach().cpu().numpy())
         return decoded.text[0].strip()
     return processor.batch_decode(predicted_ids)[0].strip()
+
+
+def _qwen_result_text(results) -> str:
+    if isinstance(results, str):
+        return results.strip()
+    if isinstance(results, dict):
+        return str(results.get("text", "")).strip()
+    if isinstance(results, (list, tuple)) and results:
+        return _qwen_result_text(results[0])
+    text = getattr(results, "text", "")
+    return str(text).strip()
 
 
 def _ctc_avg_logprob(logits, predicted_ids, *, blank_id: int, torch_module) -> float:

@@ -9,7 +9,8 @@ Active body base:
 - Branch: `official-firmware-base`
 - Official submodule: `vendor/m5stack-stackchan`
 - Repro patch: `patches/official-stackchan/0001-stacky-bridge.patch`
-- Flashed firmware: official StackChan `1.4.1` with `AppStacky` and bridge `official-0.1.1`
+- Flashed firmware: official StackChan `1.4.1` with `AppStacky` and bridge `official-0.1.6`
+- Bridge `official-0.1.6` includes `body.look_at` and `body.gesture` head motion. Social center is `yaw=90`, `pitch=260`.
 - PC body server: `192.168.50.208:8765`
 - StackChan IP in tests: `192.168.50.2`
 
@@ -19,6 +20,10 @@ Firmware variant changes:
 - New app: `firmware/main/apps/app_stacky/app_stacky.cpp`
 - `firmware/main/main.cpp` installs and opens only `AppStacky` at boot.
 - `StackyBridge` now has `start()` / `stop()` lifecycle and is started from `AppStacky::onOpen()`.
+- `StackyBridge` now sets CoreS3 codec output volume to 100 during playback.
+- `StackyBridge` now accepts `audio.volume`, reports `speakerVolume`, uses mic gain 60, and drops the first 12 mic frames after input enable to avoid clipped warmup transients.
+- Python StackChan TTS output has tunable loudness: `--stackchan-target-rms` and `--stackchan-max-gain` default to `9000` / `4.0`.
+- Handsfree catches Danish volume commands before the LLM, e.g. `skru op`, `skru ned`, `sæt volumen til 60 procent`.
 - Launcher/setup/app-center are no longer the boot path for Stacky.
 
 Bridge support:
@@ -31,16 +36,30 @@ Validated 2026-05-16:
 
 - ESP-IDF build passed with short aliases `S:` and `I:`
 - Flash to `COM3` passed
-- `scripts\mic_listener.py --output artifacts\official_app_stacky_mic.wav --seconds 10` connected to `official-0.1.1` and captured mic frames
+- `scripts\mic_listener.py --output artifacts\official_app_stacky_mic.wav --seconds 10` connected to `official-0.1.3` and captured mic frames
 - `python -m stacky speaker-tone --body-timeout 35 --frequency 880 --duration-ms 250` returned success
+- Full Python tests pass: `.\.venv\Scripts\python.exe -m unittest discover -s tests` -> 66 OK
+- Python handsfree now analyzes raw turn audio before STT. Sparse/percussive sounds such as keyboard clicks are rejected before transcription, LLM response, and memory write.
+- `StackyBrain` now includes the last 6 live conversation turns in the system context, so short bad transcripts do not wipe immediate conversational context.
+- STT is still the weakest component. If raw speech-like turns pass the gate but transcripts are wrong, replace or add a better Danish STT backend rather than loosening filters.
+- Added `python -m stacky stt-bench` to benchmark saved StackChan WAV turns without running the live body loop.
+- Low-latency STT benchmark on StackChan turns:
+  - `CoRal-project/roest-v3-wav2vec2-315m`: usable latency after load, about `rtf=0.16-0.18` on local CPU, but still mishears noisy/quiet turns.
+  - `saattrupdan/wav2vec2-xls-r-300m-ftspeech`: low latency, but not usable on current StackChan mic captures; it returned `r` on tested clips.
+  - `Qwen/Qwen3-ASR-0.6B` via `qwen-asr`: too slow and wrong in the quick local CPU test (`1.58s` audio -> `3.84s` inference, transcript `Se dig ved leon.`). `qwen-asr` also conflicts with Roest/Chatterbox by pinning `transformers==4.57.6`, so it was removed from the main venv and `transformers==5.2.0` restored.
+- Handsfree latency tuning:
+  - Default handsfree Supertonic profile is now `quick`.
+  - Default end silence is now `450ms` instead of `650ms`.
+  - Live replies default to about `150` spoken characters (`260` when details are requested).
+  - Handsfree logs `[timing] stt=... brain=... tts_send=... total=...` after accepted turns.
 
-Next checkpoint: Nicolai should confirm the screen now boots straight into Stacky face instead of launcher/setup. Then run full handsfree against this app variant.
+Next checkpoint: run v0.1.3 handsfree with `--debug-audio`, test normal speech vs. keyboard noise, and inspect `[audio]` lines before changing STT thresholds.
 
 Important: opening `COM3` with `scripts/serial_log.py` resets the CoreS3 via USB-serial. A boot log starting with `rst:0x15 (USB_UART_CHIP_RESET)` after playback is not proof of an audio crash.
 
 ## Stop Point
 
-Stop here after official Stacky app variant v0.1.1. The old custom Arduino speaker-crash investigation is no longer the active path unless the same failure reproduces on official firmware.
+Stop here after official Stacky app variant v0.1.3. The old custom Arduino speaker-crash investigation is no longer the active path unless the same failure reproduces on official firmware.
 
 ## Current Direction
 
@@ -66,7 +85,7 @@ Do not import or reuse Moss identity, Moss memories, Moss sessions, or the Moss 
 - StackChan IP seen during tests: `192.168.50.2`
 - PC IP used during tests: `192.168.50.208`
 - USB serial seen during tests: `/dev/cu.usbmodem1101` or `cu.usbmodem101` on Mac, `COM3` on Windows
-- Latest flashed firmware version: official StackChan `1.4.1` with `AppStacky` / Stacky bridge `official-0.1.1`
+- Latest flashed firmware version: official StackChan `1.4.1` with `AppStacky` / Stacky bridge `official-0.1.6`
 
 The old custom Arduino firmware remains as fallback/reference. The active hardware path is official ESP-IDF firmware; old speaker-crash assumptions should be re-tested before using them.
 

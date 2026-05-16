@@ -9,9 +9,12 @@ from stacky.body.protocol import (
     audio_start,
     decode_pcm_payload,
     expression,
+    gesture,
     hold_audio,
+    look_at,
     mobility_intent,
     speak_audio,
+    speaker_volume,
     speaker_tone,
     stop_audio,
 )
@@ -22,6 +25,23 @@ class BodyProtocolTest(unittest.TestCase):
         raw = expression("listening").to_json()
         self.assertIn("body.set_expression", raw)
         self.assertIn("listening", raw)
+
+    def test_look_at_command_clamps_normalized_coordinates(self) -> None:
+        command = look_at(2.0, -2.0, speed=1200)
+        raw = command.to_json()
+
+        self.assertIn("body.look_at", raw)
+        self.assertEqual(command.payload["x"], 1.0)
+        self.assertEqual(command.payload["y"], -1.0)
+        self.assertEqual(command.payload["speed"], 1000)
+
+    def test_gesture_command_encodes(self) -> None:
+        command = gesture("nod", intensity=2.0, speed=-1)
+        raw = command.to_json()
+
+        self.assertIn("body.gesture", raw)
+        self.assertEqual(command.payload["intensity"], 1.0)
+        self.assertEqual(command.payload["speed"], 0)
 
     def test_audio_command_encodes_pcm(self) -> None:
         raw = speak_audio(b"\x00\x01").to_json()
@@ -41,6 +61,11 @@ class BodyProtocolTest(unittest.TestCase):
         raw = speaker_tone(frequency=660, duration_ms=120).to_json()
         self.assertIn("audio.tone", raw)
         self.assertIn('"frequency":660', raw)
+
+    def test_speaker_volume_command_encodes(self) -> None:
+        raw = speaker_volume(140).to_json()
+        self.assertIn("audio.volume", raw)
+        self.assertIn('"level":100', raw)
 
     def test_audio_chunk_protocol_encodes(self) -> None:
         start = audio_start(sample_rate=44100, total_bytes=2048).to_json()

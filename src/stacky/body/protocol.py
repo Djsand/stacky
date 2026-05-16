@@ -17,6 +17,7 @@ BODY_COMMAND_TYPES = {
     "audio.chunk",
     "audio.out",
     "audio.tone",
+    "audio.volume",
     "body.set_expression",
     "body.look_at",
     "body.gesture",
@@ -81,6 +82,28 @@ def expression(name: str, *, intensity: float = 1.0) -> BodyCommand:
     return BodyCommand("body.set_expression", {"name": name, "intensity": intensity})
 
 
+def look_at(x: float, y: float, *, speed: int = 500) -> BodyCommand:
+    return BodyCommand(
+        "body.look_at",
+        {
+            "x": max(-1.0, min(1.0, float(x))),
+            "y": max(-1.0, min(1.0, float(y))),
+            "speed": max(0, min(1000, int(speed))),
+        },
+    )
+
+
+def gesture(name: str, *, intensity: float = 1.0, speed: int = 500) -> BodyCommand:
+    return BodyCommand(
+        "body.gesture",
+        {
+            "name": name,
+            "intensity": max(0.0, min(1.0, float(intensity))),
+            "speed": max(0, min(1000, int(speed))),
+        },
+    )
+
+
 def speak_audio(pcm: bytes, *, sample_rate: int = 24000, channels: int = 1) -> BodyCommand:
     return BodyCommand(
         "audio.out",
@@ -136,6 +159,10 @@ def speaker_tone(*, frequency: int = 880, duration_ms: int = 180) -> BodyCommand
             "durationMs": duration_ms,
         },
     )
+
+
+def speaker_volume(level: int) -> BodyCommand:
+    return BodyCommand("audio.volume", {"level": max(0, min(100, int(level)))})
 
 
 def decode_pcm_payload(payload: dict[str, Any]) -> tuple[bytes, int, int]:

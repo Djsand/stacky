@@ -9,9 +9,19 @@ from stacky.body.controller import BodyPresence, StackChanBodyController
 class FakeController:
     def __init__(self) -> None:
         self.expressions: list[str] = []
+        self.looks: list[tuple[float, float, int]] = []
+        self.gestures: list[str] = []
 
     def set_expression(self, name: str) -> bool:
         self.expressions.append(name)
+        return True
+
+    def look_at(self, x: float, y: float, *, speed: int = 500) -> bool:
+        self.looks.append((x, y, speed))
+        return True
+
+    def gesture(self, name: str, *, intensity: float = 1.0, speed: int = 500) -> bool:
+        self.gestures.append(name)
         return True
 
 
@@ -30,6 +40,38 @@ class BodyPresenceTest(unittest.TestCase):
 
 
 class BodyControllerRawAudioTest(unittest.TestCase):
+    def test_controller_sends_look_at_command(self) -> None:
+        sent = []
+        controller = StackChanBodyController()
+
+        def send(command) -> bool:
+            sent.append(command)
+            return True
+
+        controller.send = send  # type: ignore[method-assign]
+
+        self.assertTrue(controller.look_at(0.25, -0.5, speed=600))
+
+        self.assertEqual(sent[0].type, "body.look_at")
+        self.assertEqual(sent[0].payload["x"], 0.25)
+        self.assertEqual(sent[0].payload["y"], -0.5)
+        self.assertEqual(sent[0].payload["speed"], 600)
+
+    def test_controller_sends_gesture_command(self) -> None:
+        sent = []
+        controller = StackChanBodyController()
+
+        def send(command) -> bool:
+            sent.append(command)
+            return True
+
+        controller.send = send  # type: ignore[method-assign]
+
+        self.assertTrue(controller.gesture("nod"))
+
+        self.assertEqual(sent[0].type, "body.gesture")
+        self.assertEqual(sent[0].payload["name"], "nod")
+
     def test_processes_raw_audio_in_header_and_binary_body(self) -> None:
         events = []
         controller = StackChanBodyController(on_event=events.append)

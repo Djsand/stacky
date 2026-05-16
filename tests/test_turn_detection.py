@@ -2,11 +2,19 @@ from __future__ import annotations
 
 import unittest
 
-from stacky.voice.turn_detection import EnergyTurnDetector, pcm16_rms
+from stacky.voice.turn_detection import EnergyTurnDetector, analyze_turn_signal, pcm16_rms
 
 
 def pcm_sample(value: int, count: int) -> bytes:
     return int(value).to_bytes(2, "little", signed=True) * count
+
+
+def pcm_pulse(value: int, count: int, *, every: int) -> bytes:
+    samples = []
+    for index in range(count):
+        sample = value if index % every == 0 else 120
+        samples.append(int(sample).to_bytes(2, "little", signed=True))
+    return b"".join(samples)
 
 
 class TurnDetectionTest(unittest.TestCase):
@@ -25,6 +33,19 @@ class TurnDetectionTest(unittest.TestCase):
 
         self.assertIsNotNone(turn)
         self.assertGreater(len(turn.pcm), 0)
+
+    def test_signal_quality_rejects_sparse_keyboard_clicks(self) -> None:
+        quality = analyze_turn_signal(pcm_pulse(14000, 16000, every=1600), sample_rate=16000)
+
+        self.assertFalse(quality.speech_like)
+        self.assertIn(quality.reason, {"klik/percussiv støj", "for lidt sammenhængende tale"})
+
+    def test_signal_quality_accepts_sustained_voice_like_audio(self) -> None:
+        pcm = pcm_sample(1500, 6400) + pcm_sample(1800, 6400) + pcm_sample(100, 3200)
+
+        quality = analyze_turn_signal(pcm, sample_rate=16000)
+
+        self.assertTrue(quality.speech_like)
 
 
 if __name__ == "__main__":
