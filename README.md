@@ -87,6 +87,8 @@ The wav2vec2 default is `CoRal-project/roest-v3-wav2vec2-315m`. First startup is
 
 Accepted hands-free turns now default to trusted Stacky conversation: they persist to the infinite session, update recent context, and can write narrow safe memories/personality observations. Use `--voice-trust session-only` to keep session context without long-term writes, or `--voice-trust off` to return to the old untrusted mode while debugging STT.
 
+Hands-free replies default to short live speech: `--reply-chars 180` and `--detail-reply-chars 320`. Stacky should answer test observations directly, avoid automatic follow-up questions, and avoid bringing up bedtime/time unless asked.
+
 The hands-free VAD is tuned for the official Stacky bridge: default `--vad-threshold 280`, `--start-speech-ms 120`, and `--min-speech-ms 220`. It rejects sparse clicks and high-frequency noise before STT; use `--debug-audio` to see `[audio] ... reason='højfrekvent støj'` / `klik/percussiv støj` lines.
 The start detector also ignores high-frequency mic noise as a voice candidate, so Stacky should not lock into 9-second noise turns before you speak.
 

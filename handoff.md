@@ -12,13 +12,14 @@ Updated 2026-05-16 after the hands-free memory/personality and motion-control pa
   - Trusted text/chat turns can evolve style notes and convictions.
   - Accepted StackChan hands-free turns now default to trusted session persistence and safe memory/personality writes. Use `--voice-trust session-only` for context-only logging or `--voice-trust off` for old untrusted STT debugging.
   - Local hands-free commands such as volume, calibration, motion, and pause are recorded into the infinite session without an extra brain-model call.
+  - Hands-free replies now default to `--reply-chars 180` and `--detail-reply-chars 320`; Stacky should answer test observations directly instead of steering into smalltalk or bedtime/time comments.
   - Danish STT hotwords, live transcript correction, stricter clipped-noise gate, benchmark live-gate mode.
   - StackChan firmware `official-0.1.10` with PC-controlled mic gain.
   - Handsfree/capture default `--mic-channel 0`; official CoreS3 sends the real mic on channel 0 and a reference/noise path on channel 1.
   - Handsfree VAD dynamic threshold was lowered after mic preamp raised the noise floor; normal speech should start more easily without weakening the post-turn noise gate.
   - Follow-up VAD fix: high-frequency mic noise is no longer allowed to start a voice turn or train the noise floor. Sustained noisy speech can still reach STT if it contains enough low-ZCR voice-band frames.
   - Roest STT loading is cache-first. `transformers` uses `local_files_only=True` first and only falls back to Hugging Face when the model is missing locally.
-  - Live replies now default to 2-3 concrete Danish sentences and explicitly avoid generic endings such as "hvad har du på hjerte" unless useful.
+  - Live replies now default to 1-2 concrete Danish sentences and explicitly avoid generic endings such as "hvad har du på hjerte", "hvordan går det", or bedtime/time comments unless useful.
   - Brain prompt now treats StackChan wireless/battery/audio/mic comments as Stacky's own body status, not Nicolai's body.
   - Body director is calmer: no automatic `look_up` during thinking, slower listening recenter, and a smaller less frequent nod on happy.
   - Short spoken fallback when the brain endpoint is down, so TTS does not read a long exception.

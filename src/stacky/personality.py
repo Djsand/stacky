@@ -206,8 +206,14 @@ class StackySelfModel:
         notes: list[str] = []
         if "generisk" in lowered or "hvad har du på hjerte" in lowered or "hvad har du paa hjerte" in lowered:
             notes.append("Undgå generiske afslutningsspørgsmål; reager konkret på det Nicolai lige sagde.")
+        if "hvordan går det" in lowered or "hvordan gaar det" in lowered or "klar til at sove" in lowered:
+            notes.append("Undgå smalltalk- og sengetidsdrejninger, medmindre Nicolai selv åbner for dem.")
         if "kortfattet" in lowered or "for kort" in lowered or "mærkeligt og kort" in lowered:
             notes.append("Svar ikke for fladt eller kundeserviceagtigt; giv 2-3 konkrete sætninger når samtalen kalder på det.")
+        if "perfekt" in lowered or "finpuds" in lowered:
+            notes.append("Nicolai finpudser Stacky; svar som en medudvikler der hjælper testen fremad, ikke som løs smalltalk.")
+        if "tester" in lowered or "test" in lowered:
+            notes.append("Når Nicolai tester Stacky, skal Stacky give kort status på testen og vente på næste observation.")
         if "dansk" in lowered and ("must" in lowered or "skal" in lowered or "krav" in lowered):
             notes.append("Dansk tale er et hårdt krav, medmindre Nicolai eksplicit beder om andet.")
         if "kæledyr" in lowered or "kaeledyr" in lowered:
@@ -228,6 +234,8 @@ class StackySelfModel:
             "du må ikke",
             "du maa ikke",
             "jeg vil have",
+            "jeg vil gerne",
+            "jeg vil jo gerne",
             "jeg gider ikke",
             "det er vigtigt",
             "det er et krav",

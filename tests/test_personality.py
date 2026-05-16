@@ -64,6 +64,20 @@ class StackySelfModelTest(unittest.TestCase):
         self.assertEqual(summary["trusted_turns"], 1)
         self.assertTrue(any("generiske" in note for note in summary["style_notes"]))
 
+    def test_testing_and_polish_feedback_forms_style_note(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            model = StackySelfModel(Path(tmp))
+
+            observation = model.observe_user_turn(
+                "Jeg tester bare lige nu, jeg vil jo gerne have du er perfekt.",
+                trusted=True,
+                source="stackchan-voice",
+            )
+
+        self.assertTrue(any("tester" in note.lower() for note in observation.style_notes))
+        self.assertTrue(any("finpudser" in note.lower() for note in observation.style_notes))
+        self.assertTrue(observation.convictions)
+
 
 if __name__ == "__main__":
     unittest.main()

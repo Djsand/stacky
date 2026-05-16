@@ -81,8 +81,9 @@ class BrainMemoryContextTest(unittest.IsolatedAsyncioTestCase):
             await brain.respond("jeg arbejder bare på dig")
 
         system = llm.messages[0][0].content
-        self.assertIn("2-3 korte", system)
-        self.assertIn("Slut ikke automatisk med et generisk spørgsmål", system)
+        self.assertIn("1-2 korte", system)
+        self.assertIn("Slut ikke automatisk med et spørgsmål", system)
+        self.assertIn("Nævn ikke at det er sent", system)
 
     async def test_self_model_context_is_included_and_updated_for_trusted_turns(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

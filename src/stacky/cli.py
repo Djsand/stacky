@@ -116,8 +116,8 @@ def main(argv: list[str] | None = None) -> int:
     handsfree.add_argument("--stackchan-volume", type=int, default=80, help="Initial StackChan codec volume, 0-100.")
     handsfree.add_argument("--stackchan-mic-gain", type=int, default=85, help="Initial StackChan codec mic gain, 0-100.")
     handsfree.add_argument("--mic-preamp", type=float, default=2.0, help="Digital PCM gain before VAD/STT. Limited to avoid PCM clipping; use 1.0 to disable.")
-    handsfree.add_argument("--reply-chars", type=int, default=260, help="Default spoken reply character budget for low-latency live chat.")
-    handsfree.add_argument("--detail-reply-chars", type=int, default=420, help="Spoken reply character budget when the user asks for details.")
+    handsfree.add_argument("--reply-chars", type=int, default=180, help="Default spoken reply character budget for low-latency live chat.")
+    handsfree.add_argument("--detail-reply-chars", type=int, default=320, help="Spoken reply character budget when the user asks for details.")
     handsfree.add_argument(
         "--voice-trust",
         choices=("trusted", "session-only", "off"),
@@ -975,10 +975,10 @@ def _self_status(config_path: str) -> int:
     print(f"Tid: {summary['temporal']['wall_clock']} ({summary['temporal']['continuity']})")
     print(f"Nicolai-model: {summary['social']['mood']} / {summary['social']['phase']}")
     print("Style notes:")
-    for note in summary["style_notes"] or ["-"]:
+    for note in summary["style_notes"] or ["Ingen endnu."]:
         print(f"- {note}")
     print("Convictions:")
-    for conviction in summary["convictions"] or ["-"]:
+    for conviction in summary["convictions"] or ["Ingen endnu."]:
         print(f"- {conviction}")
     return 0
 

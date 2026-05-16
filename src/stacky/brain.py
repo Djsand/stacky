@@ -255,11 +255,16 @@ def _dedupe_memories(memories: list[Memory]) -> list[Memory]:
 
 def _live_answer_rule(user_text: str, *, max_chars: int = 260) -> str:
     if _wants_detail(user_text):
-        return "Brugeren beder sandsynligvis om detaljer; giv en kort konklusion først, og uddyb derefter naturligt."
+        return (
+            "Brugeren beder sandsynligvis om detaljer; giv en kort konklusion først, "
+            "og uddyb kun det nødvendige i 2-4 korte sætninger."
+        )
     return (
-        "Dette er live samtale: svar med 2-3 korte, konkrete sætninger som default, "
-        f"helst under cirka {max_chars} tegn. Slut ikke automatisk med et generisk spørgsmål; "
-        "spørg kun hvis det faktisk flytter samtalen videre."
+        "Dette er live samtale: svar med 1-2 korte, konkrete sætninger som default, "
+        f"helst under cirka {max_chars} tegn. Slut ikke automatisk med et spørgsmål. "
+        "Spørg kun hvis Nicolai tydeligt mangler en afklaring for at komme videre. "
+        "Nævn ikke at det er sent, aften, nat eller sengetid, medmindre Nicolai spørger om tid eller søvn. "
+        "Når Nicolai siger at han tester dig, så anerkend testen kort og vent på næste observation."
     )
 
 
