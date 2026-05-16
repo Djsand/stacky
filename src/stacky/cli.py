@@ -1606,6 +1606,8 @@ def _accept_stt_result(
         return False, "ufærdigt STT-fragment"
     if signal_quality is not None and signal_quality.max_active_run_ms < 80 and signal_quality.active_ratio < 0.20:
         return False, "for lidt sammenhængende tale"
+    if signal_quality is not None and signal_quality.zero_crossing_rate >= 0.45 and result.avg_logprob < -0.75:
+        return False, "støjfyldt højfrekvent transcript"
     if key in {"hej", "hejsa", "hejstacky", "stacky"}:
         return True, "kort hilsen"
     if _is_short_uncertain_stt_fragment(transcript, result):
@@ -1854,7 +1856,8 @@ def _format_signal_quality(quality: TurnSignalQuality) -> str:
         f"dur={quality.duration_seconds:.2f}s med={quality.median_rms} "
         f"p95={quality.p95_rms} peak={quality.peak} "
         f"active={quality.active_ratio:.2f}/{quality.active_ms}ms "
-        f"run={quality.max_active_run_ms}ms crest={quality.crest_factor:.1f} zcr={quality.zero_crossing_rate:.2f} "
+        f"run={quality.max_active_run_ms}ms band={quality.speech_band_ms}/{quality.max_speech_band_run_ms}ms "
+        f"crest={quality.crest_factor:.1f} zcr={quality.zero_crossing_rate:.2f} "
         f"thr={quality.active_threshold}"
     )
 

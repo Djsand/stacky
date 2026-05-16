@@ -9,6 +9,7 @@ from stacky.voice.stt import (
     DEFAULT_DANISH_STT_HOTWORDS,
     Qwen3DanishSTT,
     Wav2Vec2DanishSTT,
+    _from_pretrained_local_first,
     apply_stt_agc,
     create_danish_stt,
     resolve_stt_model_name,
@@ -85,6 +86,39 @@ class STTTest(unittest.TestCase):
         stt = create_danish_stt("qwen3", "qwen3-0.6b")
 
         self.assertIsInstance(stt, Qwen3DanishSTT)
+
+    def test_from_pretrained_uses_local_cache_first(self) -> None:
+        class FakeFactory:
+            calls: list[dict[str, object]] = []
+
+            @classmethod
+            def from_pretrained(cls, model_id: str, **kwargs):
+                cls.calls.append({"model_id": model_id, **kwargs})
+                return "loaded"
+
+        result = _from_pretrained_local_first(FakeFactory, "model")
+
+        self.assertEqual(result, "loaded")
+        self.assertEqual(FakeFactory.calls, [{"model_id": "model", "local_files_only": True}])
+
+    def test_from_pretrained_falls_back_online_on_cache_miss(self) -> None:
+        class FakeFactory:
+            calls: list[dict[str, object]] = []
+
+            @classmethod
+            def from_pretrained(cls, model_id: str, **kwargs):
+                cls.calls.append({"model_id": model_id, **kwargs})
+                if kwargs.get("local_files_only"):
+                    raise OSError("cache miss")
+                return "downloaded"
+
+        result = _from_pretrained_local_first(FakeFactory, "model")
+
+        self.assertEqual(result, "downloaded")
+        self.assertEqual(
+            FakeFactory.calls,
+            [{"model_id": "model", "local_files_only": True}, {"model_id": "model"}],
+        )
 
 
 if __name__ == "__main__":

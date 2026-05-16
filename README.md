@@ -83,9 +83,10 @@ Whisper is no longer the default for hands-free mode because it can hallucinate 
 .\.venv\Scripts\python.exe -m stacky handsfree --stt-engine whisper --stt-model small
 ```
 
-The wav2vec2 default is `CoRal-project/roest-v3-wav2vec2-315m`. First startup is slow while the model and language model load; after that, short StackChan turns transcribe in a fraction of a second on the current PC.
+The wav2vec2 default is `CoRal-project/roest-v3-wav2vec2-315m`. First startup is slow while the model and language model load; after that, short StackChan turns transcribe in a fraction of a second on the current PC. After the first download, Stacky loads Roest from the local Hugging Face cache first and only contacts Hugging Face again if the model is missing locally.
 
 The hands-free VAD is tuned for the official Stacky bridge: default `--vad-threshold 280`, `--start-speech-ms 120`, and `--min-speech-ms 220`. It rejects sparse clicks and high-frequency noise before STT; use `--debug-audio` to see `[audio] ... reason='højfrekvent støj'` / `klik/percussiv støj` lines.
+The start detector also ignores high-frequency mic noise as a voice candidate, so Stacky should not lock into 9-second noise turns before you speak.
 
 Firmware `official-0.1.10` streams all StackChan mic input channels and accepts PC-controlled mic gain. `handsfree` and `stt-capture` default to `--mic-channel auto`, which chooses the strongest input channel per audio chunk. Use `--mic-channel 0` or `--mic-channel 1` to compare channels, `--mic-channel mix` to average them, and `--mic-channel all` to keep multichannel diagnostic WAVs. Default `--stackchan-mic-gain` is `100`, and default `--mic-preamp` is `2.5`.
 

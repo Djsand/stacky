@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import math
+import os
 import wave
 from dataclasses import dataclass
 from pathlib import Path
@@ -165,6 +166,10 @@ class Wav2Vec2DanishSTT:
     def load(self) -> None:
         if self._model is not None:
             return
+        previous_hf_offline = os.environ.get("HF_HUB_OFFLINE")
+        previous_transformers_offline = os.environ.get("TRANSFORMERS_OFFLINE")
+        os.environ["HF_HUB_OFFLINE"] = "1"
+        os.environ["TRANSFORMERS_OFFLINE"] = "1"
         import torch
         from transformers import AutoModelForCTC, AutoProcessor
         from transformers.utils import logging as transformers_logging
@@ -179,8 +184,16 @@ class Wav2Vec2DanishSTT:
         except ImportError:
             pass
         self.device = self.device or ("cuda" if torch.cuda.is_available() else "cpu")
-        self._processor = AutoProcessor.from_pretrained(self.model_id)
-        self._model = AutoModelForCTC.from_pretrained(self.model_id)
+        try:
+            self._processor = AutoProcessor.from_pretrained(self.model_id, local_files_only=True)
+            self._model = AutoModelForCTC.from_pretrained(self.model_id, local_files_only=True)
+        except Exception:
+            _restore_hf_env(previous_hf_offline, previous_transformers_offline)
+            try:
+                self._processor = AutoProcessor.from_pretrained(self.model_id)
+                self._model = AutoModelForCTC.from_pretrained(self.model_id)
+            finally:
+                _restore_hf_env(previous_hf_offline, previous_transformers_offline)
         if self.device == "cpu":
             self._model = self._model.float()
         self._model.to(self.device)
@@ -449,6 +462,34 @@ def _qwen_result_text(results) -> str:
         return _qwen_result_text(results[0])
     text = getattr(results, "text", "")
     return str(text).strip()
+
+
+def _from_pretrained_local_first(factory, model_id: str):
+    previous_hf_offline = os.environ.get("HF_HUB_OFFLINE")
+    previous_transformers_offline = os.environ.get("TRANSFORMERS_OFFLINE")
+    try:
+        os.environ["HF_HUB_OFFLINE"] = "1"
+        os.environ["TRANSFORMERS_OFFLINE"] = "1"
+        return factory.from_pretrained(model_id, local_files_only=True)
+    except Exception:
+        _restore_hf_env(previous_hf_offline, previous_transformers_offline)
+        try:
+            return factory.from_pretrained(model_id)
+        finally:
+            _restore_hf_env(previous_hf_offline, previous_transformers_offline)
+    finally:
+        _restore_hf_env(previous_hf_offline, previous_transformers_offline)
+
+
+def _restore_hf_env(previous_hf_offline: str | None, previous_transformers_offline: str | None) -> None:
+    if previous_hf_offline is None:
+        os.environ.pop("HF_HUB_OFFLINE", None)
+    else:
+        os.environ["HF_HUB_OFFLINE"] = previous_hf_offline
+    if previous_transformers_offline is None:
+        os.environ.pop("TRANSFORMERS_OFFLINE", None)
+    else:
+        os.environ["TRANSFORMERS_OFFLINE"] = previous_transformers_offline
 
 
 def _ctc_avg_logprob(logits, predicted_ids, *, blank_id: int, torch_module) -> float:

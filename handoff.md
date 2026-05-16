@@ -14,6 +14,8 @@ Updated 2026-05-16 after the StackChan mic-gain/auto-channel hotfix and second S
   - StackChan firmware `official-0.1.10` with PC-controlled mic gain.
   - Handsfree/capture default `--mic-channel auto` instead of fixed channel `0`.
   - Handsfree VAD dynamic threshold was lowered after mic preamp raised the noise floor; normal speech should start more easily without weakening the post-turn noise gate.
+  - Follow-up VAD fix: high-frequency mic noise is no longer allowed to start a voice turn or train the noise floor. Sustained noisy speech can still reach STT if it contains enough low-ZCR voice-band frames.
+  - Roest STT loading is cache-first. `transformers` uses `local_files_only=True` first and only falls back to Hugging Face when the model is missing locally.
   - Live replies now default to 2-3 concrete Danish sentences and explicitly avoid generic endings such as "hvad har du på hjerte" unless useful.
   - Short spoken fallback when the brain endpoint is down, so TTS does not read a long exception.
   - `body-server` now parses raw `audio.in` frames safely and no longer sends a status feedback loop.

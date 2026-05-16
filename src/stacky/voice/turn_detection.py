@@ -26,6 +26,8 @@ class TurnSignalQuality:
     crest_factor: float
     active_threshold: int
     zero_crossing_rate: float = 0.0
+    speech_band_ms: int = 0
+    max_speech_band_run_ms: int = 0
 
     @property
     def speech_like(self) -> bool:
@@ -33,9 +35,16 @@ class TurnSignalQuality:
             return False
         if self.p95_rms < 420 and self.peak < 1400:
             return False
-        if self.zero_crossing_rate >= 0.45:
+        if self.zero_crossing_rate >= 0.55:
             return False
-        if self.zero_crossing_rate >= 0.32 and self.active_ratio <= 0.75:
+        if self.zero_crossing_rate >= 0.45 and self.speech_band_ms < 160 and self.max_speech_band_run_ms < 120:
+            return False
+        if (
+            self.zero_crossing_rate >= 0.32
+            and self.active_ratio <= 0.75
+            and self.speech_band_ms < 160
+            and self.max_speech_band_run_ms < 120
+        ):
             return False
         if self.percussive_noise_like:
             return False
@@ -45,6 +54,8 @@ class TurnSignalQuality:
 
     @property
     def percussive_noise_like(self) -> bool:
+        if self.speech_band_ms >= 400 or self.max_speech_band_run_ms >= 240:
+            return False
         if self.peak >= 32000 and self.crest_factor >= 20.0 and self.p95_rms >= 2200:
             return True
         if self.peak >= 32000 and self.crest_factor >= 24.0 and self.max_active_run_ms <= 160:
@@ -59,7 +70,16 @@ class TurnSignalQuality:
             return "for kort signal"
         if self.p95_rms < 420 and self.peak < 1400:
             return "lavt signal"
-        if self.zero_crossing_rate >= 0.45 or (self.zero_crossing_rate >= 0.32 and self.active_ratio <= 0.75):
+        if self.zero_crossing_rate >= 0.55:
+            return "højfrekvent støj"
+        if self.zero_crossing_rate >= 0.45 and self.speech_band_ms < 160 and self.max_speech_band_run_ms < 120:
+            return "højfrekvent støj"
+        if (
+            self.zero_crossing_rate >= 0.32
+            and self.active_ratio <= 0.75
+            and self.speech_band_ms < 160
+            and self.max_speech_band_run_ms < 120
+        ):
             return "højfrekvent støj"
         if self.percussive_noise_like:
             return "klik/percussiv støj"
@@ -103,12 +123,14 @@ class EnergyTurnDetector:
             return None
         duration_ms = _duration_ms(pcm, sample_rate=sample_rate, channels=channels)
         rms = pcm16_rms(pcm)
+        zcr = pcm16_zero_crossing_rate(pcm, channels=channels)
         voice_threshold = self._active_threshold() if self._active else self._start_threshold()
-        is_voice = rms >= voice_threshold
+        is_voice = rms >= voice_threshold and _chunk_can_count_as_voice(rms, voice_threshold, zcr)
 
         if not self._active:
             if not is_voice:
-                self._update_noise_floor(rms)
+                if zcr < 0.42:
+                    self._update_noise_floor(rms)
                 self._candidate_voice_ms = 0
             self._remember_preroll(pcm, duration_ms, sample_rate)
             if not is_voice:
@@ -186,6 +208,10 @@ def pcm16_rms(pcm: bytes) -> int:
     return int(math.sqrt(total / count))
 
 
+def pcm16_zero_crossing_rate(pcm: bytes, *, channels: int = 1) -> float:
+    return _zero_crossing_rate(_pcm16_mono_samples(pcm, channels=max(1, channels)))
+
+
 def analyze_turn_signal(pcm: bytes, *, sample_rate: int, channels: int = 1, frame_ms: int = 20) -> TurnSignalQuality:
     if not pcm or sample_rate <= 0 or channels <= 0:
         return TurnSignalQuality(0.0, 0, 0, 0, 0, 0.0, 0, 0, 0.0, 0)
@@ -194,12 +220,14 @@ def analyze_turn_signal(pcm: bytes, *, sample_rate: int, channels: int = 1, fram
     values = _pcm16_mono_samples(pcm, channels=channels)
     frame_rms: list[int] = []
     frame_peak: list[int] = []
+    frame_zcr: list[float] = []
     for offset in range(0, len(values), frame_samples):
         frame = values[offset : offset + frame_samples]
         if not frame:
             continue
         frame_rms.append(int(math.sqrt(sum(sample * sample for sample in frame) / len(frame))))
         frame_peak.append(max(abs(sample) for sample in frame))
+        frame_zcr.append(_zero_crossing_rate(frame))
 
     if not frame_rms:
         return TurnSignalQuality(0.0, 0, 0, 0, 0, 0.0, 0, 0, 0.0, 0)
@@ -215,10 +243,13 @@ def analyze_turn_signal(pcm: bytes, *, sample_rate: int, channels: int = 1, fram
     signal_based_cap = max(420, p80 * 0.55, p95 * 0.45)
     active_threshold = int(min(noise_based_threshold, signal_based_cap))
     active = [rms >= active_threshold for rms in frame_rms]
+    speech_band = [rms >= active_threshold and zcr <= 0.40 for rms, zcr in zip(frame_rms, frame_zcr, strict=False)]
     active_count = sum(1 for item in active if item)
     active_ratio = active_count / len(active)
     active_ms = active_count * frame_ms
     max_active_run_ms = _max_true_run(active) * frame_ms
+    speech_band_ms = sum(1 for item in speech_band if item) * frame_ms
+    max_speech_band_run_ms = _max_true_run(speech_band) * frame_ms
     avg_rms = sum(frame_rms) / len(frame_rms)
     crest_factor = peak / max(avg_rms, 1.0)
     zero_crossing_rate = _zero_crossing_rate(values)
@@ -235,6 +266,8 @@ def analyze_turn_signal(pcm: bytes, *, sample_rate: int, channels: int = 1, fram
         crest_factor=crest_factor,
         active_threshold=active_threshold,
         zero_crossing_rate=zero_crossing_rate,
+        speech_band_ms=speech_band_ms,
+        max_speech_band_run_ms=max_speech_band_run_ms,
     )
 
 
@@ -280,6 +313,14 @@ def _zero_crossing_rate(values: list[int]) -> float:
             crossings += 1
         previous = current
     return crossings / max(1, len(values) - 1)
+
+
+def _chunk_can_count_as_voice(rms: int, threshold: int, zcr: float) -> bool:
+    if zcr <= 0.40:
+        return True
+    if zcr <= 0.44 and rms >= max(1800, threshold * 3):
+        return True
+    return False
 
 
 def _duration_ms(pcm: bytes, *, sample_rate: int, channels: int) -> int:

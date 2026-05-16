@@ -173,6 +173,35 @@ class HandsfreeHelpersTest(unittest.TestCase):
         self.assertFalse(accepted)
         self.assertIn(reason, {"typisk STT-støjfragment", "ufærdigt STT-fragment", "for lidt sammenhængende tale"})
 
+    def test_rejects_low_confidence_transcript_from_noisy_high_zcr_turn(self) -> None:
+        result = STTResult(
+            text="den her den den den den",
+            audio=AudioStats(duration_seconds=9.0, rms=870, peak=6108, sample_rate=24000, channels=1),
+            avg_logprob=-1.14,
+            no_speech_prob=0.0,
+            compression_ratio=0.0,
+        )
+        quality = TurnSignalQuality(
+            duration_seconds=9.0,
+            median_rms=868,
+            p80_rms=900,
+            p95_rms=937,
+            peak=6108,
+            active_ratio=0.91,
+            active_ms=8180,
+            max_active_run_ms=7660,
+            crest_factor=7.4,
+            active_threshold=498,
+            zero_crossing_rate=0.49,
+            speech_band_ms=420,
+            max_speech_band_run_ms=200,
+        )
+
+        accepted, reason = _accept_stt_result(result, signal_quality=quality)
+
+        self.assertFalse(accepted)
+        self.assertEqual(reason, "støjfyldt højfrekvent transcript")
+
     def test_local_realtime_reply_bypasses_brain_for_wait_commands(self) -> None:
         self.assertEqual(_parse_local_realtime_reply("vent lige"), "Jeg venter.")
         self.assertEqual(_parse_local_realtime_reply("stop lige"), "Jeg venter.")
