@@ -6,6 +6,7 @@ import wave
 from pathlib import Path
 
 from stacky.voice.stt import (
+    DEFAULT_DANISH_STT_HOTWORDS,
     Qwen3DanishSTT,
     Wav2Vec2DanishSTT,
     apply_stt_agc,
@@ -63,6 +64,15 @@ class STTTest(unittest.TestCase):
         stt = create_danish_stt("wav2vec2")
 
         self.assertIsInstance(stt, Wav2Vec2DanishSTT)
+        self.assertIn("Stacky", stt.hotwords)
+        self.assertIn("Nicolai", stt.hotwords)
+        self.assertEqual(stt.hotword_weight, 5.0)
+
+    def test_default_danish_hotwords_include_live_commands(self) -> None:
+        hotwords = " ".join(DEFAULT_DANISH_STT_HOTWORDS).lower()
+
+        self.assertIn("skru lidt op", hotwords)
+        self.assertIn("kig lidt til højre", hotwords)
 
     def test_resolve_stt_model_aliases(self) -> None:
         self.assertEqual(resolve_stt_model_name("wav2vec2", "roest"), "CoRal-project/roest-v3-wav2vec2-315m")

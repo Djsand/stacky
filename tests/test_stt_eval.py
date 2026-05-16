@@ -59,6 +59,7 @@ class STTEvalTest(unittest.TestCase):
         self.assertEqual(items[0].expected_text, "hej stacky")
         self.assertEqual(items[0].item_id, "clip-1")
         self.assertEqual(items[0].speech_style, "mumble")
+        self.assertTrue(items[0].speech_like)
 
     def test_resolve_audio_inputs_sorts_recent_first_and_limits(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

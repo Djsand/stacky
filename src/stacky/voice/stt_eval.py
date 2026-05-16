@@ -37,6 +37,7 @@ class STTDatasetItem:
     expected_text: str | None = None
     item_id: str = ""
     speech_style: str = ""
+    speech_like: bool | None = None
 
 
 def load_capture_phrases(
@@ -114,7 +115,7 @@ def apply_references(items: list[STTDatasetItem], refs: dict[str, str]) -> list[
     result: list[STTDatasetItem] = []
     for item in items:
         expected = refs.get(item.audio_path.name.lower(), item.expected_text)
-        result.append(STTDatasetItem(item.audio_path, expected, item.item_id, item.speech_style))
+        result.append(STTDatasetItem(item.audio_path, expected, item.item_id, item.speech_style, item.speech_like))
     return result
 
 
@@ -173,12 +174,15 @@ def _load_jsonl_manifest(path: Path) -> list[STTDatasetItem]:
             continue
         audio_path = _resolve_relative(path.parent, audio_value)
         expected = record.get("expected", record.get("text", record.get("reference")))
+        quality = record.get("quality") if isinstance(record.get("quality"), dict) else {}
+        speech_like = quality.get("speechLike")
         items.append(
             STTDatasetItem(
                 audio_path=audio_path,
                 expected_text=None if expected is None else str(expected).strip(),
                 item_id=str(record.get("id") or audio_path.stem),
                 speech_style=str(record.get("speechStyle") or ""),
+                speech_like=speech_like if isinstance(speech_like, bool) else None,
             )
         )
     return items

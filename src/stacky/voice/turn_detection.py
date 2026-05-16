@@ -45,6 +45,8 @@ class TurnSignalQuality:
 
     @property
     def percussive_noise_like(self) -> bool:
+        if self.peak >= 32000 and self.crest_factor >= 20.0 and self.p95_rms >= 2200:
+            return True
         if self.peak >= 32000 and self.crest_factor >= 24.0 and self.max_active_run_ms <= 160:
             return True
         return self.crest_factor >= 28.0 and (self.active_ratio <= 0.35 or self.max_active_run_ms <= 160)

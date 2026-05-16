@@ -8,6 +8,7 @@ import shutil
 import socket
 import subprocess
 import time
+import wave
 from dataclasses import dataclass
 from pathlib import Path
 from slugify import slugify
@@ -32,7 +33,7 @@ from .voice.output import (
 from .voice.channels import select_pcm16_channel
 from .voice.supertonic_tts import SupertonicVoice, supertonic_voice_preset
 from .voice.runtime import LocalTextVoiceRuntime
-from .voice.stt import STTResult, create_danish_stt, resolve_stt_model_name, write_pcm_wav
+from .voice.stt import STTResult, create_danish_stt, resolve_stt_model_name, wav_audio_stats, write_pcm_wav
 from .voice.stt_eval import (
     STTDatasetItem,
     apply_references,
@@ -44,6 +45,7 @@ from .voice.stt_eval import (
     word_error_rate,
     write_dataset_record,
 )
+from .voice.transcript_correction import correct_danish_transcript
 from .voice.turn_detection import EnergyTurnDetector, TurnSignalQuality, analyze_turn_signal, pcm16_rms
 from .voice.piper_tts import FastPiperTTS, ensure_danish_piper_voice, pitch_shift_wav
 from .voice.roest_tts import RoestTTS, roest_voice
@@ -146,6 +148,16 @@ def main(argv: list[str] | None = None) -> int:
     stt_bench.add_argument("--include-heavy", action="store_true", help="Also test heavier Qwen3-ASR candidates.")
     stt_bench.add_argument("--refs", default="", help="Optional tab-separated references file: wav_filename<TAB>expected text.")
     stt_bench.add_argument("--report", default="", help="Optional JSONL report output path.")
+    stt_bench.add_argument(
+        "--correct-transcripts",
+        action="store_true",
+        help="Score Stacky live post-correction instead of raw ASR output.",
+    )
+    stt_bench.add_argument(
+        "--live-gate",
+        action="store_true",
+        help="Use manifest signal-quality gate before STT, matching handsfree behavior for rejected noise.",
+    )
     voice_lab = sub.add_parser("voice-lab", help="Generate local Danish TTS samples.")
     voice_lab.add_argument("--play", action="store_true", help="Play generated samples with ffplay.")
     voice_lab.add_argument(
@@ -313,6 +325,8 @@ def main(argv: list[str] | None = None) -> int:
                 include_heavy=args.include_heavy,
                 refs_path=args.refs,
                 report_path=args.report,
+                correct_transcripts=args.correct_transcripts,
+                live_gate=args.live_gate,
             )
         )
     if args.command == "voice-lab":
@@ -394,6 +408,8 @@ async def _stt_bench(
     include_heavy: bool,
     refs_path: str,
     report_path: str,
+    correct_transcripts: bool,
+    live_gate: bool,
 ) -> int:
     items = _resolve_stt_bench_items(audio_patterns, dataset_path=dataset_path, refs_path=refs_path, limit=limit)
     if not items:
@@ -429,6 +445,46 @@ async def _stt_bench(
         style_stats: dict[str, _SttBenchStats] = {}
         for item in items:
             path = item.audio_path
+            gated_quality = _wav_signal_quality(path) if live_gate else None
+            if live_gate and gated_quality is not None and not gated_quality.speech_like:
+                result = STTResult(
+                    text="",
+                    audio=wav_audio_stats(path),
+                    avg_logprob=-10.0,
+                    no_speech_prob=1.0,
+                    compression_ratio=0.0,
+                )
+                infer_seconds = 0.0
+                duration = max(result.audio.duration_seconds, 0.001)
+                expected = item.expected_text
+                wer = word_error_rate(expected, "") if expected is not None else None
+                cer = char_error_rate(expected, "") if expected is not None else None
+                score = "" if wer is None or cer is None else f" wer={wer:.1%} cer={cer:.1%}"
+                total_stats.add(duration=duration, infer_seconds=infer_seconds, wer=wer, cer=cer)
+                style_label = item.speech_style or "unlabeled"
+                style_stats.setdefault(style_label, _SttBenchStats()).add(
+                    duration=duration,
+                    infer_seconds=infer_seconds,
+                    wer=wer,
+                    cer=cer,
+                )
+                print(
+                    f"  {path.name}: GATE non-speech dur={duration:.2f}s reason={gated_quality.reason!r}{score}",
+                    flush=True,
+                )
+                if report_file is not None:
+                    _append_stt_report(
+                        report_file,
+                        engine=engine,
+                        model=model_name,
+                        item=item,
+                        result=result,
+                        infer_seconds=infer_seconds,
+                        wer=wer,
+                        cer=cer,
+                        live_gate_rejected=True,
+                    )
+                continue
             started = time.perf_counter()
             try:
                 result = await stt.transcribe_wav_result(path)
@@ -438,13 +494,19 @@ async def _stt_bench(
             infer_seconds = time.perf_counter() - started
             duration = max(result.audio.duration_seconds, 0.001)
             rtf = infer_seconds / duration
+            hypothesis = result.text
+            correction_reason = ""
+            if correct_transcripts:
+                correction = correct_danish_transcript(result.text)
+                hypothesis = correction.text
+                correction_reason = correction.reason if correction.changed else ""
             expected = item.expected_text
             score = ""
             wer = None
             cer = None
             if expected is not None:
-                wer = word_error_rate(expected, result.text)
-                cer = char_error_rate(expected, result.text)
+                wer = word_error_rate(expected, hypothesis)
+                cer = char_error_rate(expected, hypothesis)
                 score = f" wer={wer:.1%} cer={cer:.1%}"
             total_stats.add(duration=duration, infer_seconds=infer_seconds, wer=wer, cer=cer)
             style_label = item.speech_style or "unlabeled"
@@ -454,9 +516,10 @@ async def _stt_bench(
                 wer=wer,
                 cer=cer,
             )
+            correction_note = f" -> {hypothesis}" if correct_transcripts and hypothesis != result.text else ""
             print(
                 f"  {path.name}: dur={duration:.2f}s infer={infer_seconds:.2f}s "
-                f"rtf={rtf:.2f} logprob={result.avg_logprob:.2f}{score} :: {result.text}",
+                f"rtf={rtf:.2f} logprob={result.avg_logprob:.2f}{score} :: {result.text}{correction_note}",
                 flush=True,
             )
             if report_file is not None:
@@ -466,6 +529,8 @@ async def _stt_bench(
                     model=model_name,
                     item=item,
                     result=result,
+                    hypothesis=hypothesis,
+                    correction_reason=correction_reason,
                     infer_seconds=infer_seconds,
                     wer=wer,
                     cer=cer,
@@ -732,15 +797,19 @@ def _append_stt_report(
     infer_seconds: float,
     wer: float | None,
     cer: float | None,
+    hypothesis: str | None = None,
+    correction_reason: str = "",
+    live_gate_rejected: bool = False,
 ) -> None:
     duration = max(result.audio.duration_seconds, 0.001)
+    final_hypothesis = result.text if hypothesis is None else hypothesis
     record = {
         "engine": engine,
         "model": model,
         "id": item.item_id or item.audio_path.stem,
         "audio": str(item.audio_path),
         "expected": item.expected_text,
-        "hypothesis": result.text,
+        "hypothesis": final_hypothesis,
         "durationSeconds": round(result.audio.duration_seconds, 4),
         "inferSeconds": round(infer_seconds, 4),
         "rtf": round(infer_seconds / duration, 4),
@@ -751,10 +820,26 @@ def _append_stt_report(
         "rms": result.audio.rms,
         "peak": result.audio.peak,
     }
+    if final_hypothesis != result.text:
+        record["rawHypothesis"] = result.text
+        record["correctionReason"] = correction_reason
+    if live_gate_rejected:
+        record["liveGateRejected"] = True
     if item.speech_style:
         record["speechStyle"] = item.speech_style
     with report_path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n")
+
+
+def _wav_signal_quality(path: Path) -> TurnSignalQuality | None:
+    try:
+        with wave.open(str(path), "rb") as wav_file:
+            sample_rate = wav_file.getframerate()
+            channels = wav_file.getnchannels()
+            pcm = wav_file.readframes(wav_file.getnframes())
+    except (OSError, wave.Error):
+        return None
+    return analyze_turn_signal(pcm, sample_rate=sample_rate, channels=channels)
 
 
 def _quality_record(quality: TurnSignalQuality) -> dict[str, object]:
@@ -1203,9 +1288,21 @@ async def _handsfree(
             stt_started = time.perf_counter()
             stt_result = await stt.transcribe_wav_result(wav_path)
             stt_seconds = time.perf_counter() - stt_started
-            text = _clean_transcript(stt_result.text)
+            raw_text = _clean_transcript(stt_result.text)
+            correction = correct_danish_transcript(raw_text)
+            text = _clean_transcript(correction.text)
             print(f"[STT] {_format_stt_result(stt_result, text)}", flush=True)
-            accepted, reason = _accept_stt_result(stt_result, text, signal_quality=signal_quality)
+            if correction.changed:
+                print(
+                    f"[STT] corrected raw={correction.raw_text!r} -> {text!r} ({correction.reason})",
+                    flush=True,
+                )
+            accepted, reason = _accept_stt_result(
+                stt_result,
+                text,
+                signal_quality=signal_quality,
+                trusted_transcript=correction.reason in {"exact", "phrase"},
+            )
             if not accepted:
                 print(f"[Stacky] ignorerer STT ({reason}): {text}", flush=True)
                 set_body_state("listening")
@@ -1438,6 +1535,7 @@ def _accept_stt_result(
     text: str | None = None,
     *,
     signal_quality: TurnSignalQuality | None = None,
+    trusted_transcript: bool = False,
 ) -> tuple[bool, str]:
     transcript = _clean_transcript(text if text is not None else result.text)
     key = _transcript_key(transcript)
@@ -1447,6 +1545,8 @@ def _accept_stt_result(
         return False, "kendt hallucination"
     if signal_quality is not None and not signal_quality.speech_like:
         return False, signal_quality.reason
+    if trusted_transcript:
+        return True, "trusted transcript correction"
     if key in {"ja", "nej", "ok", "okay"} and result.avg_logprob < -0.8:
         if signal_quality is None or signal_quality.crest_factor >= 24.0 or signal_quality.active_ratio < 0.18:
             return False, "kort uklart svar"
@@ -1459,6 +1559,8 @@ def _accept_stt_result(
         return False, "for lidt sammenhængende tale"
     if key in {"hej", "hejsa", "hejstacky", "stacky"}:
         return True, "kort hilsen"
+    if _is_short_uncertain_stt_fragment(transcript, result):
+        return False, "kort usikkert STT-fragment"
 
     audio = result.audio
     if audio.duration_seconds < 0.45:
@@ -1483,6 +1585,30 @@ def _accept_stt_result(
     if result.compression_ratio > 2.6:
         return False, "gentagelses-artefakt"
     return True, "ok"
+
+
+def _is_short_uncertain_stt_fragment(transcript: str, result: STTResult) -> bool:
+    words = [word for word in transcript.split() if word]
+    if len(words) > 3:
+        return False
+    key = _transcript_key(transcript)
+    if key in {
+        "vent",
+        "ventlige",
+        "stop",
+        "stoplige",
+        "pause",
+        "skruop",
+        "skruned",
+        "kigop",
+        "kigned",
+        "center",
+        "ligeud",
+    }:
+        return False
+    if any(token in key for token in ("volumen", "volume", "hojre", "venstre")):
+        return False
+    return result.avg_logprob < -0.55
 
 
 def _parse_local_realtime_reply(text: str) -> str | None:
@@ -1651,10 +1777,10 @@ def _parse_volume_command(text: str, *, current_level: int) -> tuple[int, str] |
             level = _clamp_volume_level(level)
             return level, f"Okay, min volumen er nu {level} procent."
 
-    if any(phrase in lowered for phrase in ("skru op", "højere", "hojere", "mere lyd", "for lav")):
+    if any(phrase in lowered for phrase in ("skru op", "skru lidt op", "skru en smule op", "højere", "hojere", "mere lyd", "for lav")):
         level = _clamp_volume_level(current_level + 15)
         return level, f"Okay, jeg skruer op til {level} procent."
-    if any(phrase in lowered for phrase in ("skru ned", "lavere", "dæmp", "daemp", "mindre lyd", "for høj", "for hoj")):
+    if any(phrase in lowered for phrase in ("skru ned", "skru lidt ned", "skru en smule ned", "lavere", "dæmp", "daemp", "mindre lyd", "for høj", "for hoj")):
         level = _clamp_volume_level(current_level - 15)
         return level, f"Okay, jeg skruer ned til {level} procent."
     return None

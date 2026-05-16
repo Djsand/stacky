@@ -18,6 +18,7 @@ from stacky.cli import (
     _word_error_rate,
 )
 from stacky.voice.stt import AudioStats, STTResult
+from stacky.voice.transcript_correction import correct_danish_transcript
 from stacky.voice.turn_detection import TurnSignalQuality
 
 
@@ -78,11 +79,44 @@ class HandsfreeHelpersTest(unittest.TestCase):
 
         self.assertTrue(accepted)
 
+    def test_rejects_short_uncertain_uncorrected_fragment(self) -> None:
+        result = STTResult(
+            text="hej op i",
+            audio=AudioStats(duration_seconds=1.4, rms=900, peak=3200, sample_rate=16000, channels=1),
+            avg_logprob=-0.66,
+            no_speech_prob=0.0,
+            compression_ratio=0.0,
+        )
+
+        accepted, reason = _accept_stt_result(result, text="hej op i")
+
+        self.assertFalse(accepted)
+        self.assertEqual(reason, "kort usikkert STT-fragment")
+
+    def test_accepts_trusted_transcript_correction_even_when_raw_is_odd(self) -> None:
+        result = STTResult(
+            text="oligopoly",
+            audio=AudioStats(duration_seconds=2.5, rms=850, peak=3400, sample_rate=16000, channels=1),
+            avg_logprob=-0.64,
+            no_speech_prob=0.0,
+            compression_ratio=0.0,
+        )
+
+        accepted, reason = _accept_stt_result(result, text="Skru lidt op for lyden.", trusted_transcript=True)
+
+        self.assertTrue(accepted)
+        self.assertEqual(reason, "trusted transcript correction")
+
     def test_parse_volume_command_absolute_percent(self) -> None:
         self.assertEqual(_parse_volume_command("sæt din volumen til 60 procent", current_level=80), (60, "Okay, min volumen er nu 60 procent."))
 
     def test_parse_volume_command_relative_up(self) -> None:
         self.assertEqual(_parse_volume_command("skru op", current_level=80), (95, "Okay, jeg skruer op til 95 procent."))
+
+    def test_corrected_bad_stt_volume_phrase_reaches_parser(self) -> None:
+        text = correct_danish_transcript("oligopoly").text
+
+        self.assertEqual(_parse_volume_command(text, current_level=80), (95, "Okay, jeg skruer op til 95 procent."))
 
     def test_parse_volume_command_relative_down(self) -> None:
         self.assertEqual(_parse_volume_command("skru ned", current_level=10), (0, "Okay, jeg skruer ned til 0 procent."))
@@ -152,6 +186,11 @@ class HandsfreeHelpersTest(unittest.TestCase):
         self.assertEqual((_parse_motion_command("nik med hovedet") or None).gesture, "nod")
         self.assertEqual((_parse_motion_command("prøv en bevægelse") or None).gesture, "demo")
         self.assertIsNone(_parse_motion_command("skru op"))
+
+    def test_corrected_partial_motion_phrase_reaches_parser(self) -> None:
+        text = correct_danish_transcript("lidt til hojre").text
+
+        self.assertEqual((_parse_motion_command(text) or None).gesture, "look_right")
 
     def test_parse_calibration_command(self) -> None:
         right = _parse_calibration_command("lidt mere til højre")

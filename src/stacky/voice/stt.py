@@ -47,6 +47,32 @@ STT_MODEL_ALIASES = {
 }
 
 
+DEFAULT_DANISH_STT_HOTWORDS: tuple[str, ...] = (
+    "Stacky",
+    "Nicolai",
+    "hej Stacky",
+    "hvad laver du lige nu",
+    "kan du høre mig tydeligt",
+    "jeg mumler lidt",
+    "jeg snakker hurtigt",
+    "latency",
+    "skru lidt op for lyden",
+    "skru lidt ned for lyden",
+    "skru op for lyden",
+    "skru ned for lyden",
+    "sæt volumen",
+    "kig lidt til højre",
+    "kig lidt til venstre",
+    "kig op",
+    "kig ned",
+    "gem den her position som center",
+    "jeg hedder Nicolai",
+    "lytte ordentligt",
+    "Sandcode",
+    "Home Assistant",
+)
+
+
 class FasterWhisperDanishSTT:
     def __init__(self, model_size: str = "base", *, device: str = "cpu", compute_type: str = "int8") -> None:
         self.model_size = model_size
@@ -117,9 +143,18 @@ class FasterWhisperDanishSTT:
 class Wav2Vec2DanishSTT:
     DEFAULT_MODEL = "CoRal-project/roest-v3-wav2vec2-315m"
 
-    def __init__(self, model_id: str = DEFAULT_MODEL, *, device: str | None = None) -> None:
+    def __init__(
+        self,
+        model_id: str = DEFAULT_MODEL,
+        *,
+        device: str | None = None,
+        hotwords: tuple[str, ...] | list[str] | None = DEFAULT_DANISH_STT_HOTWORDS,
+        hotword_weight: float = 5.0,
+    ) -> None:
         self.model_id = model_id
         self.device = device
+        self.hotwords = tuple(hotwords or ())
+        self.hotword_weight = hotword_weight
         self._processor = None
         self._model = None
         self._torch = None
@@ -175,7 +210,13 @@ class Wav2Vec2DanishSTT:
         with self._torch.inference_mode():
             logits = self._model(**model_inputs).logits
         predicted_ids = self._torch.argmax(logits, dim=-1)
-        text = _decode_ctc_text(self._processor, logits, predicted_ids)
+        text = _decode_ctc_text(
+            self._processor,
+            logits,
+            predicted_ids,
+            hotwords=self.hotwords,
+            hotword_weight=self.hotword_weight,
+        )
         avg_logprob = _ctc_avg_logprob(
             logits,
             predicted_ids,
@@ -377,10 +418,25 @@ def _ctc_blank_id(processor, model) -> int:
     return int(blank_id)
 
 
-def _decode_ctc_text(processor, logits, predicted_ids) -> str:
+def _decode_ctc_text(
+    processor,
+    logits,
+    predicted_ids,
+    *,
+    hotwords: tuple[str, ...] | list[str] = (),
+    hotword_weight: float = 0.0,
+) -> str:
     if hasattr(processor, "decoder"):
-        decoded = processor.batch_decode(logits.detach().cpu().numpy())
-        return decoded.text[0].strip()
+        kwargs = {}
+        if hotwords and hotword_weight > 0:
+            kwargs["hotwords"] = list(hotwords)
+            kwargs["hotword_weight"] = float(hotword_weight)
+        try:
+            decoded = processor.batch_decode(logits.detach().cpu().numpy(), **kwargs)
+        except TypeError:
+            decoded = processor.batch_decode(logits.detach().cpu().numpy())
+        text = decoded.text[0] if hasattr(decoded, "text") else decoded[0]
+        return str(text).strip()
     return processor.batch_decode(predicted_ids)[0].strip()
 
 

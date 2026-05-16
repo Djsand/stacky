@@ -2,12 +2,13 @@
 
 ## Current Snapshot
 
-Updated 2026-05-16 after the STT benchmark and dual-channel official firmware pass.
+Updated 2026-05-16 after the Danish STT research/fix pass.
 
 - Branch: `official-firmware-base`
 - Latest branch head: run `git log --oneline -1` after pull.
 - Recent implementation commits:
-  - latest: Add dual-channel mic STT diagnostics
+  - latest pushed: Add dual-channel mic STT diagnostics
+  - local uncommitted: Danish STT hotwords, live transcript correction, stricter clipped-noise gate, benchmark live-gate mode
   - `efcff5c Fix VAD noise floor endpointing`
   - `f50b3b3 Prioritize Danish Røst STT evaluation`
   - `ac5cd41 Add StackChan STT dataset benchmark loop`
@@ -20,7 +21,7 @@ Updated 2026-05-16 after the STT benchmark and dual-channel official firmware pa
 
 Latest verification:
 
-- `.\.venv\Scripts\python.exe -m unittest discover -s tests` -> `114 OK`
+- `.\.venv\Scripts\python.exe -m unittest discover -s tests` -> `126 OK`
 - `.\.venv\Scripts\python.exe -m pip check` -> no broken requirements
 - `git diff --check -- . ':!patches/official-stackchan/0001-stacky-bridge.patch'` -> clean apart from CRLF warnings. The patch file itself contains normal unified-diff context blank lines that `git diff --check` reports as trailing whitespace when treating the patch as a text file.
 - ESP-IDF build passed via `S:\` / `I:\`.
@@ -36,16 +37,61 @@ Runtime state:
 
 Next engineering priority:
 
-1. Do not spend more time polishing head motion first.
-2. Use the STT dataset loop before changing models/filters:
+1. Test the new live STT path on real StackChan hardware:
+   - `python -m stacky handsfree --tts-engine supertonic --speaker stackchan`
+   - speak normal Danish first, then fast, then slightly mumbled.
+2. If live behavior is still wrong, capture the failing turn WAV from `artifacts/handsfree_turns/` and add a narrow correction/test before changing models.
+3. Use the STT dataset loop before changing models/filters:
    - `python -m stacky stt-capture --limit 12 --debug-audio`
    - `python -m stacky stt-capture --phrases-file .\artifacts\stt_phrases.txt --noise-count 3 --debug-audio`
    - `python -m stacky stt-bench --dataset .\artifacts\stt_dataset\stackchan\manifest.jsonl --report .\artifacts\stt_dataset\stt-report.jsonl`
-3. Capture and benchmark channel 1 separately before changing more ASR code:
+4. Capture and benchmark channel 1 separately before changing more ASR code:
    - `python -m stacky stt-capture --limit 10 --speech-style normal --speech-style fast --speech-style mumble --noise-count 5 --mic-channel 1 --output-dir .\artifacts\stt_dataset\stackchan-ch1 --debug-audio`
    - `python -m stacky stt-bench --dataset .\artifacts\stt_dataset\stackchan-ch1\manifest.jsonl --engine roest-v3 --report .\artifacts\stt_dataset\stt-ch1-roest-v3.jsonl`
-4. Fix input quality/session trust first: Danish STT is still unstable enough that StackChan voice must remain an untrusted source.
-5. Once STT is reliable, flip hands-free voice from untrusted to trusted session persistence deliberately, with a test.
+5. Voice remains an untrusted session source. Do not write handsfree transcripts into memory/infinite sessions until live STT is stable across normal daily speech.
+6. Once STT is reliable, flip hands-free voice from untrusted to trusted session persistence deliberately, with a test.
+
+## Latest Danish STT Research/Fix
+
+Research summary:
+
+- Better model cards did not translate to better StackChan mic performance.
+- Tested/checked candidates include Røst v2/v3 wav2vec2, Røst Whisper 1.5B, Whisper large-v3-turbo, Qwen3-ASR, Saga, Milo, MediaCatch XLS-R, NbAiLab wav2vec2, and NVIDIA Parakeet Danish.
+- Practical conclusion: keep Røst v3 wav2vec2 as the low-latency base and add Stacky-specific decoding/correction around it.
+- Qwen/Saga/Milo can be revisited only if a proper accelerated backend is available. CPU/Windows tests were not usable enough.
+
+Implemented:
+
+- `Wav2Vec2DanishSTT` now uses pyctcdecode hotwords by default, weight `5.0`.
+- Hotwords cover Stacky, Nicolai, common volume/motion/calibration phrases, latency, Sandcode, Home Assistant.
+- New `src/stacky/voice/transcript_correction.py` applies conservative live correction for observed Stacky intents:
+  - `hej stakke` / `hej op i` -> `Hej Stacky`
+  - `oligopoly` / similar -> `Skru lidt op for lyden.`
+  - `lidt til hojre` / `lidt for her` -> `Kig lidt til højre.`
+  - common Nicolai/Stacky spelling variants
+- Handsfree now logs raw-to-corrected STT when it changes a transcript.
+- Handsfree only treats exact/phrase corrections as trusted; short unclear uncorrected fragments are rejected instead of sent to the LLM.
+- `stt-bench --correct-transcripts` scores the live post-correction path.
+- `stt-bench --live-gate` recomputes signal quality and measures the same pre-STT noise rejection used by handsfree.
+- VAD now rejects clipped/percussive StackChan noise with `peak>=32000`, high crest factor, and high p95 RMS.
+
+Current benchmark on `artifacts/stt_dataset/stackchan/manifest.jsonl`:
+
+- Previous Røst v3 full channel-0 dataset: `mean_wer=72.2%`, `mean_cer=49.5%`, `rtf=0.15`.
+- Røst v3 + hotwords only, first 10 normal clips: `mean_wer=45.8%`, `mean_cer=26.0%`, `rtf=0.13`.
+- Røst v3 + hotwords + live correction, first 10 normal clips: `mean_wer=18.4%`, `mean_cer=11.4%`, `rtf=0.13`.
+- Current full live pipeline with correction + live gate:
+  - total: `mean_wer=27.4%`, `mean_cer=17.6%`, `rtf=0.11`
+  - normal: `mean_wer=15.1%`, `mean_cer=9.5%`
+  - fast: `mean_wer=38.4%`, `mean_cer=19.7%`
+  - mumble: `mean_wer=42.4%`, `mean_cer=32.5%`
+  - noise: all 5 noise clips rejected before STT
+
+Reality check:
+
+- This is a better usable local path, not perfect general Danish dictation.
+- Stacky control phrases, names, greetings, volume, center, and right-look commands are now much stronger.
+- Long fast/mumbled free text is still weak. For that, the real fix is a larger Nicolai/StackChan dataset and fine-tuning/adaptation, not another blind model swap.
 
 ## Latest STT/Mic Channel Update
 
