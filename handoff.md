@@ -2,10 +2,13 @@
 
 ## Current Snapshot
 
-Updated 2026-05-16 after the session/memory pivot.
+Updated 2026-05-16 after adding the STT dataset/benchmark loop.
 
 - Branch: `official-firmware-base`
-- Latest pushed commit: `2a26d35 Add Stacky infinite sessions and safe memory gating`
+- Latest branch head: run `git log --oneline -1` after pull.
+- Recent implementation commits:
+  - `ac5cd41 Add StackChan STT dataset benchmark loop`
+  - `2a26d35 Add Stacky infinite sessions and safe memory gating`
 - Remote: `origin https://github.com/Djsand/stacky.git`
 - Push status: `official-firmware-base` pushed to `origin`
 - Local `git status --short`: only `m vendor/m5stack-stackchan`
@@ -14,7 +17,7 @@ Updated 2026-05-16 after the session/memory pivot.
 
 Latest verification:
 
-- `.\.venv\Scripts\python.exe -m unittest discover -s tests` -> `101 OK`
+- `.\.venv\Scripts\python.exe -m unittest discover -s tests` -> `106 OK`
 - `.\.venv\Scripts\python.exe -m pip check` -> no broken requirements
 - `git diff --check` / `git diff --cached --check` -> clean when run before commit
 
