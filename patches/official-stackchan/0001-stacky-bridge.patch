@@ -125,14 +125,14 @@ index 77cc9b7..06e2ab4 100644
  #include "app_avatar/app_avatar.h"
  #include "app_setup/app_setup.h"
 diff --git a/firmware/main/hal/hal.h b/firmware/main/hal/hal.h
-index 5f9efcf..9dd3e50 100644
+index 5f9efcf..2157ce0 100644
 --- a/firmware/main/hal/hal.h
 +++ b/firmware/main/hal/hal.h
 @@ -132,6 +132,8 @@ enum class MicTestStatus {
      Failed,
  };
  
-+inline constexpr const char* STACKY_BOOT_VERSION = "official-0.1.13";
++inline constexpr const char* STACKY_BOOT_VERSION = "official-0.1.14";
 +
  /**
   * @brief
@@ -225,7 +225,7 @@ index 5f9efcf..9dd3e50 100644
      std::unique_ptr<uitk::lvgl_cpp::Label> _label_version;
 diff --git a/firmware/main/hal/stacky_bridge.cpp b/firmware/main/hal/stacky_bridge.cpp
 new file mode 100644
-index 0000000..d3e3851
+index 0000000..ffd86db
 --- /dev/null
 +++ b/firmware/main/hal/stacky_bridge.cpp
 @@ -0,0 +1,967 @@
@@ -297,7 +297,7 @@ index 0000000..d3e3851
 +namespace {
 +
 +constexpr const char* TAG = "StackyBridge";
-+constexpr const char* STACKY_BRIDGE_VERSION = "official-0.1.13";
++constexpr const char* STACKY_BRIDGE_VERSION = "official-0.1.14";
 +constexpr size_t MIC_FRAME_COUNT = 480;       // 20 ms at 24 kHz
 +constexpr int MIC_WARMUP_DISCARD_FRAMES = 12;
 +constexpr size_t PLAYBACK_CHUNK_SAMPLES = 960;
@@ -330,7 +330,7 @@ index 0000000..d3e3851
 +    }
 +
 +    const size_t max_output_size = ((size + 2) / 3) * 4;
-+    output.assign(max_output_size, '\0');
++    output.assign(max_output_size + 1, '\0');
 +
 +    size_t output_size = 0;
 +    const int rc       = mbedtls_base64_encode(
