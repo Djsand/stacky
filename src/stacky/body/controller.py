@@ -16,6 +16,7 @@ from .protocol import (
     gesture,
     hold_audio,
     look_at,
+    mic_input_gain,
     motion_config,
     speak_audio,
     speaker_volume,
@@ -179,6 +180,9 @@ class StackChanBodyController:
 
     def set_volume(self, level: int) -> bool:
         return self.send(speaker_volume(level))
+
+    def set_mic_gain(self, level: int) -> bool:
+        return self.send(mic_input_gain(level))
 
     def send(self, command: BodyCommand) -> bool:
         payload = (command.to_json() + "\n").encode("utf-8")

@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 
 from stacky.brain import StackyBrain
-from stacky.llm import ChatMessage
+from stacky.llm import ChatMessage, LLMError
 from stacky.memory import MemoryStore
 from stacky.sessions import InfiniteSessionStore, read_jsonl_messages
 from stacky.soul import StackySoul
@@ -23,6 +23,11 @@ class FakeLLM:
 class LongFakeLLM:
     async def chat(self, messages: list[ChatMessage], *, temperature: float = 0.4, max_tokens: int | None = None) -> str:
         return "Første korte svar. " + ("Mere forklaring. " * 40)
+
+
+class FailingFakeLLM:
+    async def chat(self, messages: list[ChatMessage], *, temperature: float = 0.4, max_tokens: int | None = None) -> str:
+        raise LLMError("connection refused")
 
 
 class BrainMemoryContextTest(unittest.IsolatedAsyncioTestCase):
@@ -83,6 +88,17 @@ class BrainMemoryContextTest(unittest.IsolatedAsyncioTestCase):
             await brain.respond("mit navn er forkert transcript", allow_memory_writes=False)
 
             self.assertEqual(memory.count(), 0)
+
+    async def test_degraded_brain_reply_has_short_spoken_text(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = MemoryStore(Path(tmp) / "memory.sqlite")
+            brain = StackyBrain(StackySoul(created_for="Nicolai"), memory, FailingFakeLLM())  # type: ignore[arg-type]
+
+            reply = await brain.respond("hej")
+
+        self.assertTrue(reply.degraded)
+        self.assertIn("connection refused", reply.text)
+        self.assertEqual(reply.spoken_text, "Min brain-model svarer ikke lige nu. Jeg lytter stadig.")
 
     async def test_session_store_persists_trusted_turns(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -90,6 +90,23 @@ class TurnDetectionTest(unittest.TestCase):
         self.assertFalse(quality.speech_like)
         self.assertEqual(quality.reason, "klik/percussiv støj")
 
+    def test_signal_quality_accepts_soft_short_speech_run(self) -> None:
+        quality = TurnSignalQuality(
+            duration_seconds=1.10,
+            median_rms=67,
+            p80_rms=350,
+            p95_rms=914,
+            peak=2387,
+            active_ratio=0.18,
+            active_ms=200,
+            max_active_run_ms=200,
+            crest_factor=11.3,
+            active_threshold=420,
+            zero_crossing_rate=0.12,
+        )
+
+        self.assertTrue(quality.speech_like)
+
     def test_signal_quality_rejects_high_frequency_noise(self) -> None:
         quality = analyze_turn_signal(pcm_tone(5000, 1.0), sample_rate=16000)
 

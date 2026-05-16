@@ -13,6 +13,7 @@ from stacky.body.protocol import (
     hold_audio,
     look_at,
     mobility_intent,
+    mic_input_gain,
     motion_config,
     speak_audio,
     speaker_volume,
@@ -83,6 +84,11 @@ class BodyProtocolTest(unittest.TestCase):
     def test_speaker_volume_command_encodes(self) -> None:
         raw = speaker_volume(140).to_json()
         self.assertIn("audio.volume", raw)
+        self.assertIn('"level":100', raw)
+
+    def test_mic_input_gain_command_encodes(self) -> None:
+        raw = mic_input_gain(140).to_json()
+        self.assertIn("audio.input_gain", raw)
         self.assertIn('"level":100', raw)
 
     def test_audio_chunk_protocol_encodes(self) -> None:

@@ -81,9 +81,9 @@ def main(argv: list[str] | None = None) -> int:
     handsfree.add_argument("--min-speech-ms", type=int, default=220, help="Minimum voiced audio before accepting a turn.")
     handsfree.add_argument(
         "--mic-channel",
-        choices=("0", "1", "mix", "all"),
-        default="0",
-        help="StackChan input channel to use after firmware capture. 'all' keeps multichannel WAVs for diagnostics.",
+        choices=("auto", "best", "0", "1", "mix", "all"),
+        default="auto",
+        help="StackChan input channel to use after firmware capture. auto/best chooses the loudest channel per chunk; all keeps multichannel WAVs for diagnostics.",
     )
     handsfree.add_argument("--listen-only", action="store_true", help="Only print StackChan STT results; do not call the brain or TTS.")
     handsfree.add_argument("--debug-audio", action="store_true", help="Print live StackChan mic RMS/peak while listening.")
@@ -112,6 +112,7 @@ def main(argv: list[str] | None = None) -> int:
     handsfree.add_argument("--stackchan-target-rms", type=int, default=9000, help="Target active PCM RMS for StackChan speaker loudness.")
     handsfree.add_argument("--stackchan-max-gain", type=float, default=4.0, help="Maximum StackChan speaker PCM gain before clipping.")
     handsfree.add_argument("--stackchan-volume", type=int, default=80, help="Initial StackChan codec volume, 0-100.")
+    handsfree.add_argument("--stackchan-mic-gain", type=int, default=75, help="Initial StackChan codec mic gain, 0-100.")
     handsfree.add_argument("--reply-chars", type=int, default=150, help="Default spoken reply character budget for low-latency live chat.")
     handsfree.add_argument("--detail-reply-chars", type=int, default=260, help="Spoken reply character budget when the user asks for details.")
     stt_capture = sub.add_parser("stt-capture", help="Record labelled StackChan mic clips for Danish STT evaluation.")
@@ -135,11 +136,12 @@ def main(argv: list[str] | None = None) -> int:
     stt_capture.add_argument("--min-speech-ms", type=int, default=220, help="Minimum voiced audio before accepting a turn.")
     stt_capture.add_argument(
         "--mic-channel",
-        choices=("0", "1", "mix", "all"),
-        default="0",
+        choices=("auto", "best", "0", "1", "mix", "all"),
+        default="auto",
         help="StackChan input channel to record. Use 0 and 1 in separate captures to compare mic channels.",
     )
     stt_capture.add_argument("--debug-audio", action="store_true", help="Print accepted/rejected signal quality while capturing.")
+    stt_capture.add_argument("--stackchan-mic-gain", type=int, default=75, help="Initial StackChan codec mic gain, 0-100.")
     stt_bench = sub.add_parser("stt-bench", help="Benchmark local Danish STT models on saved StackChan WAV turns.")
     stt_bench.add_argument("--audio", action="append", default=[], help="WAV file, directory, or glob. Defaults to artifacts/handsfree_turns/*.wav.")
     stt_bench.add_argument("--dataset", default="", help="JSONL/TSV manifest from stt-capture. Provides expected text for scoring.")
@@ -289,6 +291,7 @@ def main(argv: list[str] | None = None) -> int:
                 stackchan_target_rms=args.stackchan_target_rms,
                 stackchan_max_gain=args.stackchan_max_gain,
                 stackchan_volume=args.stackchan_volume,
+                stackchan_mic_gain=args.stackchan_mic_gain,
                 reply_chars=args.reply_chars,
                 detail_reply_chars=args.detail_reply_chars,
                 listen_only=args.listen_only,
@@ -313,6 +316,7 @@ def main(argv: list[str] | None = None) -> int:
                 min_speech_ms=args.min_speech_ms,
                 mic_channel=args.mic_channel,
                 debug_audio=args.debug_audio,
+                stackchan_mic_gain=args.stackchan_mic_gain,
             )
         )
     if args.command == "stt-bench":
@@ -563,6 +567,7 @@ async def _stt_capture(
     min_speech_ms: int,
     mic_channel: str,
     debug_audio: bool,
+    stackchan_mic_gain: int,
 ) -> int:
     config = load_config(config_path)
     phrases = load_capture_phrases(
@@ -638,6 +643,8 @@ async def _stt_capture(
     where = f"{address[0]}:{address[1]}" if address else "StackChan"
     print(f"StackChan connected from {where}", flush=True)
     print(f"Using StackChan mic channel: {mic_channel}", flush=True)
+    print(f"Setting StackChan mic gain: {stackchan_mic_gain}", flush=True)
+    controller.set_mic_gain(stackchan_mic_gain)
     selected_styles = _resolve_capture_speech_styles(speech_styles)
     capture_items = [
         (_capture_prompt_for_style(phrase, style), phrase, False, style)
@@ -1107,6 +1114,7 @@ async def _handsfree(
     stackchan_target_rms: int,
     stackchan_max_gain: float,
     stackchan_volume: int,
+    stackchan_mic_gain: int,
     reply_chars: int,
     detail_reply_chars: int,
     mic_channel: str,
@@ -1194,6 +1202,8 @@ async def _handsfree(
     where = f"{address[0]}:{address[1]}" if address else "StackChan"
     print(f"StackChan connected from {where}", flush=True)
     print(f"Using StackChan mic channel: {mic_channel}", flush=True)
+    print(f"Setting StackChan mic gain: {stackchan_mic_gain}", flush=True)
+    controller.set_mic_gain(stackchan_mic_gain)
     body_director = BodyDirector(controller, body_calibration)
     body_director.apply_calibration()
 
@@ -1848,6 +1858,9 @@ def _body_server(config_path: str, *, duration: float = 0.0) -> int:
     print(f"Stacky body server listening on 0.0.0.0:{config.stackchan.port}", flush=True)
     print("Waiting for StackChan status/touch events. Press Ctrl+C to stop.", flush=True)
     client: socket.socket | None = None
+    buffer = b""
+    pending_raw_bytes = 0
+    audio_in_count = 0
     try:
         while True:
             if deadline is not None and time.monotonic() >= deadline:
@@ -1860,6 +1873,9 @@ def _body_server(config_path: str, *, duration: float = 0.0) -> int:
                     continue
                 client.settimeout(0.5)
                 print(f"StackChan connected from {address[0]}:{address[1]}", flush=True)
+                buffer = b""
+                pending_raw_bytes = 0
+                audio_in_count = 0
                 continue
             try:
                 raw = client.recv(4096)
@@ -1869,17 +1885,56 @@ def _body_server(config_path: str, *, duration: float = 0.0) -> int:
                 print("StackChan disconnected.", flush=True)
                 client.close()
                 client = None
+                buffer = b""
+                pending_raw_bytes = 0
+                audio_in_count = 0
                 continue
-            for line in raw.decode("utf-8", errors="replace").splitlines():
-                if not line.strip():
+            buffer += raw
+            while buffer:
+                if pending_raw_bytes > 0:
+                    consumed = min(pending_raw_bytes, len(buffer))
+                    buffer = buffer[consumed:]
+                    pending_raw_bytes -= consumed
+                    if pending_raw_bytes > 0:
+                        break
+                    continue
+                if b"\n" not in buffer:
+                    break
+                line_bytes, buffer = buffer.split(b"\n", 1)
+                if not line_bytes.strip():
+                    continue
+                line = line_bytes.decode("utf-8", errors="replace")
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    print(f"StackChan raw event: {line}", flush=True)
+                    continue
+                event_type = str(event.get("type", ""))
+                payload = event.get("payload", {})
+                if not isinstance(payload, dict):
+                    payload = {}
+                if event_type == "audio.in" and payload.get("transport") == "raw":
+                    pending_raw_bytes = max(0, int(payload.get("bytes", 0) or 0))
+                    audio_in_count += 1
+                    if audio_in_count <= 3 or audio_in_count % 100 == 0:
+                        print(
+                            "StackChan raw event: "
+                            f"audio.in #{audio_in_count} raw {payload.get('sampleRate', '?')} Hz "
+                            f"{payload.get('channels', '?')} ch {pending_raw_bytes} bytes",
+                            flush=True,
+                        )
                     continue
                 print(f"StackChan raw event: {line}", flush=True)
-                try:
-                    client.sendall((expression("happy").to_json() + "\n").encode("utf-8"))
-                except OSError:
-                    client.close()
-                    client = None
-                    break
+                if event_type == "touch":
+                    try:
+                        client.sendall((expression("happy").to_json() + "\n").encode("utf-8"))
+                    except OSError:
+                        client.close()
+                        client = None
+                        buffer = b""
+                        pending_raw_bytes = 0
+                        audio_in_count = 0
+                        break
     except KeyboardInterrupt:
         return 0
     finally:

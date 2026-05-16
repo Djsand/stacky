@@ -2,13 +2,16 @@
 
 ## Current Snapshot
 
-Updated 2026-05-16 after the Danish STT research/fix pass.
+Updated 2026-05-16 after the StackChan mic-gain/auto-channel hotfix and second STT research pass.
 
 - Branch: `official-firmware-base`
 - Latest branch head: run `git log --oneline -1` after pull.
-- Recent implementation commits:
-  - latest pushed: Add dual-channel mic STT diagnostics
-  - local uncommitted: Danish STT hotwords, live transcript correction, stricter clipped-noise gate, benchmark live-gate mode
+- Recent implementation work:
+  - Danish STT hotwords, live transcript correction, stricter clipped-noise gate, benchmark live-gate mode.
+  - StackChan firmware `official-0.1.10` with PC-controlled mic gain.
+  - Handsfree/capture default `--mic-channel auto` instead of fixed channel `0`.
+  - Short spoken fallback when the brain endpoint is down, so TTS does not read a long exception.
+  - `body-server` now parses raw `audio.in` frames safely and no longer sends a status feedback loop.
   - `efcff5c Fix VAD noise floor endpointing`
   - `f50b3b3 Prioritize Danish Røst STT evaluation`
   - `ac5cd41 Add StackChan STT dataset benchmark loop`
@@ -21,12 +24,12 @@ Updated 2026-05-16 after the Danish STT research/fix pass.
 
 Latest verification:
 
-- `.\.venv\Scripts\python.exe -m unittest discover -s tests` -> `126 OK`
+- `.\.venv\Scripts\python.exe -m pytest tests` -> `133 passed`
 - `.\.venv\Scripts\python.exe -m pip check` -> no broken requirements
 - `git diff --check -- . ':!patches/official-stackchan/0001-stacky-bridge.patch'` -> clean apart from CRLF warnings. The patch file itself contains normal unified-diff context blank lines that `git diff --check` reports as trailing whitespace when treating the patch as a text file.
 - ESP-IDF build passed via `S:\` / `I:\`.
-- Flash to `COM3` passed for `official-0.1.9`.
-- `scripts\mic_listener.py --output artifacts\official_019_dual_channel_smoke.wav --seconds 6` connected and reported `firmware=official-0.1.9`, `micChannels=2`.
+- Flash to `COM3` passed for `official-0.1.10`.
+- `python -m stacky body-server --duration 4` connected and reported `firmware=official-0.1.10`, `micGain=75.0`, `micChannels=2`, and `audio.in raw 24000 Hz 2 ch 1920 bytes`.
 
 Runtime state:
 
@@ -39,17 +42,44 @@ Next engineering priority:
 
 1. Test the new live STT path on real StackChan hardware:
    - `python -m stacky handsfree --tts-engine supertonic --speaker stackchan`
+   - Expected startup should print `Using StackChan mic channel: auto` and `Setting StackChan mic gain: 75`.
    - speak normal Danish first, then fast, then slightly mumbled.
-2. If live behavior is still wrong, capture the failing turn WAV from `artifacts/handsfree_turns/` and add a narrow correction/test before changing models.
-3. Use the STT dataset loop before changing models/filters:
+2. If live behavior is still wrong, run listen-only with channel probes before changing model code:
+   - `python -m stacky handsfree --listen-only --debug-audio --mic-channel auto`
+   - `python -m stacky handsfree --listen-only --debug-audio --mic-channel 1`
+   - `python -m stacky handsfree --listen-only --debug-audio --mic-channel mix`
+3. If a transcript is wrong but the audio is real speech, capture the failing turn WAV from `artifacts/handsfree_turns/` and add a narrow correction/test before changing models.
+4. Use the STT dataset loop before changing models/filters:
    - `python -m stacky stt-capture --limit 12 --debug-audio`
    - `python -m stacky stt-capture --phrases-file .\artifacts\stt_phrases.txt --noise-count 3 --debug-audio`
    - `python -m stacky stt-bench --dataset .\artifacts\stt_dataset\stackchan\manifest.jsonl --report .\artifacts\stt_dataset\stt-report.jsonl`
-4. Capture and benchmark channel 1 separately before changing more ASR code:
+5. Capture and benchmark channel 1 separately before changing more ASR code:
    - `python -m stacky stt-capture --limit 10 --speech-style normal --speech-style fast --speech-style mumble --noise-count 5 --mic-channel 1 --output-dir .\artifacts\stt_dataset\stackchan-ch1 --debug-audio`
    - `python -m stacky stt-bench --dataset .\artifacts\stt_dataset\stackchan-ch1\manifest.jsonl --engine roest-v3 --report .\artifacts\stt_dataset\stt-ch1-roest-v3.jsonl`
-5. Voice remains an untrusted session source. Do not write handsfree transcripts into memory/infinite sessions until live STT is stable across normal daily speech.
-6. Once STT is reliable, flip hands-free voice from untrusted to trusted session persistence deliberately, with a test.
+6. Voice remains an untrusted session source. Do not write handsfree transcripts into memory/infinite sessions until live STT is stable across normal daily speech.
+7. Once STT is reliable, flip hands-free voice from untrusted to trusted session persistence deliberately, with a test.
+
+## Latest Mic/STT Hotfix
+
+- Firmware patch regenerated for `official-0.1.10`.
+- Firmware default input gain is now `75`; Python sends `audio.input_gain` at connect time.
+- `handsfree` and `stt-capture` default to `--mic-channel auto`; `auto`/`best` selects the loudest channel per PCM chunk when firmware sends stereo mic audio.
+- Signal quality now accepts shorter soft speech runs (`180ms`) so quiet real speech is less likely to be thrown away before STT.
+- Observed live failures now have conservative transcript corrections:
+  - `hej den i` / `hej d` -> `Hej Stacky`
+  - `d gik op ad` / `gik op ad` -> `Kig op.`
+- Brain connection failures keep the full exception in text logs but only speak: `Min brain-model svarer ikke lige nu. Jeg lytter stadig.`
+- `body-server` is safe for raw binary `audio.in` frames and prints only the first few/every 100th audio frame.
+
+Second STT candidate check:
+
+- Qwen3-ASR GGUF via latest llama.cpp b9181 HIP/ROCm loaded and used the Strix Halo GPU, but was not better on StackChan clips:
+  - 0.6B on `Hej Stacky` -> `Hai, Stegi.`
+  - 1.7B on `Hej Stacky` -> `Hej Stegi.`
+  - 1.7B on the next normal clips produced wrong/foreign-language text, so it is not a usable replacement.
+- Parakeet TDT 0.6B v3 ONNX was very fast, but failed Danish StackChan audio (`I`, English hallucinations).
+- Canary 1B v2 ONNX was fast and accepted `language='da'`, but still mistranscribed StackChan audio badly.
+- Practical conclusion remains: fix StackChan mic/channel/preprocessing first. Blind model swapping is not supported by the benchmark evidence.
 
 ## Latest Danish STT Research/Fix
 
@@ -102,7 +132,7 @@ Reality check:
 - Qwen3-ASR 0.6B was tested in an isolated venv at `C:\Users\nicol\.stacky-qwen-asr` to avoid main-venv dependency conflicts. On the first 10 normal channel-0 clips it produced `mean_wer=100.0%`, `mean_cer=71.5%`, and was slower than Røst after warm-up.
 - Conclusion: do not keep swapping models blindly. The current evidence points to StackChan audio/channel quality or mic-path selection. Official firmware now streams both input channels so channel 1 can be measured.
 - `TurnSignalQuality` now rejects clipped/percussive noise with `peak>=32000`, high crest factor, and short active runs.
-- `handsfree` and `stt-capture` accept `--mic-channel 0|1|mix|all`; default remains `0` for backward compatibility.
+- `handsfree` and `stt-capture` accept `--mic-channel auto|best|0|1|mix|all`; default is now `auto`.
 - `scripts/mic_listener.py` now handles multichannel WAV output and prints `micChannels` from status.
 
 ## Latest Session And Memory Update

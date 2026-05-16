@@ -64,11 +64,9 @@ class StackyBrain:
         try:
             response = await self.lmstudio.chat(messages)
         except LLMError as exc:
-            spoken = (
-                "Jeg kan ikke få fat i min brain-model lige nu. "
-                f"Fejlen er: {exc}. Jeg bliver stadig her og lytter."
-            )
-            return BrainReply(spoken, degraded=True, used_memories=memories)
+            text = f"Jeg kan ikke få fat i min brain-model lige nu: {exc}"
+            spoken = "Min brain-model svarer ikke lige nu. Jeg lytter stadig."
+            return BrainReply(text, spoken_text=spoken, degraded=True, used_memories=memories)
 
         if allow_memory_writes:
             for candidate in self._candidate_memories(user_text):

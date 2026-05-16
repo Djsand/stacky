@@ -26,6 +26,14 @@ class AudioChannelTest(unittest.TestCase):
         self.assertEqual(channels, 1)
         self.assertEqual(selected, pcm_sample(200) + pcm_sample(-50))
 
+    def test_auto_selects_loudest_channel(self) -> None:
+        pcm = pcm_sample(10) + pcm_sample(300) + pcm_sample(-20) + pcm_sample(-400)
+
+        selected, channels = select_pcm16_channel(pcm, channels=2, selection="auto")
+
+        self.assertEqual(channels, 1)
+        self.assertEqual(selected, pcm_sample(300) + pcm_sample(-400))
+
     def test_all_keeps_original_stream(self) -> None:
         pcm = pcm_sample(100) + pcm_sample(300)
 

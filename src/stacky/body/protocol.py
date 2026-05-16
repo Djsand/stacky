@@ -11,6 +11,7 @@ from typing import Any
 BODY_COMMAND_TYPES = {
     "audio.end",
     "audio.hold",
+    "audio.input_gain",
     "audio.raw",
     "audio.stop",
     "audio.start",
@@ -184,6 +185,10 @@ def speaker_tone(*, frequency: int = 880, duration_ms: int = 180) -> BodyCommand
 
 def speaker_volume(level: int) -> BodyCommand:
     return BodyCommand("audio.volume", {"level": max(0, min(100, int(level)))})
+
+
+def mic_input_gain(level: int) -> BodyCommand:
+    return BodyCommand("audio.input_gain", {"level": max(0, min(100, int(level)))})
 
 
 def decode_pcm_payload(payload: dict[str, Any]) -> tuple[bytes, int, int]:

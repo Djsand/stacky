@@ -41,7 +41,7 @@ class TurnSignalQuality:
             return False
         if self.active_ratio <= 0.12 and self.max_active_run_ms < 180:
             return False
-        return self.active_ms >= 220 or self.max_active_run_ms >= 220
+        return self.active_ms >= 180 or self.max_active_run_ms >= 180
 
     @property
     def percussive_noise_like(self) -> bool:
@@ -65,7 +65,7 @@ class TurnSignalQuality:
             return "klik/percussiv støj"
         if self.active_ratio <= 0.12 and self.max_active_run_ms < 180:
             return "for lidt sammenhængende tale"
-        if self.active_ms < 220 and self.max_active_run_ms < 220:
+        if self.active_ms < 180 and self.max_active_run_ms < 180:
             return "for lidt sammenhængende tale"
         return "ikke tale-lignende"
 

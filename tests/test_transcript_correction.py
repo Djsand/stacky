@@ -37,6 +37,16 @@ class TranscriptCorrectionTest(unittest.TestCase):
 
         self.assertEqual(correction.text, "Hej Stacky")
 
+    def test_corrects_live_greeting_failure(self) -> None:
+        correction = correct_danish_transcript("hej den i")
+
+        self.assertEqual(correction.text, "Hej Stacky")
+
+    def test_corrects_live_look_up_failure(self) -> None:
+        correction = correct_danish_transcript("d gik op ad")
+
+        self.assertEqual(correction.text, "Kig op.")
+
     def test_does_not_force_unrelated_chat_into_command(self) -> None:
         correction = correct_danish_transcript("regnede dig")
 

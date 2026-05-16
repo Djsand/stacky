@@ -88,6 +88,21 @@ class BodyControllerRawAudioTest(unittest.TestCase):
         self.assertEqual(sent[0].payload["centerYaw"], 120)
         self.assertEqual(sent[0].payload["centerPitch"], 250)
 
+    def test_controller_sends_mic_gain_command(self) -> None:
+        sent = []
+        controller = StackChanBodyController()
+
+        def send(command) -> bool:
+            sent.append(command)
+            return True
+
+        controller.send = send  # type: ignore[method-assign]
+
+        self.assertTrue(controller.set_mic_gain(75))
+
+        self.assertEqual(sent[0].type, "audio.input_gain")
+        self.assertEqual(sent[0].payload["level"], 75)
+
     def test_processes_raw_audio_in_header_and_binary_body(self) -> None:
         events = []
         controller = StackChanBodyController(on_event=events.append)
