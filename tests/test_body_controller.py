@@ -143,11 +143,12 @@ class BodyControllerRawAudioTest(unittest.TestCase):
 
         controller.send = send  # type: ignore[method-assign]
 
-        self.assertTrue(controller.capture_vision_frame(width=320, height=240))
+        self.assertTrue(controller.capture_vision_frame(width=320, height=240, quality=35))
 
         self.assertEqual(sent[0].type, "vision.capture")
         self.assertEqual(sent[0].payload["width"], 320)
         self.assertEqual(sent[0].payload["height"], 240)
+        self.assertEqual(sent[0].payload["quality"], 35)
 
     def test_processes_raw_audio_in_header_and_binary_body(self) -> None:
         events = []

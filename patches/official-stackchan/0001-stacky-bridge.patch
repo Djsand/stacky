@@ -125,14 +125,14 @@ index 77cc9b7..06e2ab4 100644
  #include "app_avatar/app_avatar.h"
  #include "app_setup/app_setup.h"
 diff --git a/firmware/main/hal/hal.h b/firmware/main/hal/hal.h
-index 5f9efcf..8c6065c 100644
+index 5f9efcf..9dd3e50 100644
 --- a/firmware/main/hal/hal.h
 +++ b/firmware/main/hal/hal.h
 @@ -132,6 +132,8 @@ enum class MicTestStatus {
      Failed,
  };
  
-+inline constexpr const char* STACKY_BOOT_VERSION = "official-0.1.12";
++inline constexpr const char* STACKY_BOOT_VERSION = "official-0.1.13";
 +
  /**
   * @brief
@@ -225,14 +225,15 @@ index 5f9efcf..8c6065c 100644
      std::unique_ptr<uitk::lvgl_cpp::Label> _label_version;
 diff --git a/firmware/main/hal/stacky_bridge.cpp b/firmware/main/hal/stacky_bridge.cpp
 new file mode 100644
-index 0000000..b8f24cb
+index 0000000..d3e3851
 --- /dev/null
 +++ b/firmware/main/hal/stacky_bridge.cpp
-@@ -0,0 +1,851 @@
+@@ -0,0 +1,967 @@
 +#include "stacky_bridge.h"
 +
 +#include "hal.h"
 +#include "hal/board/config.h"
++#include "hal/board/hal_bridge.h"
 +#include "utils/wifi_connect/wifi_station.h"
 +
 +#include <ArduinoJson.h>
@@ -244,10 +245,12 @@ index 0000000..b8f24cb
 +#include <freertos/FreeRTOS.h>
 +#include <freertos/semphr.h>
 +#include <freertos/task.h>
++#include <jpg/image_to_jpeg.h>
 +#include <lwip/errno.h>
 +#include <lwip/inet.h>
 +#include <lwip/netdb.h>
 +#include <lwip/sockets.h>
++#include <mbedtls/base64.h>
 +#include <smooth_lvgl.hpp>
 +#include <stackchan/modifiers/modifiers.h>
 +#include <stackchan/stackchan.h>
@@ -255,6 +258,7 @@ index 0000000..b8f24cb
 +#include <algorithm>
 +#include <atomic>
 +#include <cmath>
++#include <cstdlib>
 +#include <cstring>
 +#include <memory>
 +#include <string>
@@ -293,10 +297,11 @@ index 0000000..b8f24cb
 +namespace {
 +
 +constexpr const char* TAG = "StackyBridge";
-+constexpr const char* STACKY_BRIDGE_VERSION = "official-0.1.12";
++constexpr const char* STACKY_BRIDGE_VERSION = "official-0.1.13";
 +constexpr size_t MIC_FRAME_COUNT = 480;       // 20 ms at 24 kHz
 +constexpr int MIC_WARMUP_DISCARD_FRAMES = 12;
 +constexpr size_t PLAYBACK_CHUNK_SAMPLES = 960;
++constexpr size_t STACKY_MAX_VISION_JPEG_BYTES = 160 * 1024;
 +constexpr double TWO_PI = 6.2831853071795864769;
 +constexpr int STACKY_MIC_INPUT_GAIN = 75;
 +constexpr int STACKY_OUTPUT_VOLUME = 100;
@@ -316,6 +321,30 @@ index 0000000..b8f24cb
 +bool config_available()
 +{
 +    return std::strlen(STACKY_WIFI_SSID) > 0 && std::strlen(STACKY_HOST) > 0;
++}
++
++bool base64_encode(const uint8_t* data, size_t size, std::string& output)
++{
++    if (!data || size == 0) {
++        return false;
++    }
++
++    const size_t max_output_size = ((size + 2) / 3) * 4;
++    output.assign(max_output_size, '\0');
++
++    size_t output_size = 0;
++    const int rc       = mbedtls_base64_encode(
++        reinterpret_cast<unsigned char*>(&output[0]),
++        output.size(),
++        &output_size,
++        reinterpret_cast<const unsigned char*>(data),
++        size);
++    if (rc != 0) {
++        output.clear();
++        return false;
++    }
++    output.resize(output_size);
++    return true;
 +}
 +
 +}  // namespace
@@ -601,7 +630,7 @@ index 0000000..b8f24cb
 +            return;
 +        }
 +        if (std::strcmp(type, "vision.capture") == 0) {
-+            sendVisionUnavailable("camera_capture_not_implemented");
++            captureVisionFrame(payload);
 +            return;
 +        }
 +        if (std::strcmp(type, "body.status") == 0) {
@@ -798,11 +827,13 @@ index 0000000..b8f24cb
 +        if (len <= 0 || static_cast<size_t>(len) >= sizeof(header)) {
 +            return;
 +        }
-+        if (!sendBytes(header, static_cast<size_t>(len))) {
-+            connected_.store(false);
++        if (!send_mutex_) {
 +            return;
 +        }
-+        if (!sendBytes(samples, byte_count)) {
++        xSemaphoreTake(send_mutex_, portMAX_DELAY);
++        const bool ok = sendBytesUnlocked(header, static_cast<size_t>(len)) && sendBytesUnlocked(samples, byte_count);
++        xSemaphoreGive(send_mutex_);
++        if (!ok) {
 +            connected_.store(false);
 +        }
 +    }
@@ -842,6 +873,83 @@ index 0000000..b8f24cb
 +            now_seconds());
 +        if (len > 0 && static_cast<size_t>(len) < sizeof(line)) {
 +            sendBytes(line, static_cast<size_t>(len));
++        }
++    }
++
++    void captureVisionFrame(JsonVariantConst payload)
++    {
++        auto* camera = hal_bridge::board_get_camera();
++        if (!camera) {
++            sendVisionUnavailable("camera_unavailable");
++            return;
++        }
++        if (!camera->StreamCaptures()) {
++            sendVisionUnavailable("camera_capture_failed");
++            return;
++        }
++
++        const uint8_t* frame_data = camera->GetFrameData();
++        const size_t frame_size   = camera->GetFrameSize();
++        const int width           = camera->GetFrameWidth();
++        const int height          = camera->GetFrameHeight();
++        const int format          = camera->GetFrameFormat();
++        const int quality         = std::clamp(payload["quality"] | 20, 5, 80);
++        if (!frame_data || frame_size == 0 || width <= 0 || height <= 0) {
++            sendVisionUnavailable("camera_empty_frame");
++            return;
++        }
++
++        uint8_t* jpeg_data = nullptr;
++        size_t jpeg_size   = 0;
++        const bool encoded = image_to_jpeg(
++            const_cast<uint8_t*>(frame_data),
++            frame_size,
++            width,
++            height,
++            static_cast<v4l2_pix_fmt_t>(format),
++            quality,
++            &jpeg_data,
++            &jpeg_size);
++        if (!encoded || !jpeg_data || jpeg_size == 0) {
++            if (jpeg_data) {
++                free(jpeg_data);
++            }
++            sendVisionUnavailable("jpeg_encode_failed");
++            return;
++        }
++        if (jpeg_size > STACKY_MAX_VISION_JPEG_BYTES) {
++            free(jpeg_data);
++            sendVisionUnavailable("jpeg_too_large");
++            return;
++        }
++
++        std::string jpeg_base64;
++        if (!base64_encode(jpeg_data, jpeg_size, jpeg_base64)) {
++            free(jpeg_data);
++            sendVisionUnavailable("base64_encode_failed");
++            return;
++        }
++        free(jpeg_data);
++
++        std::string line;
++        line.reserve(jpeg_base64.size() + 280);
++        line += "{\"type\":\"vision.frame\",\"payload\":{\"available\":true,\"format\":\"jpeg\",\"encoding\":\"base64\",\"width\":";
++        line += std::to_string(width);
++        line += ",\"height\":";
++        line += std::to_string(height);
++        line += ",\"quality\":";
++        line += std::to_string(quality);
++        line += ",\"bytes\":";
++        line += std::to_string(jpeg_size);
++        line += ",\"sourceFormat\":";
++        line += std::to_string(format);
++        line += ",\"data\":\"";
++        line += jpeg_base64;
++        line += "\"},\"ts\":";
++        line += std::to_string(now_seconds());
++        line += "}\n";
++        if (!sendBytes(line.data(), line.size())) {
++            connected_.store(false);
 +        }
 +    }
 +
@@ -892,12 +1000,13 @@ index 0000000..b8f24cb
 +        const int mic_channels = codec ? std::max(codec->input_channels(), 1) : 1;
 +        const int battery_level = std::clamp(static_cast<int>(GetHAL().getBatteryLevel()), 0, 100);
 +        const bool battery_charging = GetHAL().isBatteryCharging();
++        const bool camera_available = hal_bridge::board_get_camera() != nullptr;
 +        display_brightness_.store(std::clamp(static_cast<int>(GetHAL().getBackLightBrightness()), 1, 100));
 +        char line[680];
 +        const int len = std::snprintf(
 +            line,
 +            sizeof(line),
-+            "{\"type\":\"status\",\"payload\":{\"device\":\"stackchan-cores3-official\",\"expression\":\"%s\",\"firmware\":\"%s\",\"speakerVolume\":%d,\"micGain\":%.1f,\"displayBrightness\":%d,\"batteryLevel\":%d,\"batteryCharging\":%s,\"micChannels\":%d,\"yaw\":%d,\"pitch\":%d,\"centerYaw\":%d,\"centerPitch\":%d,\"wheelsEnabled\":false,\"cameraAvailable\":false},\"ts\":%.3f}\n",
++            "{\"type\":\"status\",\"payload\":{\"device\":\"stackchan-cores3-official\",\"expression\":\"%s\",\"firmware\":\"%s\",\"speakerVolume\":%d,\"micGain\":%.1f,\"displayBrightness\":%d,\"batteryLevel\":%d,\"batteryCharging\":%s,\"micChannels\":%d,\"yaw\":%d,\"pitch\":%d,\"centerYaw\":%d,\"centerPitch\":%d,\"wheelsEnabled\":false,\"cameraAvailable\":%s},\"ts\":%.3f}\n",
 +            expression,
 +            STACKY_BRIDGE_VERSION,
 +            output_volume_.load(),
@@ -910,6 +1019,7 @@ index 0000000..b8f24cb
 +            angles.y,
 +            center_yaw_.load(),
 +            center_pitch_.load(),
++            camera_available ? "true" : "false",
 +            now_seconds());
 +        if (len > 0 && static_cast<size_t>(len) < sizeof(line)) {
 +            sendBytes(line, static_cast<size_t>(len));
@@ -1044,6 +1154,13 @@ index 0000000..b8f24cb
 +            return false;
 +        }
 +        xSemaphoreTake(send_mutex_, portMAX_DELAY);
++        const bool ok = sendBytesUnlocked(data, size);
++        xSemaphoreGive(send_mutex_);
++        return ok;
++    }
++
++    bool sendBytesUnlocked(const void* data, size_t size)
++    {
 +        bool ok = true;
 +        const auto* ptr = static_cast<const uint8_t*>(data);
 +        size_t sent_total = 0;
@@ -1055,7 +1172,6 @@ index 0000000..b8f24cb
 +            }
 +            sent_total += static_cast<size_t>(sent);
 +        }
-+        xSemaphoreGive(send_mutex_);
 +        return ok;
 +    }
 +

@@ -193,8 +193,15 @@ class StackChanBodyController:
     def request_status(self) -> bool:
         return self.send(body_status())
 
-    def capture_vision_frame(self, *, width: int = 320, height: int = 240, format: str = "jpeg") -> bool:
-        return self.send(vision_capture(width=width, height=height, format=format))
+    def capture_vision_frame(
+        self,
+        *,
+        width: int = 320,
+        height: int = 240,
+        format: str = "jpeg",
+        quality: int = 20,
+    ) -> bool:
+        return self.send(vision_capture(width=width, height=height, format=format, quality=quality))
 
     def send(self, command: BodyCommand) -> bool:
         payload = (command.to_json() + "\n").encode("utf-8")

@@ -208,13 +208,14 @@ def body_status() -> BodyCommand:
     return BodyCommand("body.status", {})
 
 
-def vision_capture(*, width: int = 320, height: int = 240, format: str = "jpeg") -> BodyCommand:
+def vision_capture(*, width: int = 320, height: int = 240, format: str = "jpeg", quality: int = 20) -> BodyCommand:
     return BodyCommand(
         "vision.capture",
         {
             "width": max(64, min(1280, int(width))),
             "height": max(64, min(720, int(height))),
             "format": format,
+            "quality": max(5, min(80, int(quality))),
         },
     )
 
@@ -234,6 +235,19 @@ def decode_pcm_payload(payload: dict[str, Any]) -> tuple[bytes, int, int]:
     if not isinstance(data, str):
         raise ValueError("Audio payload must contain raw PCM bytes or base64 text")
     return base64.b64decode(data), sample_rate, channels
+
+
+def decode_vision_frame_payload(payload: dict[str, Any]) -> bytes:
+    if not bool(payload.get("available", False)):
+        reason = str(payload.get("reason", "camera_unavailable"))
+        raise ValueError(f"Vision frame unavailable: {reason}")
+    encoding = str(payload.get("encoding", ""))
+    if encoding != "base64":
+        raise ValueError(f"Unsupported vision frame encoding: {encoding}")
+    data = payload.get("data", "")
+    if not isinstance(data, str):
+        raise ValueError("Vision frame payload must contain base64 text")
+    return base64.b64decode(data)
 
 
 def mobility_intent(direction: str, *, speed: float = 0.0, enabled: bool = False) -> BodyCommand:

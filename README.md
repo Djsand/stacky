@@ -159,6 +159,14 @@ Display brightness is a local body command after flashing `official-0.1.11`:
 - `sæt skærmen til 35`
 - `lidt mere`
 
+Camera snapshot capture is available after flashing `official-0.1.13`:
+
+```powershell
+.\.venv\Scripts\python.exe -m stacky camera-test --body-timeout 45
+```
+
+The captured JPEG is written to `artifacts\vision\stackchan-latest.jpg` by default.
+
 ## Safety Defaults
 
 - Home Assistant actions are suggest-first unless explicitly allowed by the caller.

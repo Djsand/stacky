@@ -9,6 +9,7 @@ from stacky.body.protocol import (
     audio_start,
     body_status,
     decode_pcm_payload,
+    decode_vision_frame_payload,
     display_brightness,
     expression,
     gesture,
@@ -115,6 +116,12 @@ class BodyProtocolTest(unittest.TestCase):
         self.assertEqual(command.payload["width"], 64)
         self.assertEqual(command.payload["height"], 720)
         self.assertEqual(command.payload["format"], "jpeg")
+        self.assertEqual(command.payload["quality"], 20)
+
+    def test_vision_capture_command_clamps_quality(self) -> None:
+        command = vision_capture(quality=100)
+
+        self.assertEqual(command.payload["quality"], 80)
 
     def test_audio_chunk_protocol_encodes(self) -> None:
         start = audio_start(sample_rate=44100, total_bytes=2048).to_json()
@@ -131,6 +138,15 @@ class BodyProtocolTest(unittest.TestCase):
         self.assertEqual(pcm, b"\x00\x01")
         self.assertEqual(sample_rate, 16000)
         self.assertEqual(channels, 1)
+
+    def test_vision_frame_payload_decodes_jpeg(self) -> None:
+        payload = {"available": True, "encoding": "base64", "data": "/9j/"}
+
+        self.assertEqual(decode_vision_frame_payload(payload), b"\xff\xd8\xff")
+
+    def test_vision_frame_payload_rejects_unavailable_frame(self) -> None:
+        with self.assertRaises(ValueError):
+            decode_vision_frame_payload({"available": False, "reason": "camera_unavailable"})
 
     def test_audio_payload_decodes_raw_pcm(self) -> None:
         pcm, sample_rate, channels = decode_pcm_payload(

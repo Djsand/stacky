@@ -17,7 +17,7 @@ from .brain import StackyBrain
 from .body.calibration import BodyCalibration, load_body_calibration, save_body_calibration
 from .body.controller import BodyPresence, StackChanBodyController
 from .body.director import BodyDirector
-from .body.protocol import decode_pcm_payload, expression
+from .body.protocol import decode_pcm_payload, decode_vision_frame_payload, expression
 from .config import DEFAULT_CONFIG_PATH, ROOT, load_config
 from .llm import create_chat_client
 from .memory import MemoryStore
@@ -232,6 +232,17 @@ def main(argv: list[str] | None = None) -> int:
         help="Gesture to run. demo runs a short safe sequence.",
     )
     motion_test.add_argument("--speed", type=int, default=550, help="Servo speed from 0 to 1000.")
+    camera_test = sub.add_parser("camera-test", help="Capture one StackChan camera JPEG through the Stacky bridge.")
+    camera_test.add_argument("--body-timeout", type=float, default=12.0, help="Seconds to wait for StackChan to connect.")
+    camera_test.add_argument("--frame-timeout", type=float, default=8.0, help="Seconds to wait for a camera frame.")
+    camera_test.add_argument("--width", type=int, default=320, help="Requested frame width metadata.")
+    camera_test.add_argument("--height", type=int, default=240, help="Requested frame height metadata.")
+    camera_test.add_argument("--quality", type=int, default=20, help="JPEG quality from 5 to 80. Lower is smaller/faster.")
+    camera_test.add_argument(
+        "--output",
+        default=str(ROOT / "artifacts" / "vision" / "stackchan-latest.jpg"),
+        help="Output JPEG path.",
+    )
     body = sub.add_parser("body-server", help="Run the StackChan body server.")
     body.add_argument("--duration", type=float, default=0.0, help="Stop after N seconds; 0 means run forever.")
     args = parser.parse_args(argv)
@@ -277,6 +288,18 @@ def main(argv: list[str] | None = None) -> int:
                 body_timeout=args.body_timeout,
                 gesture_name=args.gesture,
                 speed=args.speed,
+            )
+        )
+    if args.command == "camera-test":
+        return _run_async(
+            _camera_test(
+                args.config,
+                body_timeout=args.body_timeout,
+                frame_timeout=args.frame_timeout,
+                width=args.width,
+                height=args.height,
+                quality=args.quality,
+                output=args.output,
             )
         )
     if args.command == "live-text":
@@ -1161,6 +1184,74 @@ async def _motion_test(config_path: str, *, body_timeout: float, gesture_name: s
         print(f"Motion: {gesture_name}", flush=True)
         _run_motion_gesture(actor, gesture_name, speed=speed)
         controller.set_expression("listening")
+        return 0
+    finally:
+        controller.stop()
+
+
+async def _camera_test(
+    config_path: str,
+    *,
+    body_timeout: float,
+    frame_timeout: float,
+    width: int,
+    height: int,
+    quality: int,
+    output: str,
+) -> int:
+    config = load_config(config_path)
+    loop = asyncio.get_running_loop()
+    frame_future: asyncio.Future[dict[str, object]] = loop.create_future()
+
+    def on_event(event) -> None:
+        if event.type == "status":
+            print(f"[StackChan] status: {event.payload}", flush=True)
+            return
+        if event.type == "vision.frame" and not frame_future.done():
+            loop.call_soon_threadsafe(frame_future.set_result, dict(event.payload))
+
+    controller = StackChanBodyController(port=config.stackchan.port, on_event=on_event)
+    controller.start()
+    print(f"Stacky camera-test server listening on 0.0.0.0:{config.stackchan.port}", flush=True)
+    try:
+        if not controller.wait_connected(body_timeout):
+            print("StackChan did not connect yet.", flush=True)
+            return 1
+
+        address = controller.client_address
+        where = f"{address[0]}:{address[1]}" if address else "StackChan"
+        print(f"StackChan connected from {where}", flush=True)
+        controller.set_expression("thinking")
+        print(f"Requesting camera frame {width}x{height} quality={quality}.", flush=True)
+        if not controller.capture_vision_frame(width=width, height=height, quality=quality):
+            print("Failed to send vision.capture.", flush=True)
+            return 1
+
+        try:
+            payload = await asyncio.wait_for(frame_future, timeout=frame_timeout)
+        except TimeoutError:
+            print("Timed out waiting for vision.frame.", flush=True)
+            return 1
+
+        if not bool(payload.get("available", False)):
+            print(f"Camera unavailable: {payload.get('reason', 'unknown')}", flush=True)
+            return 1
+
+        try:
+            jpeg = decode_vision_frame_payload(payload)
+        except ValueError as exc:
+            print(f"Invalid vision frame: {exc}", flush=True)
+            return 1
+
+        output_path = Path(output)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_bytes(jpeg)
+        print(
+            f"Saved camera frame: {output_path} "
+            f"({payload.get('width')}x{payload.get('height')}, {len(jpeg)} bytes).",
+            flush=True,
+        )
+        controller.set_expression("happy")
         return 0
     finally:
         controller.stop()
