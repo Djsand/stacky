@@ -131,8 +131,8 @@ class VoiceOutputTest(unittest.IsolatedAsyncioTestCase):
     def test_stackchan_supertonic_output_uses_rhythmic_chunks(self) -> None:
         output = create_stackchan_supertonic_output(FakeController())  # type: ignore[arg-type]
 
-        self.assertEqual(output.chunk_chars, 160)
-        self.assertGreaterEqual(output.rhythm_gap_seconds, 0.14)
+        self.assertEqual(output.chunk_chars, 220)
+        self.assertLessEqual(output.rhythm_gap_seconds, 0.06)
         self.assertTrue(output.rhythmic_chunks)
 
     def test_stackchan_output_can_change_volume(self) -> None:

@@ -23,7 +23,7 @@ class SpeechAdapterTest(unittest.TestCase):
     def test_leading_name_greeting_is_kept_short(self) -> None:
         spoken = adapt_for_danish_speech("Hej Nicolai, det her er Stacky.")
 
-        self.assertEqual(spoken, "Hej. Det er Stækki.")
+        self.assertEqual(spoken, "Hej, det er Stækki.")
 
     def test_repeated_long_words_are_collapsed(self) -> None:
         spoken = adapt_for_danish_speech("Det skal være dansk dansk og roligt roligt.")
@@ -33,7 +33,7 @@ class SpeechAdapterTest(unittest.TestCase):
     def test_rhythm_punctuation_for_live_speech(self) -> None:
         spoken = adapt_for_danish_speech("Okay det giver mening men jeg venter hvis du tester.")
 
-        self.assertEqual(spoken, "Okay. Det giver mening, men jeg venter, hvis du tester.")
+        self.assertEqual(spoken, "Okay, det giver mening, men jeg venter, hvis du tester.")
 
     def test_rhythm_keeps_phrase_marker_as_comma(self) -> None:
         spoken = adapt_for_danish_speech("Det giver mening jeg venter.")
@@ -56,20 +56,20 @@ class SpeechAdapterTest(unittest.TestCase):
         self.assertGreater(len(chunks), 1)
         self.assertTrue(all(len(chunk) <= 45 for chunk in chunks))
 
-    def test_rhythmic_split_keeps_short_sentences_separate(self) -> None:
+    def test_rhythmic_split_keeps_short_speech_together(self) -> None:
         chunks = split_for_speech("Okay. Det giver mening, men jeg venter.", max_chars=160, rhythmic=True)
 
-        self.assertEqual(chunks, ["Okay.", "Det giver mening, men jeg venter."])
+        self.assertEqual(chunks, ["Okay, det giver mening, men jeg venter."])
 
-    def test_rhythmic_split_keeps_comma_pause_as_audio_boundary(self) -> None:
+    def test_rhythmic_split_keeps_comma_pause_inside_short_speech(self) -> None:
         chunks = split_for_speech("Det giver mening, jeg venter.", max_chars=160, rhythmic=True)
 
-        self.assertEqual(chunks, ["Det giver mening,", "jeg venter."])
+        self.assertEqual(chunks, ["Det giver mening, jeg venter."])
 
     def test_rhythmic_split_does_not_merge_short_sentences_when_text_is_long(self) -> None:
         chunks = split_for_speech("Okay. Jeg tester rytmen. Den skal ikke flyde sammen.", max_chars=42, rhythmic=True)
 
-        self.assertEqual(chunks, ["Okay.", "Jeg tester rytmen.", "Den skal ikke flyde sammen."])
+        self.assertEqual(chunks, ["Okay, jeg tester rytmen.", "Den skal ikke flyde sammen."])
 
     def test_split_for_speech_breaks_long_sentence(self) -> None:
         text = (

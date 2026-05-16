@@ -8,10 +8,14 @@ _BULLET_RE = re.compile(r"^\s*[-*]\s+", re.MULTILINE)
 _SOFT_BREAK_RE = re.compile(r"(?<=[,;:])\s+|\s+(?=og\s)", re.IGNORECASE)
 _VOICE_LABEL_RE = re.compile(r"\b([FM])\s*([1-5])\b", re.IGNORECASE)
 _LEADING_NAME_GREETING_RE = re.compile(r"^\s*hej\s+nicolai\s*[,!.]?\s*", re.IGNORECASE)
-_AFTER_GREETING_RE = re.compile(r"^Hej\. ([a-zæøå])")
+_AFTER_GREETING_RE = re.compile(r"^Hej[,.]\s+([A-Za-zæøåÆØÅ])")
 _DUPLICATE_WORD_RE = re.compile(r"\b([A-Za-zæøåÆØÅ]{4,})\b\s+\1\b", re.IGNORECASE)
 _LEADING_SHORT_MARKER_RE = re.compile(
     r"^(Ja|Nej|Okay|Fedt|Klart|Præcis|Godt|Fint)\s+([a-zæøå])",
+    re.IGNORECASE,
+)
+_SHORT_MARKER_PERIOD_RE = re.compile(
+    r"\b(Ja|Nej|Okay|Fedt|Klart|Præcis|Godt|Fint)\.\s+([A-Za-zæøåÆØÅ])",
     re.IGNORECASE,
 )
 _LEADING_PHRASE_MARKER_RE = re.compile(
@@ -43,8 +47,8 @@ PRONUNCIATION_FIXES: tuple[tuple[str, str], ...] = (
 def adapt_for_danish_speech(text: str) -> str:
     """Turn model text into something a Danish TTS voice can say naturally."""
     spoken = text.strip()
-    spoken = _LEADING_NAME_GREETING_RE.sub("Hej. ", spoken)
-    spoken = _AFTER_GREETING_RE.sub(lambda match: f"Hej. {match.group(1).upper()}", spoken)
+    spoken = _LEADING_NAME_GREETING_RE.sub("Hej, ", spoken)
+    spoken = _AFTER_GREETING_RE.sub(lambda match: f"Hej, {match.group(1).lower()}", spoken)
     spoken = _BULLET_RE.sub("", spoken)
     spoken = spoken.replace(" / ", " eller ")
     spoken = spoken.replace("->", " til ")
@@ -52,7 +56,7 @@ def adapt_for_danish_speech(text: str) -> str:
     spoken = _VOICE_LABEL_RE.sub(_spell_voice_label, spoken)
     for source, target in PRONUNCIATION_FIXES:
         spoken = re.sub(re.escape(source), target, spoken, flags=re.IGNORECASE)
-    spoken = _AFTER_GREETING_RE.sub(lambda match: f"Hej. {match.group(1).upper()}", spoken)
+    spoken = _AFTER_GREETING_RE.sub(lambda match: f"Hej, {match.group(1).lower()}", spoken)
     spoken = _collapse_duplicate_words(spoken)
     spoken = _shape_rhythm(spoken)
     spoken = _SPACE_RE.sub(" ", spoken)
@@ -77,7 +81,8 @@ def _collapse_duplicate_words(text: str) -> str:
 
 
 def _shape_rhythm(text: str) -> str:
-    text = _LEADING_SHORT_MARKER_RE.sub(lambda match: f"{match.group(1)}. {match.group(2).upper()}", text)
+    text = _SHORT_MARKER_PERIOD_RE.sub(lambda match: f"{match.group(1)}, {match.group(2).lower()}", text)
+    text = _LEADING_SHORT_MARKER_RE.sub(lambda match: f"{match.group(1)}, {match.group(2).lower()}", text)
     text = _LEADING_PHRASE_MARKER_RE.sub(lambda match: f"{match.group(1)}, ", text)
     text = re.sub(r"(?<![,.;:!?])\s+men\s+", ", men ", text, flags=re.IGNORECASE)
     text = re.sub(r"(?<![,.;:!?])\s+så\s+(?=(jeg|du|vi|det|bare|sig|kan|skal)\b)", ", så ", text, flags=re.IGNORECASE)
@@ -120,6 +125,9 @@ def split_for_speech(text: str, *, max_chars: int = 220, rhythmic: bool = False)
 
 
 def _split_rhythmic_units(text: str, *, max_chars: int) -> list[str]:
+    if len(text) <= max_chars:
+        return [text]
+
     sentence_units = [unit.strip() for unit in re.split(r"(?<=[.!?])\s+", text) if unit.strip()]
     if len(sentence_units) > 1:
         return _fit_units_to_max(sentence_units, max_chars=max_chars)

@@ -10,17 +10,17 @@ from .speech_adapter import adapt_for_danish_speech
 class SupertonicVoice:
     voice_name: str = "F2"
     language: str = "da"
-    speed: float = 1.18
+    speed: float = 1.14
     total_steps: int = 8
-    max_chunk_length: int = 240
-    silence_duration: float = 0.035
+    max_chunk_length: int = 260
+    silence_duration: float = 0.02
 
 
 SUPERTONIC_VOICE_PRESETS: dict[str, SupertonicVoice] = {
     "stacky": SupertonicVoice(),
-    "calm": SupertonicVoice(speed=1.08, total_steps=10, max_chunk_length=240, silence_duration=0.055),
-    "clear": SupertonicVoice(voice_name="F1", speed=1.16, total_steps=10, max_chunk_length=220, silence_duration=0.04),
-    "quick": SupertonicVoice(speed=1.08, total_steps=6, max_chunk_length=140, silence_duration=0.07),
+    "calm": SupertonicVoice(speed=1.06, total_steps=10, max_chunk_length=260, silence_duration=0.035),
+    "clear": SupertonicVoice(voice_name="F1", speed=1.12, total_steps=10, max_chunk_length=240, silence_duration=0.025),
+    "quick": SupertonicVoice(speed=1.10, total_steps=7, max_chunk_length=220, silence_duration=0.025),
 }
 
 
