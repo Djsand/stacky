@@ -8,6 +8,7 @@ from stacky.body.protocol import (
     audio_end,
     audio_start,
     decode_pcm_payload,
+    display_brightness,
     expression,
     gesture,
     hold_audio,
@@ -19,6 +20,7 @@ from stacky.body.protocol import (
     speaker_volume,
     speaker_tone,
     stop_audio,
+    vision_capture,
 )
 
 
@@ -90,6 +92,23 @@ class BodyProtocolTest(unittest.TestCase):
         raw = mic_input_gain(140).to_json()
         self.assertIn("audio.input_gain", raw)
         self.assertIn('"level":100', raw)
+
+    def test_display_brightness_command_encodes(self) -> None:
+        command = display_brightness(0, permanent=False)
+        raw = command.to_json()
+
+        self.assertIn("display.brightness", raw)
+        self.assertEqual(command.payload["level"], 1)
+        self.assertFalse(command.payload["permanent"])
+
+    def test_vision_capture_command_encodes(self) -> None:
+        command = vision_capture(width=20, height=900, format="jpeg")
+        raw = command.to_json()
+
+        self.assertIn("vision.capture", raw)
+        self.assertEqual(command.payload["width"], 64)
+        self.assertEqual(command.payload["height"], 720)
+        self.assertEqual(command.payload["format"], "jpeg")
 
     def test_audio_chunk_protocol_encodes(self) -> None:
         start = audio_start(sample_rate=44100, total_bytes=2048).to_json()

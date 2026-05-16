@@ -2,7 +2,7 @@
 
 ## Current Snapshot
 
-Updated 2026-05-16 after the hands-free memory/personality and motion-control pass.
+Updated 2026-05-17 after the brightness, motion, camera-foundation, and false-trigger pass.
 
 - Branch: `official-firmware-base`
 - Latest branch head: run `git log --oneline -1` after pull.
@@ -16,7 +16,10 @@ Updated 2026-05-16 after the hands-free memory/personality and motion-control pa
   - Speech rhythm is shaped before TTS: marker sentence-pauses and pauses before `men`/`hvis`/`når`/relevant `så`; StackChan Supertonic uses rhythmic chunks with real PCM gaps. Supertonic `quick` is now speed `1.08`, chunk length `140`, silence `0.07`.
   - Volume parser catches soft spoken commands like `skrue lyden ned`, `ned til 65`, and `skrue meget længere ned` locally before the brain model.
   - Danish STT hotwords, live transcript correction, stricter clipped-noise gate, benchmark live-gate mode.
-  - StackChan firmware `official-0.1.10` with PC-controlled mic gain.
+  - StackChan firmware `official-0.1.11` with PC-controlled mic gain, display brightness control/status, and a camera protocol placeholder.
+  - Brightness commands such as `skru skærmens lysstyrke ned`, `sæt skærmen til 35`, and follow-up `lidt mere` are handled locally before calibration/brain routing.
+  - Motion commands are handled before calibration, including `kig op`, `kig ned`, `nik med hovedet`, `ryst på hovedet`, and `kan du danse`.
+  - Sparse clipped noise turns with repeated filler transcripts such as `den her den her` are rejected after STT instead of reaching the brain.
   - Handsfree/capture default `--mic-channel 0`; official CoreS3 sends the real mic on channel 0 and a reference/noise path on channel 1.
   - Handsfree VAD dynamic threshold was lowered after mic preamp raised the noise floor; normal speech should start more easily without weakening the post-turn noise gate.
   - Follow-up VAD fix: high-frequency mic noise is no longer allowed to start a voice turn or train the noise floor. Sustained noisy speech can still reach STT if it contains enough low-ZCR voice-band frames.
@@ -38,12 +41,13 @@ Updated 2026-05-16 after the hands-free memory/personality and motion-control pa
 
 Latest verification:
 
-- `.\.venv\Scripts\python.exe -m pytest tests` -> `157 passed`
+- `.\.venv\Scripts\python.exe -m pytest tests` -> `179 passed`
 - `.\.venv\Scripts\python.exe -m pip check` -> no broken requirements
-- `git diff --check -- . ':!patches/official-stackchan/0001-stacky-bridge.patch'` -> clean apart from CRLF warnings. The patch file itself contains normal unified-diff context blank lines that `git diff --check` reports as trailing whitespace when treating the patch as a text file.
-- ESP-IDF build passed via `S:\` / `I:\`.
-- Flash to `COM3` passed for `official-0.1.10`.
-- `python -m stacky body-server --duration 4` connected and reported `firmware=official-0.1.10`, `micGain=75.0`, `micChannels=2`, and `audio.in raw 24000 Hz 2 ch 1920 bytes`. The live CLI now overrides codec mic gain to `85` after connect.
+- `git diff --check -- . ':!patches/official-stackchan/0001-stacky-bridge.patch'` -> clean apart from CRLF warnings.
+- `git -C vendor\m5stack-stackchan diff --check` -> clean apart from CRLF warnings.
+- ESP-IDF build passed from `vendor\m5stack-stackchan\firmware` with ESP-IDF v5.5.4; output `build\stack-chan.bin`.
+- Flash to `COM3` passed for `official-0.1.10`; `official-0.1.11` still needs a fresh flash after pulling this handoff.
+- `python -m stacky body-server --duration 4` connected and reported `firmware=official-0.1.10`, `micGain=75.0`, `micChannels=2`, and `audio.in raw 24000 Hz 2 ch 1920 bytes`. After flashing `official-0.1.11`, status should also report `displayBrightness` and `cameraAvailable`.
 
 Runtime state:
 
@@ -76,14 +80,14 @@ Next engineering priority:
    - tune Supertonic profile/voice/speed/steps/silence in `voice-lab` and then test through StackChan speaker.
    - inspect `python -m stacky self-status` after live conversation to verify style notes/memory are evolving from real trusted turns.
 7. Next body-control backlog, after personality/voice feels stable:
-   - battery status, screen brightness, speaker volume/mic gain commands.
+   - battery status, speaker volume/mic gain commands, and verify flashed display brightness control.
    - top LEDs, touch surface, NFC events.
    - richer face states and speaking/listening mouth animation.
 8. Agent skills and Sandcode integration come after the body/personality foundation is stable.
 
 ## Latest Mic/STT Hotfix
 
-- Firmware patch regenerated for `official-0.1.10`.
+- Firmware patch regenerated for `official-0.1.11`.
 - Python now sends `audio.input_gain` at connect time; default CLI gain is `85` to avoid clipping.
 - `handsfree` and `stt-capture` apply default digital `--mic-preamp 2.0` before VAD/STT; the gain limiter avoids PCM clipping; use `--mic-preamp 1.0` to disable.
 - `handsfree` and `stt-capture` default to `--mic-channel 0`; `auto`/`best` is sticky diagnostics only because channel 1 is a reference/noise path on CoreS3 official firmware.
@@ -186,7 +190,7 @@ Memory cleanup performed 2026-05-16:
 - Removed rows tagged `dialogue`: `142`
 - Remaining memory rows: `1`
 
-Current priority is not head-motion polish. The blocking product problem is still input/session quality: Danish STT must be stable enough that voice can safely become a trusted session source again.
+Current priority is body/personality hardening: Danish STT is usable enough for trusted sessions, but false-trigger gates must stay conservative before adding more agent skills.
 
 ## Latest Official Stacky Firmware Update
 
@@ -198,8 +202,8 @@ Active body base:
 - Official submodule: `vendor/m5stack-stackchan`
 - Repro patch: `patches/official-stackchan/0001-stacky-bridge.patch`
 - Patch apply script: `scripts/apply-official-firmware-patch.ps1`
-- Latest body patch: official StackChan `1.4.1` with `AppStacky` and bridge `official-0.1.9`
-- Bridge `official-0.1.9` includes `body.look_at`, `body.gesture`, runtime `body.motion_config` head calibration, dual-channel mic streaming, and Stacky-branded boot screen. Default social center is `yaw=90`, `pitch=260`.
+- Latest body patch: official StackChan `1.4.1` with `AppStacky` and bridge `official-0.1.11`
+- Bridge `official-0.1.11` includes `body.look_at`, `body.gesture`, runtime `body.motion_config` head calibration, dual-channel mic streaming, display brightness control/status, camera status foundation, and Stacky-branded boot screen. Default social center is `yaw=90`, `pitch=260`.
 - PC body server: `192.168.50.208:8765`
 - StackChan IP in tests: `192.168.50.2`
 
@@ -210,9 +214,10 @@ Firmware variant changes:
 - `firmware/main/main.cpp` installs and opens only `AppStacky` at boot.
 - `StackyBridge` now has `start()` / `stop()` lifecycle and is started from `AppStacky::onOpen()`.
 - `StackyBridge` now sets CoreS3 codec output volume to 100 during playback.
-- `StackyBridge` now accepts `audio.volume`, reports `speakerVolume`, uses mic gain 60, and drops the first 12 mic frames after input enable to avoid clipped warmup transients.
+- `StackyBridge` now accepts `audio.volume` and `audio.input_gain`, reports `speakerVolume` / `micGain`, and drops the first 12 mic frames after input enable to avoid clipped warmup transients.
+- `StackyBridge` now accepts `display.brightness`, reports `displayBrightness`, and responds to `vision.capture` with an explicit not-implemented event.
 - `StackyBridge` now accepts `body.motion_config` and reports `centerYaw` / `centerPitch`.
-- Boot screen now says `STACKY`, shows `official-0.1.9`, and uses a small LVGL-drawn Stacky logo mark.
+- Boot screen now says `STACKY`, shows `official-0.1.11`, and uses a small LVGL-drawn Stacky logo mark.
 - Python StackChan TTS output has tunable loudness: `--stackchan-target-rms` and `--stackchan-max-gain` default to `9000` / `4.0`.
 - Handsfree catches Danish volume commands before the LLM, e.g. `skru op`, `skru ned`, `sæt volumen til 60 procent`.
 - Handsfree catches Danish center calibration commands before the LLM: `lidt mere til højre`, `lidt mere til venstre`, `lidt op`, `lidt ned`, `gem den her position som center`.
@@ -222,9 +227,9 @@ Firmware variant changes:
 
 Bridge support:
 
-- `audio.in` raw PCM16 at 24 kHz from StackChan to PC; firmware `official-0.1.9` sends all codec input channels and Python selects `--mic-channel`.
+- `audio.in` raw PCM16 at 24 kHz from StackChan to PC; firmware `official-0.1.11` sends all codec input channels and Python selects `--mic-channel`.
 - `audio.start` / binary `audio.raw` / `audio.end` playback from PC to StackChan
-- `audio.tone`, `audio.stop`, `audio.hold`, `body.status`, `body.set_expression`, `body.look_at`, `body.gesture`, `body.motion_config`
+- `audio.tone`, `audio.stop`, `audio.hold`, `body.status`, `body.set_expression`, `body.look_at`, `body.gesture`, `body.motion_config`, `display.brightness`, `vision.capture`
 
 Validated 2026-05-16:
 
@@ -257,7 +262,7 @@ Important: opening `COM3` with `scripts/serial_log.py` resets the CoreS3 via USB
 
 ## Stop Point
 
-Stop here after official Stacky app variant `official-0.1.9`. The old custom Arduino speaker-crash investigation is no longer the active path unless the same failure reproduces on official firmware.
+Stop here after official Stacky app variant `official-0.1.11`. The old custom Arduino speaker-crash investigation is no longer the active path unless the same failure reproduces on official firmware.
 
 ## Current Direction
 
@@ -283,7 +288,7 @@ Do not import or reuse Moss identity, Moss memories, Moss sessions, or the Moss 
 - StackChan IP seen during tests: `192.168.50.2`
 - PC IP used during tests: `192.168.50.208`
 - USB serial seen during tests: `/dev/cu.usbmodem1101` or `cu.usbmodem101` on Mac, `COM3` on Windows
-- Latest body patch version: official StackChan `1.4.1` with `AppStacky` / Stacky bridge `official-0.1.9`
+- Latest body patch version: official StackChan `1.4.1` with `AppStacky` / Stacky bridge `official-0.1.11`
 
 The old custom Arduino firmware remains as fallback/reference. The active hardware path is official ESP-IDF firmware; old speaker-crash assumptions should be re-tested before using them.
 

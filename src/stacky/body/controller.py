@@ -12,6 +12,7 @@ from .protocol import (
     audio_chunk,
     audio_end,
     audio_start,
+    display_brightness,
     expression,
     gesture,
     hold_audio,
@@ -22,6 +23,7 @@ from .protocol import (
     speaker_volume,
     speaker_tone,
     stop_audio,
+    vision_capture,
 )
 
 
@@ -183,6 +185,12 @@ class StackChanBodyController:
 
     def set_mic_gain(self, level: int) -> bool:
         return self.send(mic_input_gain(level))
+
+    def set_display_brightness(self, level: int, *, permanent: bool = True) -> bool:
+        return self.send(display_brightness(level, permanent=permanent))
+
+    def capture_vision_frame(self, *, width: int = 320, height: int = 240, format: str = "jpeg") -> bool:
+        return self.send(vision_capture(width=width, height=height, format=format))
 
     def send(self, command: BodyCommand) -> bool:
         payload = (command.to_json() + "\n").encode("utf-8")

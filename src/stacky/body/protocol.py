@@ -19,12 +19,14 @@ BODY_COMMAND_TYPES = {
     "audio.out",
     "audio.tone",
     "audio.volume",
+    "display.brightness",
     "body.set_expression",
     "body.look_at",
     "body.gesture",
     "body.leds",
     "body.motion_config",
     "body.status",
+    "vision.capture",
     "mobility.intent",
 }
 
@@ -37,6 +39,7 @@ BODY_EVENT_TYPES = {
     "imu",
     "proximity",
     "status",
+    "vision.frame",
 }
 
 
@@ -189,6 +192,27 @@ def speaker_volume(level: int) -> BodyCommand:
 
 def mic_input_gain(level: int) -> BodyCommand:
     return BodyCommand("audio.input_gain", {"level": max(0, min(100, int(level)))})
+
+
+def display_brightness(level: int, *, permanent: bool = True) -> BodyCommand:
+    return BodyCommand(
+        "display.brightness",
+        {
+            "level": max(1, min(100, int(level))),
+            "permanent": bool(permanent),
+        },
+    )
+
+
+def vision_capture(*, width: int = 320, height: int = 240, format: str = "jpeg") -> BodyCommand:
+    return BodyCommand(
+        "vision.capture",
+        {
+            "width": max(64, min(1280, int(width))),
+            "height": max(64, min(720, int(height))),
+            "format": format,
+        },
+    )
 
 
 def decode_pcm_payload(payload: dict[str, Any]) -> tuple[bytes, int, int]:

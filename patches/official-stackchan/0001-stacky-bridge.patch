@@ -125,14 +125,14 @@ index 77cc9b7..06e2ab4 100644
  #include "app_avatar/app_avatar.h"
  #include "app_setup/app_setup.h"
 diff --git a/firmware/main/hal/hal.h b/firmware/main/hal/hal.h
-index 5f9efcf..57da192 100644
+index 5f9efcf..0b53a45 100644
 --- a/firmware/main/hal/hal.h
 +++ b/firmware/main/hal/hal.h
 @@ -132,6 +132,8 @@ enum class MicTestStatus {
      Failed,
  };
  
-+inline constexpr const char* STACKY_BOOT_VERSION = "official-0.1.10";
++inline constexpr const char* STACKY_BOOT_VERSION = "official-0.1.11";
 +
  /**
   * @brief
@@ -225,10 +225,10 @@ index 5f9efcf..57da192 100644
      std::unique_ptr<uitk::lvgl_cpp::Label> _label_version;
 diff --git a/firmware/main/hal/stacky_bridge.cpp b/firmware/main/hal/stacky_bridge.cpp
 new file mode 100644
-index 0000000..5be2938
+index 0000000..9e405cf
 --- /dev/null
 +++ b/firmware/main/hal/stacky_bridge.cpp
-@@ -0,0 +1,814 @@
+@@ -0,0 +1,847 @@
 +#include "stacky_bridge.h"
 +
 +#include "hal.h"
@@ -293,7 +293,7 @@ index 0000000..5be2938
 +namespace {
 +
 +constexpr const char* TAG = "StackyBridge";
-+constexpr const char* STACKY_BRIDGE_VERSION = "official-0.1.10";
++constexpr const char* STACKY_BRIDGE_VERSION = "official-0.1.11";
 +constexpr size_t MIC_FRAME_COUNT = 480;       // 20 ms at 24 kHz
 +constexpr int MIC_WARMUP_DISCARD_FRAMES = 12;
 +constexpr size_t PLAYBACK_CHUNK_SAMPLES = 960;
@@ -371,6 +371,7 @@ index 0000000..5be2938
 +    int playback_channels_    = 1;
 +    std::atomic<int> output_volume_{STACKY_OUTPUT_VOLUME};
 +    std::atomic<int> input_gain_{STACKY_MIC_INPUT_GAIN};
++    std::atomic<int> display_brightness_{80};
 +    std::atomic<int> center_yaw_{STACKY_CENTER_YAW};
 +    std::atomic<int> center_pitch_{STACKY_CENTER_PITCH};
 +    std::atomic<int> look_yaw_range_{STACKY_LOOK_YAW_RANGE};
@@ -593,6 +594,14 @@ index 0000000..5be2938
 +        }
 +        if (std::strcmp(type, "audio.input_gain") == 0) {
 +            setInputGain(payload["level"] | STACKY_MIC_INPUT_GAIN);
++            return;
++        }
++        if (std::strcmp(type, "display.brightness") == 0) {
++            setDisplayBrightness(payload["level"] | display_brightness_.load(), payload["permanent"] | true);
++            return;
++        }
++        if (std::strcmp(type, "vision.capture") == 0) {
++            sendVisionUnavailable("camera_capture_not_implemented");
 +            return;
 +        }
 +        if (std::strcmp(type, "body.status") == 0) {
@@ -822,6 +831,20 @@ index 0000000..5be2938
 +        }
 +    }
 +
++    void sendVisionUnavailable(const char* reason)
++    {
++        char line[192];
++        const int len = std::snprintf(
++            line,
++            sizeof(line),
++            "{\"type\":\"vision.frame\",\"payload\":{\"available\":false,\"reason\":\"%s\"},\"ts\":%.3f}\n",
++            reason,
++            now_seconds());
++        if (len > 0 && static_cast<size_t>(len) < sizeof(line)) {
++            sendBytes(line, static_cast<size_t>(len));
++        }
++    }
++
 +    void setOutputVolume(int level)
 +    {
 +        level = std::clamp(level, 0, 100);
@@ -854,20 +877,30 @@ index 0000000..5be2938
 +        sendStatus("input_gain");
 +    }
 +
++    void setDisplayBrightness(int level, bool permanent)
++    {
++        level = std::clamp(level, 1, 100);
++        display_brightness_.store(level);
++        GetHAL().setBackLightBrightness(static_cast<uint8_t>(level), permanent);
++        sendStatus("brightness");
++    }
++
 +    void sendStatus(const char* expression)
 +    {
 +        const auto angles = GetStackChan().motion().getCurrentAngles();
 +        auto* codec = Board::GetInstance().GetAudioCodec();
 +        const int mic_channels = codec ? std::max(codec->input_channels(), 1) : 1;
-+        char line[460];
++        display_brightness_.store(std::clamp(static_cast<int>(GetHAL().getBackLightBrightness()), 1, 100));
++        char line[560];
 +        const int len = std::snprintf(
 +            line,
 +            sizeof(line),
-+            "{\"type\":\"status\",\"payload\":{\"device\":\"stackchan-cores3-official\",\"expression\":\"%s\",\"firmware\":\"%s\",\"speakerVolume\":%d,\"micGain\":%.1f,\"micChannels\":%d,\"yaw\":%d,\"pitch\":%d,\"centerYaw\":%d,\"centerPitch\":%d,\"wheelsEnabled\":false},\"ts\":%.3f}\n",
++            "{\"type\":\"status\",\"payload\":{\"device\":\"stackchan-cores3-official\",\"expression\":\"%s\",\"firmware\":\"%s\",\"speakerVolume\":%d,\"micGain\":%.1f,\"displayBrightness\":%d,\"micChannels\":%d,\"yaw\":%d,\"pitch\":%d,\"centerYaw\":%d,\"centerPitch\":%d,\"wheelsEnabled\":false,\"cameraAvailable\":false},\"ts\":%.3f}\n",
 +            expression,
 +            STACKY_BRIDGE_VERSION,
 +            output_volume_.load(),
 +            static_cast<float>(input_gain_.load()),
++            display_brightness_.load(),
 +            mic_channels,
 +            angles.x,
 +            angles.y,

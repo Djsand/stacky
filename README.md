@@ -92,9 +92,9 @@ Hands-free replies default to short live speech: `--reply-chars 180` and `--deta
 The Danish speech adapter also shapes TTS rhythm before synthesis: short markers such as "Okay" and "Fedt" get a sentence pause, and clauses before "men", "hvis", "når", and relevant "så" get clearer pauses. StackChan Supertonic output now uses rhythmic text chunks with real PCM silence between chunks, so punctuation becomes audible timing. The default Supertonic `quick` profile is tuned for less rushed Danish speech: speed `1.08`, chunk length `140`, silence `0.07`.
 
 The hands-free VAD is tuned for the official Stacky bridge: default `--vad-threshold 280`, `--start-speech-ms 120`, and `--min-speech-ms 220`. It rejects sparse clicks and high-frequency noise before STT; use `--debug-audio` to see `[audio] ... reason='højfrekvent støj'` / `klik/percussiv støj` lines.
-The start detector also ignores high-frequency mic noise as a voice candidate, so Stacky should not lock into 9-second noise turns before you speak.
+The start detector also ignores high-frequency mic noise as a voice candidate, and post-STT gating rejects clipped sparse turns that hallucinate repeated filler words such as `den her den her`.
 
-Firmware `official-0.1.10` streams the CoreS3 mic plus a reference/noise channel and accepts PC-controlled mic gain. `handsfree` and `stt-capture` default to `--mic-channel 0`, which is the real mic path used by the official mic test. Use `--mic-channel 1`, `--mic-channel mix`, or `--mic-channel auto` only for diagnostics, and `--mic-channel all` to keep multichannel diagnostic WAVs. Default `--stackchan-mic-gain` is `85`, and default `--mic-preamp` is `2.0` with clipping protection.
+Firmware `official-0.1.11` streams the CoreS3 mic plus a reference/noise channel, accepts PC-controlled mic gain, reports `displayBrightness`, accepts `display.brightness`, and has a `vision.capture` placeholder that returns `camera_capture_not_implemented` until the real camera bridge is added. `handsfree` and `stt-capture` default to `--mic-channel 0`, which is the real mic path used by the official mic test. Use `--mic-channel 1`, `--mic-channel mix`, or `--mic-channel auto` only for diagnostics, and `--mic-channel all` to keep multichannel diagnostic WAVs. Default `--stackchan-mic-gain` is `85`, and default `--mic-preamp` is `2.0` with clipping protection.
 
 Trusted hands-free and text/chat turns persist to `data/stacky/sessions/stacky-infinite-thread.jsonl`; rolled blocks become `stacky-infinite-thread.001.jsonl`, etc. Local commands such as volume, calibration, motion, and pause are logged without an extra LLM call so the session remains continuous.
 
@@ -145,13 +145,19 @@ Head motion is available after flashing the official Stacky bridge firmware with
 .\.venv\Scripts\python.exe -m stacky motion-test --gesture nod
 ```
 
-Stacky can adjust its head center at runtime and persists it in `data/stacky/body_calibration.json`:
+Stacky can move locally from spoken commands such as `kig til højre`, `kig op`, `nik med hovedet`, `ryst på hovedet`, and `kan du danse`. It can also adjust its head center at runtime and persists it in `data/stacky/body_calibration.json`:
 
 - `lidt mere til højre`
 - `lidt mere til venstre`
 - `lidt op`
 - `lidt ned`
 - `gem den her position som center`
+
+Display brightness is a local body command after flashing `official-0.1.11`:
+
+- `skru skærmens lysstyrke ned`
+- `sæt skærmen til 35`
+- `lidt mere`
 
 ## Safety Defaults
 

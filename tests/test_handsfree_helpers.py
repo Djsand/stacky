@@ -8,6 +8,7 @@ from stacky.cli import (
     _clean_transcript,
     _is_likely_hallucination,
     _parse_calibration_command,
+    _parse_display_brightness_command,
     _parse_local_realtime_reply,
     _parse_motion_command,
     _parse_stt_bench_spec,
@@ -284,6 +285,64 @@ class HandsfreeHelpersTest(unittest.TestCase):
         self.assertFalse(accepted)
         self.assertEqual(reason, "kort højfrekvent STT-fragment")
 
+    def test_rejects_clipped_sparse_repeating_noise_turn(self) -> None:
+        result = STTResult(
+            text="den her den her til for",
+            audio=AudioStats(duration_seconds=9.0, rms=1335, peak=32768, sample_rate=24000, channels=1),
+            avg_logprob=-1.04,
+            no_speech_prob=0.0,
+            compression_ratio=0.0,
+        )
+        quality = TurnSignalQuality(
+            duration_seconds=9.0,
+            median_rms=242,
+            p80_rms=900,
+            p95_rms=2233,
+            peak=32768,
+            active_ratio=0.28,
+            active_ms=2560,
+            max_active_run_ms=280,
+            crest_factor=56.7,
+            active_threshold=420,
+            zero_crossing_rate=0.15,
+            speech_band_ms=2540,
+            max_speech_band_run_ms=240,
+        )
+
+        accepted, reason = _accept_stt_result(result, signal_quality=quality)
+
+        self.assertFalse(accepted)
+        self.assertEqual(reason, "clippet støj uden sammenhængende tale")
+
+    def test_rejects_repeating_filler_noise_even_with_moderate_confidence(self) -> None:
+        result = STTResult(
+            text="jeg kan den her den her den her den her den her du den",
+            audio=AudioStats(duration_seconds=9.0, rms=1200, peak=25000, sample_rate=24000, channels=1),
+            avg_logprob=-0.40,
+            no_speech_prob=0.0,
+            compression_ratio=0.0,
+        )
+        quality = TurnSignalQuality(
+            duration_seconds=9.0,
+            median_rms=220,
+            p80_rms=900,
+            p95_rms=1500,
+            peak=25000,
+            active_ratio=0.22,
+            active_ms=1980,
+            max_active_run_ms=260,
+            crest_factor=38.0,
+            active_threshold=420,
+            zero_crossing_rate=0.13,
+            speech_band_ms=1960,
+            max_speech_band_run_ms=220,
+        )
+
+        accepted, reason = _accept_stt_result(result, signal_quality=quality)
+
+        self.assertFalse(accepted)
+        self.assertEqual(reason, "clippet støj uden sammenhængende tale")
+
     def test_voice_memory_policy_defaults_to_trusted_session(self) -> None:
         policy = _voice_memory_policy("trusted")
 
@@ -309,6 +368,9 @@ class HandsfreeHelpersTest(unittest.TestCase):
         self.assertEqual((_parse_motion_command("kig til højre") or None).gesture, "look_right")
         self.assertEqual((_parse_motion_command("gik til venstre") or None).gesture, "look_left")
         self.assertEqual((_parse_motion_command("gik op") or None).gesture, "look_up")
+        self.assertEqual((_parse_motion_command("kigger lidt mig op ad") or None).gesture, "look_up")
+        self.assertEqual((_parse_motion_command("rest paa hovedet") or None).gesture, "shake")
+        self.assertEqual((_parse_motion_command("kan du danse") or None).gesture, "dance")
         self.assertEqual((_parse_motion_command("nik med hovedet") or None).gesture, "nod")
         self.assertEqual((_parse_motion_command("prøv en bevægelse") or None).gesture, "demo")
         self.assertIsNone(_parse_motion_command("skru op"))
@@ -329,6 +391,18 @@ class HandsfreeHelpersTest(unittest.TestCase):
         self.assertEqual(up.pitch_delta if up else None, 30)
         self.assertTrue(save.save_current if save else False)
         self.assertIsNone(_parse_calibration_command("skru op"))
+        self.assertIsNone(_parse_calibration_command("kig lidt op ad"))
+        self.assertIsNone(_parse_calibration_command("kan du justere skaermlysestyrken lidt ned"))
+
+    def test_parse_display_brightness_command(self) -> None:
+        down = _parse_display_brightness_command("kan du justere skaermlysestyrken lidt ned", current_level=80)
+        absolute = _parse_display_brightness_command("saet skaermen til 35", current_level=80)
+        followup = _parse_display_brightness_command("lidt mere", current_level=65, previous_direction=-1)
+
+        self.assertEqual(down.level if down else None, 65)
+        self.assertEqual(down.direction if down else None, -1)
+        self.assertEqual(absolute.level if absolute else None, 35)
+        self.assertEqual(followup.level if followup else None, 50)
 
     def test_parse_stt_bench_aliases(self) -> None:
         self.assertEqual(_parse_stt_bench_spec("roest"), ("wav2vec2", "roest"))

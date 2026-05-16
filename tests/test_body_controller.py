@@ -103,6 +103,38 @@ class BodyControllerRawAudioTest(unittest.TestCase):
         self.assertEqual(sent[0].type, "audio.input_gain")
         self.assertEqual(sent[0].payload["level"], 75)
 
+    def test_controller_sends_display_brightness_command(self) -> None:
+        sent = []
+        controller = StackChanBodyController()
+
+        def send(command) -> bool:
+            sent.append(command)
+            return True
+
+        controller.send = send  # type: ignore[method-assign]
+
+        self.assertTrue(controller.set_display_brightness(35))
+
+        self.assertEqual(sent[0].type, "display.brightness")
+        self.assertEqual(sent[0].payload["level"], 35)
+        self.assertTrue(sent[0].payload["permanent"])
+
+    def test_controller_sends_vision_capture_command(self) -> None:
+        sent = []
+        controller = StackChanBodyController()
+
+        def send(command) -> bool:
+            sent.append(command)
+            return True
+
+        controller.send = send  # type: ignore[method-assign]
+
+        self.assertTrue(controller.capture_vision_frame(width=320, height=240))
+
+        self.assertEqual(sent[0].type, "vision.capture")
+        self.assertEqual(sent[0].payload["width"], 320)
+        self.assertEqual(sent[0].payload["height"], 240)
+
     def test_processes_raw_audio_in_header_and_binary_body(self) -> None:
         events = []
         controller = StackChanBodyController(on_event=events.append)

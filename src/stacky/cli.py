@@ -1214,11 +1214,21 @@ async def _handsfree(
     body_status: dict[str, object] = {}
     body_calibration = load_body_calibration(config.data_dir)
     body_director: BodyDirector | None = None
+    display_brightness_level = 80
+    last_brightness_direction = 0
 
     def on_event(event) -> None:
+        nonlocal display_brightness_level
         if event.type == "status":
             body_status.clear()
             body_status.update(event.payload)
+            try:
+                display_brightness_level = _clamp_percent(
+                    int(event.payload.get("displayBrightness", display_brightness_level)),
+                    minimum=1,
+                )
+            except (TypeError, ValueError):
+                pass
             print(f"[StackChan] status: {event.payload}", flush=True)
             return
         if event.type == "touch":
@@ -1456,6 +1466,60 @@ async def _handsfree(
                 set_body_state("listening")
                 accepting_audio = True
                 continue
+            brightness_command = _parse_display_brightness_command(
+                text,
+                current_level=display_brightness_level,
+                previous_direction=last_brightness_direction,
+            )
+            if brightness_command is not None:
+                reply_started = time.perf_counter()
+                display_brightness_level = brightness_command.level
+                last_brightness_direction = brightness_command.direction or last_brightness_direction
+                ok = controller.set_display_brightness(display_brightness_level)
+                reply_seconds = time.perf_counter() - reply_started
+                print(f"[Stacky] brightness={display_brightness_level} ok={ok}", flush=True)
+                set_body_state("happy")
+                speak_started = time.perf_counter()
+                spoken_reply = brightness_command.spoken if ok else "Jeg kunne ikke ændre skærmens lysstyrke lige nu."
+                record_local_turn(text, spoken_reply)
+                await output.speak(spoken_reply)
+                await output.wait()
+                speak_seconds = time.perf_counter() - speak_started
+                print(
+                    f"[timing] stt={stt_seconds:.2f}s command={reply_seconds:.2f}s "
+                    f"tts_send={speak_seconds:.2f}s total={time.perf_counter() - pipeline_started:.2f}s",
+                    flush=True,
+                )
+                _drain_queue(audio_queue)
+                detector.reset()
+                await asyncio.sleep(0.25)
+                set_body_state("listening")
+                accepting_audio = True
+                continue
+            motion_command = _parse_motion_command(text)
+            if motion_command is not None:
+                reply_started = time.perf_counter()
+                ok = _run_motion_gesture(body_director or controller, motion_command.gesture)
+                reply_seconds = time.perf_counter() - reply_started
+                print(f"[Stacky] motion={motion_command.gesture} ok={ok}", flush=True)
+                set_body_state("happy")
+                speak_started = time.perf_counter()
+                spoken_reply = motion_command.spoken if ok else "Jeg kunne ikke bevæge hovedet lige nu."
+                record_local_turn(text, spoken_reply)
+                await output.speak(spoken_reply)
+                await output.wait()
+                speak_seconds = time.perf_counter() - speak_started
+                print(
+                    f"[timing] stt={stt_seconds:.2f}s command={reply_seconds:.2f}s "
+                    f"tts_send={speak_seconds:.2f}s total={time.perf_counter() - pipeline_started:.2f}s",
+                    flush=True,
+                )
+                _drain_queue(audio_queue)
+                detector.reset()
+                await asyncio.sleep(0.25)
+                set_body_state("listening")
+                accepting_audio = True
+                continue
             calibration_command = _parse_calibration_command(text)
             if calibration_command is not None:
                 reply_started = time.perf_counter()
@@ -1493,30 +1557,6 @@ async def _handsfree(
                 set_body_state("happy")
                 speak_started = time.perf_counter()
                 spoken_reply = calibration_command.spoken if ok else "Jeg kunne ikke gemme hovedkalibreringen lige nu."
-                record_local_turn(text, spoken_reply)
-                await output.speak(spoken_reply)
-                await output.wait()
-                speak_seconds = time.perf_counter() - speak_started
-                print(
-                    f"[timing] stt={stt_seconds:.2f}s command={reply_seconds:.2f}s "
-                    f"tts_send={speak_seconds:.2f}s total={time.perf_counter() - pipeline_started:.2f}s",
-                    flush=True,
-                )
-                _drain_queue(audio_queue)
-                detector.reset()
-                await asyncio.sleep(0.25)
-                set_body_state("listening")
-                accepting_audio = True
-                continue
-            motion_command = _parse_motion_command(text)
-            if motion_command is not None:
-                reply_started = time.perf_counter()
-                ok = _run_motion_gesture(body_director or controller, motion_command.gesture)
-                reply_seconds = time.perf_counter() - reply_started
-                print(f"[Stacky] motion={motion_command.gesture} ok={ok}", flush=True)
-                set_body_state("happy")
-                speak_started = time.perf_counter()
-                spoken_reply = motion_command.spoken if ok else "Jeg kunne ikke bevæge hovedet lige nu."
                 record_local_turn(text, spoken_reply)
                 await output.speak(spoken_reply)
                 await output.wait()
@@ -1657,6 +1697,8 @@ def _accept_stt_result(
         return False, "kendt hallucination"
     if signal_quality is not None and not signal_quality.speech_like:
         return False, signal_quality.reason
+    if signal_quality is not None and _is_clipped_sparse_noise_turn(result, transcript, signal_quality):
+        return False, "clippet støj uden sammenhængende tale"
     if signal_quality is not None and _is_short_high_frequency_stt_fragment(transcript, signal_quality):
         return False, "kort højfrekvent STT-fragment"
     if trusted_transcript:
@@ -1729,6 +1771,32 @@ def _is_short_uncertain_stt_fragment(transcript: str, result: STTResult) -> bool
     return result.avg_logprob < -0.55
 
 
+def _is_clipped_sparse_noise_turn(result: STTResult, transcript: str, signal_quality: TurnSignalQuality) -> bool:
+    words = [word.strip(".,!?").lower() for word in transcript.split() if word.strip(".,!?")]
+    if not words:
+        return False
+    filler_words = {"den", "det", "her", "du", "jeg", "kan", "for", "til", "ned", "op"}
+    filler_count = sum(1 for word in words if word in filler_words)
+    repeated_count = max(words.count(word) for word in set(words))
+    filler_ratio = filler_count / len(words)
+    sparse_runs = signal_quality.max_speech_band_run_ms <= 320 or signal_quality.max_active_run_ms <= 360
+
+    if len(words) >= 5 and sparse_runs and signal_quality.crest_factor >= 18.0:
+        if filler_ratio >= 0.75 or repeated_count >= 4:
+            return True
+
+    if result.avg_logprob > -0.65:
+        return False
+    if signal_quality.crest_factor < 35.0:
+        return False
+    if not sparse_runs:
+        return False
+
+    if len(words) < 4:
+        return signal_quality.max_speech_band_run_ms <= 260
+    return filler_ratio >= 0.65 or repeated_count >= 3
+
+
 def _is_short_high_frequency_stt_fragment(transcript: str, signal_quality: TurnSignalQuality) -> bool:
     words = [word for word in transcript.split() if word]
     if len(words) > 2:
@@ -1795,19 +1863,32 @@ class CalibrationCommand:
     spoken: str = "Okay, jeg justerer mit center."
 
 
+@dataclass(frozen=True)
+class BrightnessCommand:
+    level: int
+    direction: int = 0
+    spoken: str = "Okay, jeg justerer skærmens lysstyrke."
+
+
 def _run_motion_gesture(actor: BodyDirector | StackChanBodyController | None, gesture_name: str, *, speed: int = 550) -> bool:
     if actor is None:
         return False
-    sequence = (
-        ["center", "look_left", "look_right", "look_up", "look_down", "nod", "shake", "center"]
-        if gesture_name == "demo"
-        else [gesture_name]
-    )
+    if gesture_name == "demo":
+        sequence = ["center", "look_left", "look_right", "look_up", "look_down", "nod", "shake", "center"]
+    elif gesture_name == "dance":
+        sequence = ["look_left", "look_right", "look_left", "look_right", "nod", "shake", "center"]
+        speed = max(speed, 680)
+    else:
+        sequence = [gesture_name]
     ok = True
     for index, name in enumerate(sequence):
         ok = actor.gesture(name, speed=speed) and ok
         if index + 1 < len(sequence):
-            time.sleep(0.28 if name not in {"nod", "shake"} else 0.55)
+            time.sleep(
+                0.18
+                if gesture_name == "dance" and name not in {"nod", "shake"}
+                else 0.28 if name not in {"nod", "shake"} else 0.55
+            )
     return ok
 
 
@@ -1815,6 +1896,10 @@ def _parse_calibration_command(text: str) -> CalibrationCommand | None:
     lowered = text.lower()
     key = _motion_text_key(text)
     if any(token in key for token in ("volumen", "volume", "skruop", "skruned", "hojerevolumen", "laverevolumen")):
+        return None
+    if _has_brightness_context(key):
+        return None
+    if any(token in key for token in ("kig", "kigger", "kik", "se", "drej", "ryst", "ryste", "rest", "nik", "dans")):
         return None
     if any(token in key for token in ("gemcenter", "gemligeud", "gemdenherposition", "gemnuposition", "gemmitcenter")):
         return CalibrationCommand(save_current=True, spoken="Okay, jeg gemmer den her position som mit center.")
@@ -1826,7 +1911,7 @@ def _parse_calibration_command(text: str) -> CalibrationCommand | None:
         return CalibrationCommand(yaw_delta=small, spoken="Okay, jeg flytter mit center lidt mod højre.")
     if any(token in key for token in ("merevenstre", "lidttilvenstre", "modvenstre", "venstre")):
         return CalibrationCommand(yaw_delta=-small, spoken="Okay, jeg flytter mit center lidt mod venstre.")
-    if any(token in key for token in ("mereop", "lidtop", "opad", "hovedetop")):
+    if any(token in key for token in ("mereop", "lidtop", "hovedetop")):
         return CalibrationCommand(pitch_delta=small, spoken="Okay, jeg flytter mit center lidt op.")
     if any(token in key for token in ("merened", "lidtned", "nedad", "hovedetned")):
         return CalibrationCommand(pitch_delta=-small, spoken="Okay, jeg flytter mit center lidt ned.")
@@ -1840,11 +1925,15 @@ def _parse_motion_command(text: str) -> MotionCommand | None:
     key = _motion_text_key(text)
     if "skru" in lowered or "volumen" in lowered:
         return None
+    if _has_brightness_context(key):
+        return None
+    if "dans" in key:
+        return MotionCommand("dance", "Okay, jeg danser lidt.")
     if any(token in key for token in ("provnoget", "provenbevaegelse", "bevaegdig", "bevaegelsekommando", "bevaegelseskommando")):
         return MotionCommand("demo", "Okay, jeg prøver en bevægelse.")
     if "nik" in lowered or "nod" in key:
         return MotionCommand("nod", "Okay.")
-    if "ryst" in lowered and ("hoved" in lowered or "hovedet" in lowered):
+    if any(token in key for token in ("ryst", "ryste", "rest")) and "hoved" in key:
         return MotionCommand("shake", "Okay.")
     if any(token in key for token in ("ligeud", "midten", "center", "centrer", "nulstilhoved")):
         return MotionCommand("center", "Jeg kigger ligeud.")
@@ -1856,9 +1945,10 @@ def _parse_motion_command(text: str) -> MotionCommand | None:
         token in key for token in ("kig", "kik", "gik", "se", "drej")
     ):
         return MotionCommand("look_right", "Jeg kigger til højre.")
-    if any(token in key for token in ("kigop", "kikop", "gikop", "seop", "hovedetop")):
+    has_look_verb = any(token in key for token in ("kig", "kigger", "kik", "gik", "se", "drej"))
+    if any(token in key for token in ("kigop", "kikop", "gikop", "seop", "hovedetop")) or (has_look_verb and "opad" in key):
         return MotionCommand("look_up", "Jeg kigger op.")
-    if any(token in key for token in ("kigned", "kikned", "gikned", "sened", "hovedetned")):
+    if any(token in key for token in ("kigned", "kikned", "gikned", "sened", "hovedetned")) or (has_look_verb and "nedad" in key):
         return MotionCommand("look_down", "Jeg kigger ned.")
     return None
 
@@ -1869,6 +1959,9 @@ def _motion_text_key(text: str) -> str:
         "æ": "ae",
         "ø": "o",
         "å": "a",
+        "Ã¦": "ae",
+        "Ã¸": "o",
+        "Ã¥": "a",
         "ö": "o",
         "ä": "ae",
         "ü": "u",
@@ -1876,6 +1969,78 @@ def _motion_text_key(text: str) -> str:
     for source, target in replacements.items():
         lowered = lowered.replace(source, target)
     return re.sub(r"[^0-9a-z]+", "", lowered)
+
+
+def _has_brightness_context(key: str) -> bool:
+    return any(
+        token in key
+        for token in (
+            "lysstyrk",
+            "lysestyrk",
+            "skaermlys",
+            "skarmlys",
+            "skaerm",
+            "skarm",
+            "display",
+            "backlight",
+        )
+    )
+
+
+def _parse_display_brightness_command(
+    text: str,
+    *,
+    current_level: int,
+    previous_direction: int = 0,
+) -> BrightnessCommand | None:
+    lowered = text.lower()
+    key = _motion_text_key(text)
+    current_level = _clamp_percent(current_level, minimum=1)
+    has_context = _has_brightness_context(key)
+
+    explicit_level = re.search(r"\b(?:til|på|pa)\s+(\d{1,3})\b", lowered)
+    if has_context and explicit_level:
+        level = _clamp_percent(int(explicit_level.group(1)), minimum=1)
+        return BrightnessCommand(level, spoken=f"Okay, skærmen er nu {level} procent.")
+
+    if has_context:
+        match = re.search(r"\b(\d{1,3})\s*(?:procent|%)?", lowered)
+        if match and any(word in lowered for word in ("procent", "%", "lysstyr", "skærm", "skaerm", "display")):
+            level = _clamp_percent(int(match.group(1)), minimum=1)
+            return BrightnessCommand(level, spoken=f"Okay, skærmen er nu {level} procent.")
+
+    down = (
+        "ned" in key
+        or "daemp" in key
+        or "damp" in key
+        or "morkere" in key
+        or "moerkere" in key
+        or "lavere" in key
+        or "svagere" in key
+    )
+    up = (
+        "op" in key
+        or "lysere" in key
+        or "hojere" in key
+        or "merebrightness" in key
+    )
+
+    followup_more = previous_direction != 0 and any(token in key for token in ("lidtmere", "mer", "endnumere", "laenger", "langer"))
+    if not has_context and not followup_more:
+        return None
+
+    if "heltned" in key or "slukskaerm" in key or "slukdisplay" in key:
+        return BrightnessCommand(10, direction=-1, spoken="Okay, skærmen er nu 10 procent.")
+    if "heltop" in key or "fuldlysstyrke" in key or "maxlysstyrke" in key or "makslysstyrke" in key:
+        return BrightnessCommand(100, direction=1, spoken="Okay, skærmen er nu 100 procent.")
+
+    direction = -1 if down else 1 if up else previous_direction if followup_more else 0
+    if direction == 0:
+        return None
+
+    step = 25 if any(token in key for token in ("meget", "laengere", "længere", "langere", "langer")) else 15
+    level = _clamp_percent(current_level + direction * step, minimum=1)
+    return BrightnessCommand(level, direction=direction, spoken=f"Okay, skærmen er nu {level} procent.")
 
 
 _VOLUME_WORDS = {
@@ -1972,6 +2137,10 @@ def _parse_volume_command(text: str, *, current_level: int) -> tuple[int, str] |
 
 def _clamp_volume_level(level: int) -> int:
     return max(0, min(100, int(level)))
+
+
+def _clamp_percent(level: int, *, minimum: int = 0) -> int:
+    return max(minimum, min(100, int(level)))
 
 
 def _format_stt_result(result: STTResult, text: str) -> str:
