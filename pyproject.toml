@@ -24,6 +24,11 @@ voice = [
   "kenlm>=0.3.0",
   "supertonic>=1.2.3",
 ]
+vision = [
+  "opencv-python-headless==4.10.0.84",
+  "Pillow>=10.0",
+  "numpy>=1.26,<2.0",
+]
 roest = [
   "chatterbox-tts==0.1.7",
   "torchaudio==2.6.0",

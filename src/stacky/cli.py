@@ -9,6 +9,7 @@ import socket
 import subprocess
 import time
 import wave
+from collections.abc import Callable
 from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
@@ -21,6 +22,7 @@ from .body.director import BodyDirector
 from .body.protocol import decode_pcm_payload, decode_vision_frame_payload, expression
 from .config import DEFAULT_CONFIG_PATH, ROOT, load_config
 from .llm import create_chat_client
+from .llm import ChatImageAttachment
 from .memory import MemoryStore
 from .personality import StackySelfModel
 from .sandcode import SandcodeMobileHostClient
@@ -49,6 +51,7 @@ from .voice.stt_eval import (
 )
 from .voice.transcript_correction import correct_danish_transcript
 from .voice.turn_detection import EnergyTurnDetector, TurnSignalQuality, analyze_turn_signal, pcm16_rms
+from .vision import VisionSnapshot, VisionState
 from .voice.piper_tts import FastPiperTTS, ensure_danish_piper_voice, pitch_shift_wav
 from .voice.roest_tts import RoestTTS, roest_voice
 from .voice.speech_adapter import adapt_for_danish_speech
@@ -119,6 +122,26 @@ def main(argv: list[str] | None = None) -> int:
     handsfree.add_argument("--mic-preamp", type=float, default=2.0, help="Digital PCM gain before VAD/STT. Limited to avoid PCM clipping; use 1.0 to disable.")
     handsfree.add_argument("--reply-chars", type=int, default=260, help="Default spoken reply character budget for low-latency live chat.")
     handsfree.add_argument("--detail-reply-chars", type=int, default=650, help="Spoken reply character budget when the user asks for details.")
+    handsfree.add_argument(
+        "--vision",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Capture StackChan camera frames during handsfree and provide them to the brain.",
+    )
+    handsfree.add_argument(
+        "--vision-image",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Attach the latest 320x240 JPEG snapshot to Gemini/openai-compatible brain prompts.",
+    )
+    handsfree.add_argument(
+        "--face-tracking",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Use local face tracking to gently orient StackChan's head while listening.",
+    )
+    handsfree.add_argument("--vision-interval", type=float, default=2.5, help="Seconds between idle camera captures.")
+    handsfree.add_argument("--vision-prompt-timeout", type=float, default=0.8, help="Seconds to wait for a fresh prompt snapshot.")
     handsfree.add_argument(
         "--voice-trust",
         choices=("trusted", "session-only", "off"),
@@ -359,6 +382,11 @@ def main(argv: list[str] | None = None) -> int:
                 stackchan_mic_gain=args.stackchan_mic_gain,
                 reply_chars=args.reply_chars,
                 detail_reply_chars=args.detail_reply_chars,
+                vision=args.vision,
+                vision_image=args.vision_image,
+                face_tracking=args.face_tracking,
+                vision_interval=args.vision_interval,
+                vision_prompt_timeout=args.vision_prompt_timeout,
                 voice_trust=args.voice_trust,
                 listen_only=args.listen_only,
                 debug_audio=args.debug_audio,
@@ -1405,6 +1433,11 @@ async def _handsfree(
     stackchan_mic_gain: int,
     reply_chars: int,
     detail_reply_chars: int,
+    vision: bool,
+    vision_image: bool,
+    face_tracking: bool,
+    vision_interval: float,
+    vision_prompt_timeout: float,
     voice_trust: str,
     mic_channel: str,
     mic_preamp: float,
@@ -1419,7 +1452,11 @@ async def _handsfree(
 
     loop = asyncio.get_running_loop()
     audio_queue: asyncio.Queue[tuple[bytes, int, int]] = asyncio.Queue(maxsize=80)
+    vision_payload_queue: asyncio.Queue[dict[str, object]] = asyncio.Queue(maxsize=4)
+    vision_snapshot_queue: asyncio.Queue[VisionSnapshot] = asyncio.Queue(maxsize=4)
+    vision_state = VisionState() if vision else None
     accepting_audio = False
+    body_state_name = "neutral"
     audio_meter = {"last_at": 0.0, "max_rms": 0, "max_peak": 0, "chunks": 0}
     channel_selector = Pcm16ChannelSelector(mic_channel)
     body_status: dict[str, object] = {}
@@ -1444,6 +1481,20 @@ async def _handsfree(
             return
         if event.type == "touch":
             print(f"[StackChan] touch: {event.payload}", flush=True)
+            return
+        if event.type == "vision.frame":
+            if vision_state is None:
+                return
+
+            def enqueue_vision() -> None:
+                if vision_payload_queue.full():
+                    try:
+                        vision_payload_queue.get_nowait()
+                    except asyncio.QueueEmpty:
+                        pass
+                vision_payload_queue.put_nowait(dict(event.payload))
+
+            loop.call_soon_threadsafe(enqueue_vision)
             return
         if event.type != "audio.in":
             if debug_audio or listen_only:
@@ -1512,7 +1563,34 @@ async def _handsfree(
     body_director.apply_calibration()
 
     def set_body_state(name: str) -> bool:
+        nonlocal body_state_name
+        body_state_name = name
         return body_director.set_state(name) if body_director is not None else controller.set_expression(name)
+
+    def should_track_face() -> bool:
+        return bool(face_tracking and accepting_audio and body_state_name == "listening")
+
+    vision_processor_task = None
+    vision_capture_task = None
+    if vision_state is not None:
+        print(f"Vision mode ready ({vision_state.detector_status}).", flush=True)
+        vision_processor_task = asyncio.create_task(
+            _vision_processor_loop(
+                vision_state,
+                vision_payload_queue,
+                vision_snapshot_queue,
+                body_director,
+                should_track_face=should_track_face,
+                debug=debug_audio,
+            )
+        )
+        vision_capture_task = asyncio.create_task(
+            _vision_capture_loop(
+                controller,
+                interval_seconds=vision_interval,
+                should_capture=lambda: controller.connected and accepting_audio,
+            )
+        )
 
     def record_local_turn(user_text: str, assistant_text: str) -> None:
         if brain is None:
@@ -1827,6 +1905,19 @@ async def _handsfree(
                 accepting_audio = True
                 continue
             brain_started = time.perf_counter()
+            visual_context = ""
+            prompt_image = None
+            if vision_state is not None:
+                await _capture_prompt_vision(
+                    controller,
+                    vision_snapshot_queue,
+                    timeout_seconds=vision_prompt_timeout,
+                )
+                visual_context = vision_state.prompt_context(max_age_seconds=10.0)
+                if vision_image:
+                    image_base64 = vision_state.image_base64(max_age_seconds=10.0)
+                    if image_base64 is not None:
+                        prompt_image = ChatImageAttachment("image/jpeg", image_base64)
             reply = await brain.respond(
                 text,
                 max_spoken_chars=reply_chars,
@@ -1835,6 +1926,8 @@ async def _handsfree(
                 allow_memory_writes=voice_policy.allow_memory_writes,
                 remember_recent=voice_policy.remember_recent,
                 session_source=voice_policy.session_source,
+                visual_context=visual_context,
+                vision_image=prompt_image,
             )
             brain_seconds = time.perf_counter() - brain_started
             set_body_state("happy")
@@ -1869,6 +1962,13 @@ async def _handsfree(
     except (KeyboardInterrupt, asyncio.CancelledError):
         return 0
     finally:
+        for task in (vision_capture_task, vision_processor_task):
+            if task is not None:
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
         if output is not None:
             await output.stop()
         set_body_state("neutral")
@@ -1889,6 +1989,77 @@ async def _delayed_reply_motion(director: BodyDirector, text: str, *, delay_seco
         await asyncio.to_thread(director.reply_started, text)
     except Exception as exc:  # pragma: no cover - body motion must never break speech.
         print(f"[Stacky] body motion skipped: {exc}", flush=True)
+
+
+async def _vision_processor_loop(
+    vision_state: VisionState,
+    payload_queue: asyncio.Queue[dict[str, object]],
+    snapshot_queue: asyncio.Queue[VisionSnapshot],
+    body_director: BodyDirector | None,
+    *,
+    should_track_face: Callable[[], bool],
+    debug: bool = False,
+) -> None:
+    while True:
+        payload = await payload_queue.get()
+        snapshot = await asyncio.to_thread(vision_state.observe_payload, payload)
+        if snapshot_queue.full():
+            try:
+                snapshot_queue.get_nowait()
+            except asyncio.QueueEmpty:
+                pass
+        snapshot_queue.put_nowait(snapshot)
+        face = snapshot.primary_face
+        if debug:
+            if snapshot.error:
+                print(f"[vision] error={snapshot.error}", flush=True)
+            elif face is None:
+                print(f"[vision] faces=0 detector={snapshot.detector}", flush=True)
+            else:
+                print(
+                    f"[vision] face x={face.x:.2f} y={face.y:.2f} "
+                    f"area={face.area:.2f} detector={snapshot.detector}",
+                    flush=True,
+                )
+        if body_director is not None and face is not None and should_track_face():
+            try:
+                body_director.track_face(face.x, face.y, confidence=face.confidence)
+            except Exception as exc:  # pragma: no cover - vision must not break audio.
+                if debug:
+                    print(f"[vision] face tracking skipped: {exc}", flush=True)
+
+
+async def _vision_capture_loop(
+    controller: StackChanBodyController,
+    *,
+    interval_seconds: float,
+    should_capture: Callable[[], bool],
+) -> None:
+    interval_seconds = max(0.6, float(interval_seconds))
+    await asyncio.sleep(0.8)
+    while True:
+        if should_capture():
+            controller.capture_vision_frame(quality=50, discard_frames=4, settle_ms=30)
+        await asyncio.sleep(interval_seconds)
+
+
+async def _capture_prompt_vision(
+    controller: StackChanBodyController,
+    snapshot_queue: asyncio.Queue[VisionSnapshot],
+    *,
+    timeout_seconds: float,
+) -> VisionSnapshot | None:
+    while True:
+        try:
+            snapshot_queue.get_nowait()
+        except asyncio.QueueEmpty:
+            break
+    if not controller.capture_vision_frame(quality=50, discard_frames=4, settle_ms=30):
+        return None
+    try:
+        return await asyncio.wait_for(snapshot_queue.get(), timeout=max(0.05, float(timeout_seconds)))
+    except asyncio.TimeoutError:
+        return None
 
 
 def _clean_transcript(text: str) -> str:

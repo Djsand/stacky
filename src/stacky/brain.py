@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from .danish import compact_for_speech, live_speech_style_prompt, spoken_danish_system_prompt
-from .llm import ChatClient, ChatMessage, LLMError
+from .llm import ChatClient, ChatImageAttachment, ChatMessage, LLMError
 from .memory import Memory, MemoryStore
 from .personality import StackySelfModel
 from .sessions import InfiniteSessionStore
@@ -47,6 +47,8 @@ class StackyBrain:
         remember_dialogue: bool = False,
         remember_recent: bool = True,
         session_source: str = "conversation",
+        visual_context: str = "",
+        vision_image: ChatImageAttachment | None = None,
     ) -> BrainReply:
         trusted_self_update = bool(allow_memory_writes and persist_session)
         if self.self_model is not None:
@@ -59,12 +61,16 @@ class StackyBrain:
                 self.session_store.append_message("user", user_text, meta={"source": session_source})
                 session_user_persisted = True
             stitched_messages, _ = self.session_store.stitch_context(recalled_memories=memories)
+            if session_user_persisted and vision_image is not None:
+                stitched_messages = _drop_latest_matching_user(stitched_messages, user_text)
         messages = self._messages(
             user_text,
             memories,
             max_spoken_chars=max_spoken_chars,
             stitched_messages=stitched_messages,
-            include_current_user=not session_user_persisted,
+            include_current_user=not session_user_persisted or vision_image is not None,
+            visual_context=visual_context,
+            vision_image=vision_image,
         )
         remembered: list[Memory] = []
         try:
@@ -170,6 +176,8 @@ class StackyBrain:
         max_spoken_chars: int = 260,
         stitched_messages: list[dict[str, str]] | None = None,
         include_current_user: bool = True,
+        visual_context: str = "",
+        vision_image: ChatImageAttachment | None = None,
     ) -> list[ChatMessage]:
         memory_text = "\n".join(f"- {memory.text}" for memory in memories) or "- Ingen relevante friske minder endnu."
         recent_text = self._recent_context_text()
@@ -193,6 +201,7 @@ class StackyBrain:
                     "i stedet for at opfinde et nyt emne."
                 ),
                 "Svar som en nærværende ven, ikke som et kæledyr eller en assistent med marketingtone.",
+                _visual_context_rule(visual_context, has_image=vision_image is not None),
             ]
         )
         messages = [ChatMessage("system", system)]
@@ -202,7 +211,8 @@ class StackyBrain:
                 role = "user"
             messages.append(ChatMessage(role, message.get("content", "")))
         if include_current_user:
-            messages.append(ChatMessage("user", user_text))
+            images = (vision_image,) if vision_image is not None else ()
+            messages.append(ChatMessage("user", user_text, images=images))
         return messages
 
     def _candidate_memories(self, user_text: str) -> list[str]:
@@ -240,6 +250,33 @@ class StackyBrain:
             lines.append(f"- {self.soul.created_for}: {user_text}")
             lines.append(f"- Stacky: {response}")
         return "\n".join(lines)
+
+
+def _visual_context_rule(visual_context: str, *, has_image: bool) -> str:
+    parts = [
+        "Visuel kontekst: Kamera-input er ekstra sanseinput fra Stackys krop, ikke en besked fra Nicolai.",
+        "Brug billedet og den korte visuelle note, hvis det naturligt hjaelper svaret.",
+        "Kommenter ikke kameraet hver gang, og gaet ikke identitet uden eksplicit genkendelse.",
+    ]
+    clean = visual_context.strip()
+    if clean:
+        parts.append(clean)
+    if has_image:
+        parts.append("Der er vedhaeftet et friskt 320x240 JPEG-snapshot fra StackChans kamera til den aktuelle tur.")
+    return "\n".join(parts)
+
+
+def _drop_latest_matching_user(messages: list[dict[str, str]], user_text: str) -> list[dict[str, str]]:
+    clean = user_text.strip()
+    if not clean:
+        return messages
+    result = list(messages)
+    for index in range(len(result) - 1, -1, -1):
+        message = result[index]
+        if message.get("role") == "user" and message.get("content", "").strip() == clean:
+            del result[index]
+            break
+    return result
 
 
 def _dedupe_memories(memories: list[Memory]) -> list[Memory]:

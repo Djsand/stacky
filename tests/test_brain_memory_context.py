@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 
 from stacky.brain import StackyBrain
-from stacky.llm import ChatMessage, LLMError
+from stacky.llm import ChatImageAttachment, ChatMessage, LLMError
 from stacky.memory import MemoryStore
 from stacky.personality import StackySelfModel
 from stacky.sessions import InfiniteSessionStore, read_jsonl_messages
@@ -85,6 +85,26 @@ class BrainMemoryContextTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Slut ikke automatisk med et spørgsmål", system)
         self.assertIn("Nævn ikke at det er sent", system)
         self.assertIn("Web search er planlagt", system)
+
+    async def test_visual_context_and_image_are_sent_without_memory_write(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = MemoryStore(Path(tmp) / "memory.sqlite")
+            llm = FakeLLM()
+            brain = StackyBrain(StackySoul(created_for="Nicolai"), memory, llm)  # type: ignore[arg-type]
+
+            await brain.respond(
+                "hej",
+                visual_context="Visuel kontekst fra Stackys kamera: Nicolai sidder midt i billedet.",
+                vision_image=ChatImageAttachment("image/jpeg", "abc123"),
+                allow_memory_writes=False,
+            )
+            memory_count = memory.count()
+
+        system = llm.messages[0][0].content
+        self.assertIn("Kamera-input er ekstra sanseinput", system)
+        self.assertIn("Nicolai sidder midt", system)
+        self.assertEqual(llm.messages[0][-1].images[0].data_base64, "abc123")
+        self.assertEqual(memory_count, 0)
 
     async def test_complex_live_prompt_allows_longer_answer(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

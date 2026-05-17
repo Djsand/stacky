@@ -3,7 +3,7 @@ from __future__ import annotations
 import unittest
 
 from stacky.config import LMStudioConfig
-from stacky.llm import ChatMessage, GeminiClient, LMStudioClient, create_chat_client
+from stacky.llm import ChatImageAttachment, ChatMessage, GeminiClient, LMStudioClient, create_chat_client
 
 
 class LLMTest(unittest.TestCase):
@@ -33,6 +33,26 @@ class LLMTest(unittest.TestCase):
         self.assertEqual(payload["contents"][0]["role"], "user")
         self.assertEqual(payload["contents"][0]["parts"][0]["text"], "Hej")
         self.assertEqual(payload["generationConfig"]["maxOutputTokens"], 40)
+
+    def test_gemini_payload_maps_inline_image(self) -> None:
+        client = GeminiClient(LMStudioConfig(provider="gemini", api_key="key"))
+
+        payload = client._payload(
+            [
+                ChatMessage(
+                    "user",
+                    "Hvad ser du?",
+                    images=(ChatImageAttachment("image/jpeg", "abc123"),),
+                )
+            ],
+            temperature=0.3,
+            max_tokens=None,
+        )
+
+        parts = payload["contents"][0]["parts"]
+        self.assertEqual(parts[0]["text"], "Hvad ser du?")
+        self.assertEqual(parts[1]["inline_data"]["mime_type"], "image/jpeg")
+        self.assertEqual(parts[1]["inline_data"]["data"], "abc123")
 
 
 if __name__ == "__main__":

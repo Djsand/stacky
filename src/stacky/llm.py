@@ -23,12 +23,33 @@ class GeminiError(LLMError):
 
 
 @dataclass(frozen=True)
+class ChatImageAttachment:
+    mime_type: str
+    data_base64: str
+
+
+@dataclass(frozen=True)
 class ChatMessage:
     role: str
     content: str
+    images: tuple[ChatImageAttachment, ...] = ()
 
-    def to_dict(self) -> dict[str, str]:
-        return {"role": self.role, "content": self.content}
+    def to_dict(self) -> dict[str, Any]:
+        if not self.images:
+            return {"role": self.role, "content": self.content}
+        parts: list[dict[str, Any]] = []
+        if self.content:
+            parts.append({"type": "text", "text": self.content})
+        for image in self.images:
+            parts.append(
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": f"data:{image.mime_type};base64,{image.data_base64}",
+                    },
+                }
+            )
+        return {"role": self.role, "content": parts}
 
 
 class ChatClient(Protocol):
@@ -123,7 +144,21 @@ class GeminiClient:
                 system_parts.append({"text": message.content})
                 continue
             role = "model" if message.role == "assistant" else "user"
-            contents.append({"role": role, "parts": [{"text": message.content}]})
+            parts: list[dict[str, Any]] = []
+            if message.content:
+                parts.append({"text": message.content})
+            for image in message.images:
+                parts.append(
+                    {
+                        "inline_data": {
+                            "mime_type": image.mime_type,
+                            "data": image.data_base64,
+                        }
+                    }
+                )
+            if not parts:
+                parts.append({"text": ""})
+            contents.append({"role": role, "parts": parts})
         if not contents:
             contents.append({"role": "user", "parts": [{"text": ""}]})
 

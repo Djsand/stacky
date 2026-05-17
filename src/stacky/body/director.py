@@ -21,6 +21,7 @@ class BodyDirector:
         self.controller = controller
         self.calibration = calibration.clamp()
         self._last_motion_at = 0.0
+        self._last_face_track_at = 0.0
 
     def apply_calibration(self) -> bool:
         return self.controller.configure_motion(
@@ -75,6 +76,32 @@ class BodyDirector:
     def gesture(self, name: str, *, intensity: float = 1.0, speed: int = 500) -> bool:
         self._last_motion_at = time.monotonic()
         return self.controller.gesture(name, intensity=intensity, speed=speed)
+
+    def track_face(
+        self,
+        x: float,
+        y: float,
+        *,
+        confidence: float = 1.0,
+        speed: int = 145,
+        now: float | None = None,
+    ) -> bool:
+        """Gently keep the head oriented toward a detected face."""
+
+        if confidence < 0.45:
+            return True
+        now = now if now is not None else time.monotonic()
+        if now - self._last_face_track_at < 0.9:
+            return True
+        if max(abs(x), abs(y)) < 0.10:
+            return True
+        self._last_face_track_at = now
+        self._last_motion_at = now
+        return self.controller.look_at(
+            max(-0.65, min(0.65, float(x) * 0.70)),
+            max(-0.45, min(0.45, float(y) * 0.55)),
+            speed=max(80, min(260, int(speed))),
+        )
 
     def _motion(
         self,

@@ -11,6 +11,7 @@ class FakeDirectorController:
         self.configs: list[dict[str, int]] = []
         self.expressions: list[str] = []
         self.gestures: list[tuple[str, float, int]] = []
+        self.looks: list[tuple[float, float, int]] = []
 
     def configure_motion(
         self,
@@ -38,6 +39,10 @@ class FakeDirectorController:
 
     def gesture(self, name: str, *, intensity: float = 1.0, speed: int = 500) -> bool:
         self.gestures.append((name, intensity, speed))
+        return True
+
+    def look_at(self, x: float, y: float, *, speed: int = 500) -> bool:
+        self.looks.append((x, y, speed))
         return True
 
 
@@ -92,6 +97,23 @@ class BodyDirectorTest(unittest.TestCase):
         self.assertTrue(director.reply_started("Skal jeg gøre det sådan?"))
 
         self.assertEqual(fake.gestures, [("look_up", 0.14, 190)])
+
+
+    def test_track_face_moves_gently_toward_off_center_face(self) -> None:
+        fake = FakeDirectorController()
+        director = BodyDirector(fake, BodyCalibration())  # type: ignore[arg-type]
+
+        self.assertTrue(director.track_face(0.5, -0.4, confidence=0.8, now=10.0))
+
+        self.assertEqual(fake.looks, [(0.35, -0.22000000000000003, 145)])
+
+    def test_track_face_ignores_centered_face(self) -> None:
+        fake = FakeDirectorController()
+        director = BodyDirector(fake, BodyCalibration())  # type: ignore[arg-type]
+
+        self.assertTrue(director.track_face(0.04, -0.03, confidence=0.8, now=10.0))
+
+        self.assertEqual(fake.looks, [])
 
 
 if __name__ == "__main__":
