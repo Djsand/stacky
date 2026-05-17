@@ -120,6 +120,8 @@ class BodyProtocolTest(unittest.TestCase):
         self.assertEqual(command.payload["discardFrames"], 4)
         self.assertEqual(command.payload["settleMs"], 30)
         self.assertEqual(command.payload["aeLevel"], 2)
+        self.assertEqual(command.payload["sensorGain"], 30)
+        self.assertEqual(command.payload["sensorExposure"], 1200)
 
     def test_vision_capture_command_clamps_quality(self) -> None:
         command = vision_capture(quality=100)
@@ -132,6 +134,12 @@ class BodyProtocolTest(unittest.TestCase):
         self.assertEqual(command.payload["aeLevel"], 2)
         self.assertEqual(command.payload["sensorGain"], 30)
         self.assertEqual(command.payload["sensorExposure"], 1200)
+
+    def test_vision_capture_command_can_use_sensor_auto_controls(self) -> None:
+        command = vision_capture(sensor_gain=None, sensor_exposure=None)
+
+        self.assertNotIn("sensorGain", command.payload)
+        self.assertNotIn("sensorExposure", command.payload)
 
     def test_audio_chunk_protocol_encodes(self) -> None:
         start = audio_start(sample_rate=44100, total_bytes=2048).to_json()

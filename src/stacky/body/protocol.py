@@ -217,8 +217,8 @@ def vision_capture(
     discard_frames: int = 4,
     settle_ms: int = 30,
     ae_level: int = 2,
-    sensor_gain: int | None = None,
-    sensor_exposure: int | None = None,
+    sensor_gain: int | None = 30,
+    sensor_exposure: int | None = 1200,
 ) -> BodyCommand:
     payload: dict[str, Any] = {
         "width": max(64, min(1280, int(width))),

@@ -242,18 +242,18 @@ def main(argv: list[str] | None = None) -> int:
     camera_test.add_argument("--discard-frames", type=int, default=4, help="Frames to discard before saving a capture.")
     camera_test.add_argument("--settle-ms", type=int, default=30, help="Delay between discarded camera frames.")
     camera_test.add_argument("--ae-level", type=int, default=2, help="GC0308 auto-exposure target level from -2 to 2.")
-    camera_test.add_argument("--sensor-gain", type=int, default=None, help="Optional manual GC0308 gain from 0 to 30.")
-    camera_test.add_argument("--sensor-exposure", type=int, default=None, help="Optional manual GC0308 exposure from 0 to 1200.")
+    camera_test.add_argument("--sensor-gain", type=int, default=30, help="Optional manual GC0308 gain from 0 to 30.")
+    camera_test.add_argument("--sensor-exposure", type=int, default=1200, help="Optional manual GC0308 exposure from 0 to 1200.")
     camera_test.add_argument(
         "--enhance",
         action=argparse.BooleanOptionalAction,
         default=True,
-        help="Save an auto-brightened JPEG and keep the raw copy alongside it.",
+        help="Save an additional conservative brightened JPEG for LLM vision input.",
     )
     camera_test.add_argument(
         "--enhance-target",
         type=float,
-        default=96.0,
+        default=110.0,
         help="Target mean luminance for camera-test auto-enhance.",
     )
     camera_test.add_argument("--count", type=int, default=1, help="Number of frames to capture.")
@@ -1307,28 +1307,27 @@ async def _camera_test(
             if capture_count > 1:
                 frame_path = output_path.with_name(f"{output_path.stem}-{index + 1:02d}{output_path.suffix}")
             metadata = {key: value for key, value in payload.items() if key != "data"}
-            raw_path: Path | None = None
-            saved_jpeg = jpeg
+            llm_path: Path | None = None
             if enhance:
-                raw_path = frame_path.with_name(f"{frame_path.stem}-raw{frame_path.suffix}")
-                raw_path.write_bytes(jpeg)
-                saved_jpeg = _enhance_camera_jpeg(jpeg, target_mean=enhance_target)
-                metadata["enhanced"] = True
-                metadata["rawPath"] = str(raw_path)
+                llm_path = frame_path.with_name(f"{frame_path.stem}-llm{frame_path.suffix}")
+                llm_jpeg = _enhance_camera_jpeg(jpeg, target_mean=enhance_target)
+                llm_path.write_bytes(llm_jpeg)
+                metadata["llmEnhanced"] = True
+                metadata["llmPath"] = str(llm_path)
                 metadata["enhanceTargetMean"] = enhance_target
             else:
-                metadata["enhanced"] = False
-            frame_path.write_bytes(saved_jpeg)
+                metadata["llmEnhanced"] = False
+            frame_path.write_bytes(jpeg)
             frame_path.with_suffix(".json").write_text(
                 json.dumps(metadata, ensure_ascii=False, indent=2) + "\n",
                 encoding="utf-8",
             )
-            raw_note = f", raw={raw_path} stats={_image_stats(raw_path)}" if raw_path is not None else ""
+            llm_note = f", llm={llm_path} stats={_image_stats(llm_path)}" if llm_path is not None else ""
             print(
                 f"Saved camera frame: {frame_path} "
-                f"({payload.get('width')}x{payload.get('height')}, jpeg={len(saved_jpeg)} bytes, "
+                f"({payload.get('width')}x{payload.get('height')}, jpeg={len(jpeg)} bytes, "
                 f"source={_fourcc(payload.get('sourceFormat'))}/{payload.get('sourceBytes')} bytes, "
-                f"stats={_image_stats(frame_path)}{raw_note}).",
+                f"stats={_image_stats(frame_path)}{llm_note}).",
                 flush=True,
             )
             if index + 1 < capture_count and delay_ms > 0:

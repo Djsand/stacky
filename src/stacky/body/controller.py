@@ -203,8 +203,8 @@ class StackChanBodyController:
         discard_frames: int = 4,
         settle_ms: int = 30,
         ae_level: int = 2,
-        sensor_gain: int | None = None,
-        sensor_exposure: int | None = None,
+        sensor_gain: int | None = 30,
+        sensor_exposure: int | None = 1200,
     ) -> bool:
         return self.send(
             vision_capture(
