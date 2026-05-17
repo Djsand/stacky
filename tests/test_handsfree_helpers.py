@@ -396,6 +396,7 @@ class HandsfreeHelpersTest(unittest.TestCase):
         self.assertEqual((_parse_motion_command("nik med hovedet") or None).gesture, "nod")
         self.assertEqual((_parse_motion_command("prøv en bevægelse") or None).gesture, "demo")
         self.assertIsNone(_parse_motion_command("skru op"))
+        self.assertIsNone(_parse_motion_command("hvordan skulle den funktion fungere"))
 
     def test_motion_gesture_uses_restrained_physical_profile(self) -> None:
         actor = FakeMotionActor()

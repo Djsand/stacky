@@ -2411,11 +2411,12 @@ def _parse_calibration_command(text: str) -> CalibrationCommand | None:
 def _parse_motion_command(text: str) -> MotionCommand | None:
     lowered = text.lower()
     key = _motion_text_key(text)
+    words = _motion_words(text)
     if "skru" in lowered or "volumen" in lowered:
         return None
     if _has_brightness_context(key):
         return None
-    if "dans" in key:
+    if any(word in {"dans", "danse", "danser"} for word in words):
         return MotionCommand("dance", "Okay.")
     if any(token in key for token in ("provnoget", "provenbevaegelse", "bevaegdig", "bevaegelsekommando", "bevaegelseskommando")):
         return MotionCommand("demo", "Okay, jeg prøver en bevægelse.")
@@ -2457,6 +2458,24 @@ def _motion_text_key(text: str) -> str:
     for source, target in replacements.items():
         lowered = lowered.replace(source, target)
     return re.sub(r"[^0-9a-z]+", "", lowered)
+
+
+def _motion_words(text: str) -> list[str]:
+    lowered = text.lower()
+    replacements = {
+        "Ã¦": "ae",
+        "Ã¸": "o",
+        "Ã¥": "a",
+        "ÃƒÂ¦": "ae",
+        "ÃƒÂ¸": "o",
+        "ÃƒÂ¥": "a",
+        "Ã¶": "o",
+        "Ã¤": "ae",
+        "Ã¼": "u",
+    }
+    for source, target in replacements.items():
+        lowered = lowered.replace(source, target)
+    return [word for word in re.split(r"[^0-9a-z]+", lowered) if word]
 
 
 def _has_brightness_context(key: str) -> bool:
