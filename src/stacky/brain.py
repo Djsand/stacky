@@ -42,6 +42,7 @@ class StackyBrain:
         max_spoken_chars: int = 260,
         detail_spoken_chars: int = 420,
         use_session_context: bool = True,
+        max_session_context_tokens: int = 4500,
         persist_session: bool = True,
         allow_memory_writes: bool = True,
         remember_dialogue: bool = False,
@@ -60,7 +61,10 @@ class StackyBrain:
             if persist_session:
                 self.session_store.append_message("user", user_text, meta={"source": session_source})
                 session_user_persisted = True
-            stitched_messages, _ = self.session_store.stitch_context(recalled_memories=memories)
+            stitched_messages, _ = self.session_store.stitch_context(
+                max_tokens=max_session_context_tokens,
+                recalled_memories=memories,
+            )
             if session_user_persisted and vision_image is not None:
                 stitched_messages = _drop_latest_matching_user(stitched_messages, user_text)
         messages = self._messages(
@@ -200,7 +204,14 @@ class StackyBrain:
                     "Hvis voice-transcriptet virker afbrudt eller semantisk tyndt, så sig kort at du ikke fik fat i det, "
                     "i stedet for at opfinde et nyt emne."
                 ),
-                "Svar som en nærværende ven, ikke som et kæledyr eller en assistent med marketingtone.",
+                (
+                    "Sessionens tidligere assistentbeskeder er historik, ikke stil-eksempler. "
+                    "Imiter ikke gamle lange, generiske eller overbegejstrede svar; brug dem kun til faktuel kontinuitet."
+                ),
+                (
+                    "Svar som Stacky: en jordbundet, nysgerrig medudvikler i StackChan-kroppen. "
+                    "Ikke et kæledyr, ikke kundeservice, ikke marketingtone, ikke generisk LLM-assistent."
+                ),
                 _visual_context_rule(visual_context, has_image=vision_image is not None),
             ]
         )
@@ -304,12 +315,13 @@ def _live_answer_rule(user_text: str, *, max_chars: int = 260) -> str:
         return (
             "Brugeren beder sandsynligvis om detaljer eller diskuterer noget komplekst; "
             "giv en kort konklusion først, og uddyb det nødvendige i 2-5 naturlige sætninger. "
-            "Det må gerne fylde mere end et hurtigt live-svar, men undgå lange monologer."
+            "Hver sætning skal tilføje konkret vurdering, information eller næste skridt; ingen fyld."
         )
     return (
-        "Dette er live samtale: svar med 1-3 korte, konkrete sætninger som default, "
+        "Dette er live samtale: svar med 1-2 korte, konkrete sætninger som default, "
         f"helst under cirka {max_chars} tegn. Slut ikke automatisk med et spørgsmål. "
         "Spørg kun hvis Nicolai tydeligt mangler en afklaring for at komme videre. "
+        "Sig hellere en skarp konkret observation end en lang venlig omskrivning. "
         "Nævn ikke at det er sent, aften, nat eller sengetid, medmindre Nicolai spørger om tid eller søvn. "
         "Når Nicolai siger at han tester dig, så anerkend testen kort og vent på næste observation. "
         "Web search er planlagt som en tidlig feature, men er ikke aktiv i runtime endnu; "

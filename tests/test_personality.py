@@ -78,6 +78,21 @@ class StackySelfModelTest(unittest.TestCase):
         self.assertTrue(any("finpudser" in note.lower() for note in observation.style_notes))
         self.assertTrue(observation.convictions)
 
+    def test_personality_feedback_forms_anti_llm_style_notes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            model = StackySelfModel(Path(tmp))
+
+            observation = model.observe_user_turn(
+                "Du mangler personlighed, svarene bliver lange og ligegyldige og meget LLM agtige.",
+                trusted=True,
+                source="test",
+            )
+
+        notes = " ".join(observation.style_notes).lower()
+        self.assertIn("tydeligere egen stemme", notes)
+        self.assertIn("konkret værdi", notes)
+        self.assertIn("generisk chatbot", notes)
+
 
 if __name__ == "__main__":
     unittest.main()

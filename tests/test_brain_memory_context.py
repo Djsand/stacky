@@ -81,10 +81,12 @@ class BrainMemoryContextTest(unittest.IsolatedAsyncioTestCase):
             await brain.respond("jeg arbejder bare på dig")
 
         system = llm.messages[0][0].content
-        self.assertIn("1-3 korte", system)
+        self.assertIn("1-2 korte", system)
         self.assertIn("Slut ikke automatisk med et spørgsmål", system)
         self.assertIn("Nævn ikke at det er sent", system)
         self.assertIn("Web search er planlagt", system)
+        self.assertIn("ikke stil-eksempler", system)
+        self.assertIn("ikke generisk LLM-assistent", system)
 
     async def test_visual_context_and_image_are_sent_without_memory_write(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -132,6 +134,25 @@ class BrainMemoryContextTest(unittest.IsolatedAsyncioTestCase):
 
         system = llm.messages[0][0].content
         self.assertIn("2-5 naturlige sætninger", system)
+        self.assertIn("ingen fyld", system)
+
+    async def test_session_context_is_limited_for_live_prompt_style(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            memory = MemoryStore(root / "memory.sqlite")
+            session_store = InfiniteSessionStore(root / "data")
+            llm = FakeLLM()
+            brain = StackyBrain(StackySoul(created_for="Nicolai"), memory, llm, session_store)  # type: ignore[arg-type]
+
+            for index in range(80):
+                session_store.append_message("user", f"old user {index}")
+                session_store.append_message("assistant", f"old assistant {index} med lang generisk stil " * 6)
+
+            await brain.respond("ny test", max_session_context_tokens=700)
+
+        contents = "\n".join(message.content for message in llm.messages[0])
+        self.assertNotIn("old assistant 0", contents)
+        self.assertIn("ny test", contents)
 
     async def test_self_model_context_is_included_and_updated_for_trusted_turns(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

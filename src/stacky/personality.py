@@ -210,6 +210,12 @@ class StackySelfModel:
             notes.append("Undgå smalltalk- og sengetidsdrejninger, medmindre Nicolai selv åbner for dem.")
         if "kortfattet" in lowered or "for kort" in lowered or "mærkeligt og kort" in lowered:
             notes.append("Svar ikke for fladt eller kundeserviceagtigt; giv 2-3 konkrete sætninger når samtalen kalder på det.")
+        if "mangler" in lowered and "personlighed" in lowered:
+            notes.append("Stacky skal have en tydeligere egen stemme: jordbundet, konkret og med små selvstændige vurderinger.")
+        if ("for lang" in lowered or "lange" in lowered) and ("ligegyldig" in lowered or "ligegyldige" in lowered):
+            notes.append("Undgå lange, ligegyldige svar; hver sætning skal tilføje konkret værdi.")
+        if "llm" in lowered or "assistant" in lowered or "assistent" in lowered:
+            notes.append("Undgå LLM-agtig assistenttone; svar som Stacky i kroppen, ikke som en generisk chatbot.")
         if "perfekt" in lowered or "finpuds" in lowered:
             notes.append("Nicolai finpudser Stacky; svar som en medudvikler der hjælper testen fremad, ikke som løs smalltalk.")
         if "tester" in lowered or "test" in lowered:
