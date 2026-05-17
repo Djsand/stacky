@@ -365,6 +365,35 @@ class HandsfreeHelpersTest(unittest.TestCase):
         self.assertFalse(accepted)
         self.assertEqual(reason, "repetitivt filler-støjfragment")
 
+    def test_rejects_ack_prefixed_repeated_den_noise_turn(self) -> None:
+        result = STTResult(
+            text="ja den er den",
+            audio=AudioStats(duration_seconds=8.90, rms=1712, peak=30000, sample_rate=24000, channels=1),
+            avg_logprob=-0.58,
+            no_speech_prob=0.0,
+            compression_ratio=0.0,
+        )
+        quality = TurnSignalQuality(
+            duration_seconds=8.90,
+            median_rms=520,
+            p80_rms=1700,
+            p95_rms=3300,
+            peak=30000,
+            active_ratio=0.44,
+            active_ms=3920,
+            max_active_run_ms=540,
+            crest_factor=12.0,
+            active_threshold=420,
+            zero_crossing_rate=0.15,
+            speech_band_ms=3800,
+            max_speech_band_run_ms=520,
+        )
+
+        accepted, reason = _accept_stt_result(result, signal_quality=quality)
+
+        self.assertFalse(accepted)
+        self.assertEqual(reason, "repetitivt filler-støjfragment")
+
     def test_rejects_den_her_jeg_kan_noise_turn(self) -> None:
         result = STTResult(
             text="den her jeg kan",
@@ -386,6 +415,35 @@ class HandsfreeHelpersTest(unittest.TestCase):
             active_threshold=420,
             zero_crossing_rate=0.18,
             speech_band_ms=2500,
+            max_speech_band_run_ms=500,
+        )
+
+        accepted, reason = _accept_stt_result(result, signal_quality=quality)
+
+        self.assertFalse(accepted)
+        self.assertEqual(reason, "repetitivt filler-støjfragment")
+
+    def test_rejects_i_prefixed_den_her_jeg_kan_noise_turn(self) -> None:
+        result = STTResult(
+            text="jeg kan i den her den her",
+            audio=AudioStats(duration_seconds=9.0, rms=3099, peak=32768, sample_rate=24000, channels=1),
+            avg_logprob=-0.65,
+            no_speech_prob=0.0,
+            compression_ratio=0.0,
+        )
+        quality = TurnSignalQuality(
+            duration_seconds=9.0,
+            median_rms=700,
+            p80_rms=2500,
+            p95_rms=4300,
+            peak=32768,
+            active_ratio=0.50,
+            active_ms=4500,
+            max_active_run_ms=560,
+            crest_factor=14.0,
+            active_threshold=420,
+            zero_crossing_rate=0.18,
+            speech_band_ms=4400,
             max_speech_band_run_ms=500,
         )
 

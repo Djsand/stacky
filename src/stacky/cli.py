@@ -2229,23 +2229,40 @@ def _is_repetitive_filler_noise_turn(result: STTResult, transcript: str, signal_
     words = [word.strip(".,!?").lower() for word in transcript.split() if word.strip(".,!?")]
     if len(words) < 3:
         return False
-    filler_words = {"den", "det", "der", "her", "du", "jeg", "kan", "er", "for", "til", "ned", "op"}
-    weak_connectors = {"og", "så", "saa"}
+    filler_words = {
+        "den",
+        "det",
+        "der",
+        "her",
+        "du",
+        "dig",
+        "jeg",
+        "kan",
+        "er",
+        "for",
+        "til",
+        "ned",
+        "op",
+        "i",
+        "på",
+        "paa",
+    }
+    weak_connectors = {"og", "så", "saa", "ja", "nej", "ok", "okay", "ej", "lige", "lidt"}
     content_words = [word for word in words if word not in filler_words and word not in weak_connectors]
     if content_words:
         return False
-    filler_ratio = sum(1 for word in words if word in filler_words) / len(words)
+    noise_word_ratio = sum(1 for word in words if word in filler_words or word in weak_connectors) / len(words)
     repeated_count = max(words.count(word) for word in set(words))
     sparse_or_spiky = (
         signal_quality.peak >= 7000
         or signal_quality.crest_factor >= 8.0
         or signal_quality.max_speech_band_run_ms <= 520
     )
-    if filler_ratio < 0.80 or not sparse_or_spiky:
+    if noise_word_ratio < 0.80 or not sparse_or_spiky:
         return False
     if result.avg_logprob <= -0.55:
         return True
-    return repeated_count >= 3 and signal_quality.duration_seconds >= 2.0
+    return repeated_count >= 2 and signal_quality.duration_seconds >= 2.0
 
 
 def _is_short_high_frequency_stt_fragment(transcript: str, signal_quality: TurnSignalQuality) -> bool:
