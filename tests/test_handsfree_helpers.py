@@ -307,6 +307,35 @@ class HandsfreeHelpersTest(unittest.TestCase):
         self.assertFalse(accepted)
         self.assertEqual(reason, "kort højfrekvent STT-fragment")
 
+    def test_rejects_medium_confidence_filler_noise_turn(self) -> None:
+        result = STTResult(
+            text="den her du den",
+            audio=AudioStats(duration_seconds=3.46, rms=3085, peak=30000, sample_rate=24000, channels=1),
+            avg_logprob=-0.67,
+            no_speech_prob=0.0,
+            compression_ratio=0.0,
+        )
+        quality = TurnSignalQuality(
+            duration_seconds=3.46,
+            median_rms=342,
+            p80_rms=1500,
+            p95_rms=3017,
+            peak=7774,
+            active_ratio=0.48,
+            active_ms=840,
+            max_active_run_ms=500,
+            crest_factor=10.6,
+            active_threshold=420,
+            zero_crossing_rate=0.11,
+            speech_band_ms=840,
+            max_speech_band_run_ms=500,
+        )
+
+        accepted, reason = _accept_stt_result(result, signal_quality=quality)
+
+        self.assertFalse(accepted)
+        self.assertEqual(reason, "repetitivt filler-støjfragment")
+
     def test_rejects_clipped_sparse_repeating_noise_turn(self) -> None:
         result = STTResult(
             text="den her den her til for",

@@ -2125,8 +2125,12 @@ def _accept_stt_result(
         return False, signal_quality.reason
     if signal_quality is not None and _is_clipped_sparse_noise_turn(result, transcript, signal_quality):
         return False, "clippet støj uden sammenhængende tale"
+    if signal_quality is not None and signal_quality.zero_crossing_rate >= 0.45 and result.avg_logprob < -0.75:
+        return False, "støjfyldt højfrekvent transcript"
     if signal_quality is not None and _is_short_high_frequency_stt_fragment(transcript, signal_quality):
         return False, "kort højfrekvent STT-fragment"
+    if signal_quality is not None and _is_repetitive_filler_noise_turn(result, transcript, signal_quality):
+        return False, "repetitivt filler-støjfragment"
     if trusted_transcript:
         return True, "trusted transcript correction"
     if key in {"ja", "nej", "ok", "okay"} and result.avg_logprob < -0.8:
@@ -2139,8 +2143,6 @@ def _accept_stt_result(
         return False, "ufærdigt STT-fragment"
     if signal_quality is not None and signal_quality.max_active_run_ms < 80 and signal_quality.active_ratio < 0.20:
         return False, "for lidt sammenhængende tale"
-    if signal_quality is not None and signal_quality.zero_crossing_rate >= 0.45 and result.avg_logprob < -0.75:
-        return False, "støjfyldt højfrekvent transcript"
     if key in {"hej", "hejsa", "hejstacky", "stacky"}:
         return True, "kort hilsen"
     if _is_short_uncertain_stt_fragment(transcript, result):
@@ -2221,6 +2223,29 @@ def _is_clipped_sparse_noise_turn(result: STTResult, transcript: str, signal_qua
     if len(words) < 4:
         return signal_quality.max_speech_band_run_ms <= 260
     return filler_ratio >= 0.65 or repeated_count >= 3
+
+
+def _is_repetitive_filler_noise_turn(result: STTResult, transcript: str, signal_quality: TurnSignalQuality) -> bool:
+    words = [word.strip(".,!?").lower() for word in transcript.split() if word.strip(".,!?")]
+    if len(words) < 3:
+        return False
+    filler_words = {"den", "det", "der", "her", "du", "jeg", "kan", "er", "for", "til", "ned", "op"}
+    weak_connectors = {"og", "så", "saa"}
+    content_words = [word for word in words if word not in filler_words and word not in weak_connectors]
+    if content_words:
+        return False
+    filler_ratio = sum(1 for word in words if word in filler_words) / len(words)
+    repeated_count = max(words.count(word) for word in set(words))
+    sparse_or_spiky = (
+        signal_quality.peak >= 7000
+        or signal_quality.crest_factor >= 8.0
+        or signal_quality.max_speech_band_run_ms <= 520
+    )
+    if filler_ratio < 0.80 or not sparse_or_spiky:
+        return False
+    if result.avg_logprob <= -0.55:
+        return True
+    return repeated_count >= 3 and signal_quality.duration_seconds >= 2.0
 
 
 def _is_short_high_frequency_stt_fragment(transcript: str, signal_quality: TurnSignalQuality) -> bool:

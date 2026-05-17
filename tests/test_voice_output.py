@@ -30,8 +30,13 @@ class FakeController:
         self.audio_calls: list[bytes] = []
         self.hold_states: list[bool] = []
         self.volume_levels: list[int] = []
+        self.interrupts = 0
 
     def stop_audio(self) -> bool:
+        return True
+
+    def interrupt_audio(self) -> bool:
+        self.interrupts += 1
         return True
 
     def hold_audio(self, hold: bool) -> bool:

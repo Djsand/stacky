@@ -75,6 +75,7 @@ class StackChanBodyController:
 
     def stop(self) -> None:
         self._stop.set()
+        self.release_audio_waits()
         with self._lock:
             client = self._client
             server = self._server
@@ -174,6 +175,18 @@ class StackChanBodyController:
 
     def stop_audio(self) -> bool:
         return self.send(stop_audio())
+
+    def interrupt_audio(self) -> bool:
+        ok = self.stop_audio()
+        self.release_audio_waits()
+        return ok
+
+    def release_audio_waits(self) -> None:
+        with self._audio_ack_condition:
+            self._audio_ack_condition.notify_all()
+        with self._audio_done_condition:
+            self._audio_done_generation += 1
+            self._audio_done_condition.notify_all()
 
     def hold_audio(self, active: bool) -> bool:
         return self.send(hold_audio(active=active))

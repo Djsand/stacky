@@ -133,6 +133,22 @@ class BodyControllerRawAudioTest(unittest.TestCase):
 
         self.assertEqual(sent[0].type, "body.status")
 
+    def test_controller_interrupt_audio_sends_stop_and_releases_waiters(self) -> None:
+        sent = []
+        controller = StackChanBodyController()
+
+        def send(command) -> bool:
+            sent.append(command)
+            return True
+
+        controller.send = send  # type: ignore[method-assign]
+        before = controller._audio_done_generation  # type: ignore[attr-defined]
+
+        self.assertTrue(controller.interrupt_audio())
+
+        self.assertEqual(sent[0].type, "audio.stop")
+        self.assertGreater(controller._audio_done_generation, before)  # type: ignore[attr-defined]
+
     def test_controller_sends_vision_capture_command(self) -> None:
         sent = []
         controller = StackChanBodyController()

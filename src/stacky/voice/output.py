@@ -5,6 +5,7 @@ import contextlib
 import math
 import shutil
 import subprocess
+import threading
 import time
 import wave
 from pathlib import Path
@@ -143,6 +144,7 @@ class StackChanSpeechOutput:
         self.volume_level = clamp_volume_level(volume_level)
         self._task: asyncio.Task[None] | None = None
         self._utterance_id = 0
+        self._stop_requested = threading.Event()
 
     async def preload(self) -> None:
         await asyncio.to_thread(self.tts.load)
@@ -156,20 +158,25 @@ class StackChanSpeechOutput:
 
     async def speak(self, text: str) -> None:
         await self.stop()
+        self._stop_requested.clear()
         print(f"Stacky: {text}", flush=True)
         self._utterance_id += 1
         utterance_id = self._utterance_id
         self._task = asyncio.create_task(self._speak_chunks(text, utterance_id))
 
     async def stop(self) -> None:
-        self._utterance_id += 1
         task = self._task
+        if task is None and not self._stop_requested.is_set():
+            return
+        self._utterance_id += 1
+        self._stop_requested.set()
+        self.controller.interrupt_audio()
         self._task = None
         if task is not None:
             task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await task
-        self.controller.stop_audio()
+            with contextlib.suppress(asyncio.CancelledError, asyncio.TimeoutError):
+                await asyncio.wait_for(task, timeout=0.8)
+        self.controller.interrupt_audio()
 
     async def wait(self) -> None:
         task = self._task
@@ -238,6 +245,8 @@ class StackChanSpeechOutput:
                 channels=channels,
                 max_bytes=self.max_stackchan_pcm_bytes,
             ):
+                if self._stop_requested.is_set():
+                    return 0.0
                 segment_duration = len(segment) / max(1, sample_rate * channels * 2)
                 self.controller.speak_audio_chunks(
                     segment,
@@ -248,6 +257,8 @@ class StackChanSpeechOutput:
                     wait_for_ack=False,
                     playback_timeout_seconds=segment_duration + 6.0,
                 )
+                if self._stop_requested.is_set():
+                    return 0.0
                 time.sleep(0.04)
         finally:
             self.controller.hold_audio(False)
