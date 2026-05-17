@@ -20,6 +20,7 @@ from stacky.cli import (
     _run_motion_gesture,
     _transcript_key,
     _voice_memory_policy,
+    _wants_visual_context,
     _word_error_rate,
 )
 from stacky.voice.stt import AudioStats, STTResult
@@ -587,6 +588,14 @@ class HandsfreeHelpersTest(unittest.TestCase):
         self.assertEqual(_parse_local_realtime_reply("vent lige"), "Jeg venter.")
         self.assertEqual(_parse_local_realtime_reply("stop lige"), "Jeg venter.")
         self.assertIsNone(_parse_local_realtime_reply("hvad laver du"))
+
+    def test_visual_context_only_for_visual_turns(self) -> None:
+        self.assertTrue(_wants_visual_context("hvad kan du se lige nu"))
+        self.assertTrue(_wants_visual_context("kan du se mig"))
+        self.assertTrue(_wants_visual_context("hvordan ser billedet ud"))
+        self.assertFalse(_wants_visual_context("hej med dig"))
+        self.assertFalse(_wants_visual_context("hvad laver du"))
+        self.assertFalse(_wants_visual_context("skru ned for lyden"))
 
     def test_parse_motion_command(self) -> None:
         self.assertEqual((_parse_motion_command("kig til venstre") or None).gesture, "look_left")

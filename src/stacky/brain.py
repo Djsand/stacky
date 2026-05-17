@@ -255,8 +255,10 @@ class StackyBrain:
 def _visual_context_rule(visual_context: str, *, has_image: bool) -> str:
     parts = [
         "Visuel kontekst: Kamera-input er ekstra sanseinput fra Stackys krop, ikke en besked fra Nicolai.",
-        "Brug billedet og den korte visuelle note, hvis det naturligt hjaelper svaret.",
-        "Kommenter ikke kameraet hver gang, og gaet ikke identitet uden eksplicit genkendelse.",
+        "Hvis Nicolai ikke direkte spoerger om hvad du ser, kameraet, billedet, ansigter, lys eller omgivelser, "
+        "saa naevn ikke kamera, syn, billede, lys, moerke, ansigt, at du kan se ham, eller hvordan rummet ser ud.",
+        "Brug billedet diskret som baggrund til at undgaa fejl, ikke som et nyt samtaleemne.",
+        "Kommenter kun synsindtryk naar det er relevant for Nicolais aktuelle spoergsmaal, og gaet ikke identitet uden eksplicit genkendelse.",
     ]
     clean = visual_context.strip()
     if clean:

@@ -1907,7 +1907,8 @@ async def _handsfree(
             brain_started = time.perf_counter()
             visual_context = ""
             prompt_image = None
-            if vision_state is not None:
+            use_visual_context = _wants_visual_context(text)
+            if vision_state is not None and use_visual_context:
                 await _capture_prompt_vision(
                     controller,
                     vision_snapshot_queue,
@@ -2327,6 +2328,60 @@ def _parse_local_realtime_reply(text: str) -> str | None:
     if key in {"vent", "ventlige", "stop", "stoplige", "pause", "holdpause"}:
         return "Jeg venter."
     return None
+
+
+def _wants_visual_context(text: str) -> bool:
+    lowered = text.lower()
+    key = _transcript_key(text)
+    if not key:
+        return False
+    visual_phrases = (
+        "kan du se",
+        "hvad kan du se",
+        "hvad ser du",
+        "hvad kigger du på",
+        "kig på",
+        "se på",
+        "ser det ud",
+        "hvordan ser",
+        "tag et billede",
+        "tag et snapshot",
+        "brug kamera",
+        "tjek kamera",
+        "visuelt",
+        "i billedet",
+        "på billedet",
+    )
+    if any(phrase in lowered for phrase in visual_phrases):
+        return True
+    visual_tokens = (
+        "kamera",
+        "billede",
+        "snapshot",
+        "foto",
+        "ansigt",
+        "face",
+        "genkend",
+        "objekt",
+        "farve",
+        "lys",
+        "mørk",
+        "moerk",
+        "rød",
+        "roed",
+    )
+    if any(token in lowered for token in visual_tokens):
+        return True
+    compact_visual = (
+        "hvadkanduse",
+        "hvadserdu",
+        "kandusemig",
+        "kamera",
+        "billede",
+        "snapshot",
+        "ansigt",
+    )
+    return any(token in key for token in compact_visual)
 
 
 def _parse_battery_status_command(text: str) -> bool:

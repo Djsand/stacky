@@ -102,6 +102,8 @@ class BrainMemoryContextTest(unittest.IsolatedAsyncioTestCase):
 
         system = llm.messages[0][0].content
         self.assertIn("Kamera-input er ekstra sanseinput", system)
+        self.assertIn("naevn ikke kamera", system)
+        self.assertIn("Brug billedet diskret", system)
         self.assertIn("Nicolai sidder midt", system)
         self.assertEqual(llm.messages[0][-1].images[0].data_base64, "abc123")
         self.assertEqual(memory_count, 0)
