@@ -1352,7 +1352,7 @@ def _fourcc(value: object) -> str:
 
 def _enhance_camera_jpeg(jpeg: bytes, *, target_mean: float = 96.0) -> bytes:
     try:
-        from PIL import Image, ImageEnhance, ImageOps, ImageStat
+        from PIL import Image, ImageEnhance, ImageStat
 
         with Image.open(BytesIO(jpeg)) as image:
             rgb = image.convert("RGB")
@@ -1360,10 +1360,9 @@ def _enhance_camera_jpeg(jpeg: bytes, *, target_mean: float = 96.0) -> bytes:
         luma = 0.2126 * stat.mean[0] + 0.7152 * stat.mean[1] + 0.0722 * stat.mean[2]
         if luma <= 1:
             return jpeg
-        factor = min(4.0, max(1.0, float(target_mean) / luma))
+        factor = min(5.0, max(1.0, float(target_mean) / luma))
         enhanced = ImageEnhance.Brightness(rgb).enhance(factor)
-        enhanced = ImageEnhance.Contrast(enhanced).enhance(1.12)
-        enhanced = ImageOps.autocontrast(enhanced, cutoff=1)
+        enhanced = ImageEnhance.Contrast(enhanced).enhance(1.05)
         output = BytesIO()
         enhanced.save(output, format="JPEG", quality=85, optimize=True)
         return output.getvalue()
