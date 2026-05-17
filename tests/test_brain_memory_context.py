@@ -108,6 +108,20 @@ class BrainMemoryContextTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(llm.messages[0][-1].images[0].data_base64, "abc123")
         self.assertEqual(memory_count, 0)
 
+    async def test_no_visual_context_blocks_visual_claims(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = MemoryStore(Path(tmp) / "memory.sqlite")
+            llm = FakeLLM()
+            brain = StackyBrain(StackySoul(created_for="Nicolai"), memory, llm)  # type: ignore[arg-type]
+
+            await brain.respond("det er en ny dag")
+
+        system = llm.messages[0][0].content
+        self.assertIn("Der er ikke sendt kamera-input", system)
+        self.assertIn("Svar kun paa Nicolais ord", system)
+        self.assertIn("ikke genbruge tidligere visuelle observationer", system)
+        self.assertNotIn("Visuel kontekst: Kamera-input", system)
+
     async def test_complex_live_prompt_allows_longer_answer(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             memory = MemoryStore(Path(tmp) / "memory.sqlite")

@@ -2256,6 +2256,7 @@ def _is_repetitive_filler_noise_turn(result: STTResult, transcript: str, signal_
         "til",
         "ned",
         "op",
+        "nu",
         "i",
         "på",
         "paa",
