@@ -2144,6 +2144,8 @@ def _accept_stt_result(
     if signal_quality is not None and signal_quality.max_active_run_ms < 80 and signal_quality.active_ratio < 0.20:
         return False, "for lidt sammenhængende tale"
     if key in {"hej", "hejsa", "hejstacky", "stacky"}:
+        if signal_quality is not None and _is_noisy_short_greeting(result, signal_quality):
+            return False, "kort hilsen fra støj"
         return True, "kort hilsen"
     if _is_short_uncertain_stt_fragment(transcript, result):
         return False, "kort usikkert STT-fragment"
@@ -2223,6 +2225,16 @@ def _is_clipped_sparse_noise_turn(result: STTResult, transcript: str, signal_qua
     if len(words) < 4:
         return signal_quality.max_speech_band_run_ms <= 260
     return filler_ratio >= 0.65 or repeated_count >= 3
+
+
+def _is_noisy_short_greeting(result: STTResult, signal_quality: TurnSignalQuality) -> bool:
+    if result.avg_logprob >= -0.75:
+        return False
+    if signal_quality.crest_factor >= 14.0 and signal_quality.max_speech_band_run_ms <= 260:
+        return True
+    if signal_quality.active_ratio < 0.24 and signal_quality.max_active_run_ms <= 260:
+        return True
+    return result.audio.peak >= 12000 and signal_quality.max_speech_band_run_ms <= 220
 
 
 def _is_repetitive_filler_noise_turn(result: STTResult, transcript: str, signal_quality: TurnSignalQuality) -> bool:

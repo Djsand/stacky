@@ -66,6 +66,64 @@ class HandsfreeHelpersTest(unittest.TestCase):
 
         self.assertTrue(accepted)
 
+    def test_accepts_short_greeting_with_clean_signal_quality(self) -> None:
+        result = STTResult(
+            text="hej",
+            audio=AudioStats(duration_seconds=1.20, rms=900, peak=6500, sample_rate=24000, channels=1),
+            avg_logprob=-0.45,
+            no_speech_prob=0.0,
+            compression_ratio=0.0,
+        )
+        quality = TurnSignalQuality(
+            duration_seconds=1.20,
+            median_rms=260,
+            p80_rms=900,
+            p95_rms=2200,
+            peak=6500,
+            active_ratio=0.36,
+            active_ms=420,
+            max_active_run_ms=340,
+            crest_factor=8.0,
+            active_threshold=420,
+            zero_crossing_rate=0.16,
+            speech_band_ms=420,
+            max_speech_band_run_ms=340,
+        )
+
+        accepted, reason = _accept_stt_result(result, signal_quality=quality)
+
+        self.assertTrue(accepted)
+        self.assertEqual(reason, "kort hilsen")
+
+    def test_rejects_noisy_short_greeting_guess(self) -> None:
+        result = STTResult(
+            text="hej",
+            audio=AudioStats(duration_seconds=1.86, rms=2183, peak=21352, sample_rate=24000, channels=1),
+            avg_logprob=-0.89,
+            no_speech_prob=0.0,
+            compression_ratio=0.0,
+        )
+        quality = TurnSignalQuality(
+            duration_seconds=1.86,
+            median_rms=220,
+            p80_rms=1100,
+            p95_rms=2600,
+            peak=21352,
+            active_ratio=0.22,
+            active_ms=400,
+            max_active_run_ms=240,
+            crest_factor=10.0,
+            active_threshold=420,
+            zero_crossing_rate=0.17,
+            speech_band_ms=360,
+            max_speech_band_run_ms=300,
+        )
+
+        accepted, reason = _accept_stt_result(result, signal_quality=quality)
+
+        self.assertFalse(accepted)
+        self.assertEqual(reason, "kort hilsen fra støj")
+
     def test_rejects_quiet_short_whisper_guess(self) -> None:
         result = STTResult(
             text="Det var jo fin, det var mellem.",
