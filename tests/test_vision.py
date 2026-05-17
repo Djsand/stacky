@@ -56,6 +56,76 @@ class VisionTest(unittest.TestCase):
         self.assertAlmostEqual(smoothed.width, 0.24)
         self.assertAlmostEqual(smoothed.confidence, 0.704)
 
+    def test_smooth_face_damps_extreme_tracking_jumps_harder(self) -> None:
+        previous = FaceObservation(x=-0.6, y=-0.4, width=0.2, height=0.2, confidence=0.8)
+        current = FaceObservation(x=0.8, y=0.5, width=0.2, height=0.2, confidence=0.8)
+
+        smoothed = _smooth_face(previous, current, alpha=0.4)
+
+        self.assertAlmostEqual(smoothed.x, -0.348)
+        self.assertAlmostEqual(smoothed.y, -0.238)
+
+    def test_vision_state_locks_onto_nearby_face_instead_of_larger_false_positive(self) -> None:
+        jpeg = b"\xff\xd8\xff"
+        payload = {"available": True, "encoding": "base64", "data": base64.b64encode(jpeg).decode("ascii")}
+        state = VisionState(
+            FakeDetector(
+                [
+                    VisionSnapshot(
+                        captured_at=10.0,
+                        width=320,
+                        height=240,
+                        faces=(FaceObservation(x=0.0, y=0.0, width=0.22, height=0.26, confidence=0.80),),
+                    ),
+                    VisionSnapshot(
+                        captured_at=11.0,
+                        width=320,
+                        height=240,
+                        faces=(
+                            FaceObservation(x=0.88, y=0.15, width=0.36, height=0.40, confidence=0.82),
+                            FaceObservation(x=0.12, y=0.04, width=0.22, height=0.26, confidence=0.62),
+                        ),
+                    ),
+                ]
+            )
+        )
+
+        first = state.observe_payload(payload)
+        second = state.observe_payload(payload)
+
+        self.assertIsNotNone(first.primary_face)
+        self.assertIsNotNone(second.primary_face)
+        self.assertLess(abs((second.primary_face or first.primary_face).x), 0.10)
+
+    def test_vision_state_holds_lock_on_implausible_single_frame_jump(self) -> None:
+        jpeg = b"\xff\xd8\xff"
+        payload = {"available": True, "encoding": "base64", "data": base64.b64encode(jpeg).decode("ascii")}
+        state = VisionState(
+            FakeDetector(
+                [
+                    VisionSnapshot(
+                        captured_at=20.0,
+                        width=320,
+                        height=240,
+                        faces=(FaceObservation(x=-0.15, y=0.05, width=0.24, height=0.28, confidence=0.82),),
+                    ),
+                    VisionSnapshot(
+                        captured_at=21.0,
+                        width=320,
+                        height=240,
+                        faces=(FaceObservation(x=0.92, y=-0.55, width=0.18, height=0.20, confidence=0.70),),
+                    ),
+                ]
+            )
+        )
+
+        first = state.observe_payload(payload)
+        second = state.observe_payload(payload)
+
+        self.assertIsNotNone(first.primary_face)
+        self.assertIsNotNone(second.primary_face)
+        self.assertAlmostEqual((second.primary_face or first.primary_face).x, (first.primary_face or second.primary_face).x)
+
     def test_composite_detector_uses_fallback_when_primary_finds_no_face(self) -> None:
         no_face = VisionSnapshot(captured_at=10.0, detector="primary")
         face = VisionSnapshot(

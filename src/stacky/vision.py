@@ -309,20 +309,26 @@ class VisionState:
         return base64.b64encode(self.latest_jpeg).decode("ascii")
 
     def _smooth_snapshot(self, snapshot: VisionSnapshot) -> VisionSnapshot:
-        face = snapshot.primary_face
-        if face is None:
+        if not snapshot.faces:
             return snapshot
-        previous = self._smoothed_face
         now = snapshot.captured_at
-        if previous is not None and now - self._smoothed_face_at <= 2.0:
-            face = _smooth_face(previous, face, alpha=0.42)
+        previous = self._smoothed_face if now - self._smoothed_face_at <= 2.5 else None
+        face = _select_locked_face(snapshot.faces, previous)
+        previous = self._smoothed_face
+        if previous is not None and now - self._smoothed_face_at <= 2.5:
+            jump = _face_distance(previous, face)
+            if jump > 0.62 and not _strong_face_reacquire(previous, face):
+                face = previous
+            else:
+                face = _smooth_face(previous, face, alpha=0.32)
         self._smoothed_face = face
         self._smoothed_face_at = now
+        remaining = tuple(candidate for candidate in snapshot.faces if candidate is not face)
         return VisionSnapshot(
             captured_at=snapshot.captured_at,
             width=snapshot.width,
             height=snapshot.height,
-            faces=(face, *snapshot.faces[1:]),
+            faces=(face, *remaining),
             detector=snapshot.detector,
             error=snapshot.error,
         )
@@ -400,10 +406,40 @@ def _dedupe_faces(faces: tuple[FaceObservation, ...]) -> tuple[FaceObservation, 
     return tuple(result)
 
 
+def _select_locked_face(faces: tuple[FaceObservation, ...], previous: FaceObservation | None) -> FaceObservation:
+    if previous is None:
+        return max(faces, key=_face_quality)
+    close = [face for face in faces if _face_distance(previous, face) <= 0.50]
+    if close:
+        return max(close, key=_face_quality)
+    nearest = min(faces, key=lambda face: _face_distance(previous, face))
+    if _strong_face_reacquire(previous, nearest):
+        return nearest
+    return previous
+
+
+def _face_quality(face: FaceObservation) -> float:
+    return face.confidence * 1.6 + min(face.area, 0.18) * 3.0
+
+
+def _face_distance(left: FaceObservation, right: FaceObservation) -> float:
+    position = abs(left.x - right.x) + abs(left.y - right.y)
+    size = abs(left.width - right.width) + abs(left.height - right.height)
+    return position + size * 0.45
+
+
+def _strong_face_reacquire(previous: FaceObservation, current: FaceObservation) -> bool:
+    if _face_distance(previous, current) <= 0.82:
+        return True
+    if current.confidence >= 0.86 and current.area >= max(0.02, previous.area * 0.70):
+        return True
+    return False
+
+
 def _smooth_face(previous: FaceObservation, current: FaceObservation, *, alpha: float = 0.42) -> FaceObservation:
     alpha = max(0.0, min(1.0, float(alpha)))
     if abs(previous.x - current.x) + abs(previous.y - current.y) > 1.35:
-        alpha = max(alpha, 0.75)
+        alpha = min(alpha, 0.18)
     beta = 1.0 - alpha
     return FaceObservation(
         x=previous.x * beta + current.x * alpha,
