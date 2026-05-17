@@ -118,6 +118,10 @@ class EnergyTurnDetector:
         self._utterance_ms = 0
         self._noise_rms = float(threshold)
 
+    @property
+    def active(self) -> bool:
+        return self._active
+
     def push(self, pcm: bytes, *, sample_rate: int, channels: int = 1) -> AudioTurn | None:
         if not pcm:
             return None

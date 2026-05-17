@@ -47,12 +47,16 @@ class TurnDetectionTest(unittest.TestCase):
         detector = EnergyTurnDetector(threshold=500, min_speech_ms=100, end_silence_ms=200, preroll_ms=0)
         sample_rate = 16000
 
+        self.assertFalse(detector.active)
         self.assertIsNone(detector.push(pcm_sample(1800, 1600), sample_rate=sample_rate))
+        self.assertFalse(detector.active)
         self.assertIsNone(detector.push(pcm_sample(1800, 1600), sample_rate=sample_rate))
+        self.assertTrue(detector.active)
         self.assertIsNone(detector.push(pcm_sample(0, 1600), sample_rate=sample_rate))
         turn = detector.push(pcm_sample(0, 1600), sample_rate=sample_rate)
 
         self.assertIsNotNone(turn)
+        self.assertFalse(detector.active)
         self.assertGreater(len(turn.pcm), 0)
 
     def test_detector_treats_learned_noise_floor_as_silence_after_speech(self) -> None:

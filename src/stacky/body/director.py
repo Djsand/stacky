@@ -23,6 +23,10 @@ class BodyDirector:
         self._last_motion_at = 0.0
         self._last_face_track_at = 0.0
 
+    @property
+    def last_motion_at(self) -> float:
+        return self._last_motion_at
+
     def apply_calibration(self) -> bool:
         return self.controller.configure_motion(
             center_yaw=self.calibration.center_yaw,
@@ -83,7 +87,7 @@ class BodyDirector:
         y: float,
         *,
         confidence: float = 1.0,
-        speed: int = 135,
+        speed: int = 105,
         now: float | None = None,
     ) -> bool:
         """Gently keep the head oriented toward a detected face."""
@@ -91,16 +95,16 @@ class BodyDirector:
         if confidence < 0.50:
             return True
         now = now if now is not None else time.monotonic()
-        if now - self._last_face_track_at < 0.55:
+        if now - self._last_face_track_at < 1.35:
             return True
-        if max(abs(x), abs(y)) < 0.075:
+        if max(abs(x), abs(y)) < 0.14:
             return True
         self._last_face_track_at = now
         self._last_motion_at = now
         return self.controller.look_at(
-            max(-0.78, min(0.78, float(x) * 0.88)),
-            max(-0.55, min(0.55, float(y) * 0.68)),
-            speed=max(80, min(240, int(speed))),
+            max(-0.56, min(0.56, float(x) * 0.62)),
+            max(-0.38, min(0.38, float(y) * 0.48)),
+            speed=max(70, min(150, int(speed))),
         )
 
     def _motion(

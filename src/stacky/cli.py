@@ -1457,6 +1457,8 @@ async def _handsfree(
     vision_state = VisionState(create_face_detector(auto_download_yunet=True)) if vision else None
     accepting_audio = False
     body_state_name = "neutral"
+    detector: EnergyTurnDetector | None = None
+    motion_audio_guard_until = 0.0
     audio_meter = {"last_at": 0.0, "max_rms": 0, "max_peak": 0, "chunks": 0}
     channel_selector = Pcm16ChannelSelector(mic_channel)
     body_status: dict[str, object] = {}
@@ -1568,7 +1570,18 @@ async def _handsfree(
         return body_director.set_state(name) if body_director is not None else controller.set_expression(name)
 
     def should_track_face() -> bool:
-        return bool(face_tracking and accepting_audio and body_state_name == "listening")
+        return bool(
+            face_tracking
+            and accepting_audio
+            and body_state_name == "listening"
+            and detector is not None
+            and not detector.active
+            and time.monotonic() >= motion_audio_guard_until
+        )
+
+    def guard_audio_after_tracking_motion() -> None:
+        nonlocal motion_audio_guard_until
+        motion_audio_guard_until = max(motion_audio_guard_until, time.monotonic() + 0.45)
 
     vision_processor_task = None
     vision_capture_task = None
@@ -1581,6 +1594,7 @@ async def _handsfree(
                 vision_snapshot_queue,
                 body_director,
                 should_track_face=should_track_face,
+                on_tracking_motion=guard_audio_after_tracking_motion,
                 debug=debug_audio,
             )
         )
@@ -1667,6 +1681,9 @@ async def _handsfree(
     try:
         while True:
             pcm, sample_rate, channels = await audio_queue.get()
+            if time.monotonic() < motion_audio_guard_until:
+                detector.reset()
+                continue
             turn = detector.push(pcm, sample_rate=sample_rate, channels=channels)
             if turn is None:
                 continue
@@ -1999,6 +2016,7 @@ async def _vision_processor_loop(
     body_director: BodyDirector | None,
     *,
     should_track_face: Callable[[], bool],
+    on_tracking_motion: Callable[[], None] | None = None,
     debug: bool = False,
 ) -> None:
     while True:
@@ -2024,7 +2042,10 @@ async def _vision_processor_loop(
                 )
         if body_director is not None and face is not None and should_track_face():
             try:
+                last_motion_at = body_director.last_motion_at
                 body_director.track_face(face.x, face.y, confidence=face.confidence)
+                if body_director.last_motion_at > last_motion_at and on_tracking_motion is not None:
+                    on_tracking_motion()
             except Exception as exc:  # pragma: no cover - vision must not break audio.
                 if debug:
                     print(f"[vision] face tracking skipped: {exc}", flush=True)
