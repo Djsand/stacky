@@ -105,7 +105,7 @@ class BodyDirectorTest(unittest.TestCase):
 
         self.assertTrue(director.track_face(0.5, -0.4, confidence=0.8, now=10.0))
 
-        self.assertEqual(fake.looks, [(0.35, -0.22000000000000003, 145)])
+        self.assertEqual(fake.looks, [(0.44, -0.272, 135)])
 
     def test_track_face_ignores_centered_face(self) -> None:
         fake = FakeDirectorController()

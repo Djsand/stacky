@@ -2,11 +2,21 @@ from __future__ import annotations
 
 import time
 import base64
+import urllib.request
 from dataclasses import dataclass
 from io import BytesIO
+from pathlib import Path
 from typing import Any
 
 from .body.protocol import decode_vision_frame_payload
+from .config import ROOT
+
+
+YUNET_MODEL_URL = (
+    "https://huggingface.co/opencv/opencv_zoo/resolve/main/"
+    "models/face_detection_yunet/face_detection_yunet_2023mar.onnx"
+)
+YUNET_MODEL_PATH = ROOT / "models" / "vision" / "face_detection_yunet_2023mar.onnx"
 
 
 @dataclass(frozen=True)
@@ -94,6 +104,88 @@ class VisionSnapshot:
         return "ret langt fra kameraet"
 
 
+class YuNetFaceDetector:
+    def __init__(
+        self,
+        *,
+        model_path: Path | None = None,
+        auto_download: bool = False,
+        score_threshold: float = 0.52,
+    ) -> None:
+        self.model_path = model_path or YUNET_MODEL_PATH
+        self.score_threshold = float(score_threshold)
+        self._cv2: Any | None = None
+        self._np: Any | None = None
+        self._detector: Any | None = None
+        self.name = "opencv-yunet"
+        self.error: str | None = None
+        try:
+            import cv2  # type: ignore[import-not-found]
+            import numpy as np  # type: ignore[import-not-found]
+
+            if not self.model_path.exists() and auto_download:
+                _download_yunet_model(self.model_path)
+            if not self.model_path.exists():
+                self.error = "yunet_model_missing"
+                return
+            detector = cv2.FaceDetectorYN_create(
+                str(self.model_path),
+                "",
+                (320, 240),
+                self.score_threshold,
+                0.3,
+                5000,
+            )
+            self._cv2 = cv2
+            self._np = np
+            self._detector = detector
+        except Exception as exc:
+            self.error = f"yunet_unavailable:{exc.__class__.__name__}"
+
+    @property
+    def available(self) -> bool:
+        return self._cv2 is not None and self._np is not None and self._detector is not None
+
+    def analyze_jpeg(self, jpeg: bytes, *, captured_at: float | None = None) -> VisionSnapshot:
+        captured_at = time.monotonic() if captured_at is None else captured_at
+        if not self.available:
+            return VisionSnapshot(captured_at=captured_at, detector=self.name, error=self.error or "detector_unavailable")
+        cv2 = self._cv2
+        np = self._np
+        detector = self._detector
+        try:
+            encoded = np.frombuffer(_enhance_for_detection(jpeg), dtype=np.uint8)
+            image = cv2.imdecode(encoded, cv2.IMREAD_COLOR)
+            if image is None:
+                return VisionSnapshot(captured_at=captured_at, detector=self.name, error="jpeg_decode_failed")
+            height, width = image.shape[:2]
+            detector.setInputSize((int(width), int(height)))
+            _, detections = detector.detect(image)
+            faces: list[FaceObservation] = []
+            if detections is not None:
+                for row in detections:
+                    score = float(row[14])
+                    if score < self.score_threshold:
+                        continue
+                    faces.append(
+                        _face_from_box(
+                            row[:4],
+                            image_width=width,
+                            image_height=height,
+                            confidence=score,
+                        )
+                    )
+            return VisionSnapshot(
+                captured_at=captured_at,
+                width=int(width),
+                height=int(height),
+                faces=_dedupe_faces(tuple(sorted(faces, key=lambda face: face.confidence, reverse=True))),
+                detector=self.name,
+            )
+        except Exception as exc:
+            return VisionSnapshot(captured_at=captured_at, detector=self.name, error=f"analysis_failed:{exc.__class__.__name__}")
+
+
 class HaarFaceDetector:
     def __init__(self) -> None:
         self._cv2: Any | None = None
@@ -176,11 +268,13 @@ class HaarFaceDetector:
 
 
 class VisionState:
-    def __init__(self, detector: HaarFaceDetector | None = None) -> None:
-        self.detector = detector or HaarFaceDetector()
+    def __init__(self, detector: Any | None = None) -> None:
+        self.detector = detector or create_face_detector()
         self.latest: VisionSnapshot | None = None
         self.latest_jpeg: bytes | None = None
         self.latest_jpeg_at: float = 0.0
+        self._smoothed_face: FaceObservation | None = None
+        self._smoothed_face_at: float = 0.0
 
     @property
     def detector_status(self) -> str:
@@ -197,7 +291,8 @@ class VisionState:
             return snapshot
         self.latest_jpeg = jpeg
         self.latest_jpeg_at = time.monotonic()
-        snapshot = self.detector.analyze_jpeg(_enhance_for_detection(jpeg))
+        snapshot = self.detector.analyze_jpeg(jpeg)
+        snapshot = self._smooth_snapshot(snapshot)
         self.latest = snapshot
         return snapshot
 
@@ -213,8 +308,69 @@ class VisionState:
             return None
         return base64.b64encode(self.latest_jpeg).decode("ascii")
 
+    def _smooth_snapshot(self, snapshot: VisionSnapshot) -> VisionSnapshot:
+        face = snapshot.primary_face
+        if face is None:
+            return snapshot
+        previous = self._smoothed_face
+        now = snapshot.captured_at
+        if previous is not None and now - self._smoothed_face_at <= 2.0:
+            face = _smooth_face(previous, face, alpha=0.42)
+        self._smoothed_face = face
+        self._smoothed_face_at = now
+        return VisionSnapshot(
+            captured_at=snapshot.captured_at,
+            width=snapshot.width,
+            height=snapshot.height,
+            faces=(face, *snapshot.faces[1:]),
+            detector=snapshot.detector,
+            error=snapshot.error,
+        )
 
-def _face_from_box(box: Any, *, image_width: int, image_height: int) -> FaceObservation:
+
+class CompositeFaceDetector:
+    def __init__(self, detectors: tuple[Any, ...]) -> None:
+        self.detectors = detectors
+        self.name = "+".join(detector.name for detector in detectors) or "none"
+        self.error: str | None = None
+
+    @property
+    def available(self) -> bool:
+        return any(bool(getattr(detector, "available", False)) for detector in self.detectors)
+
+    def analyze_jpeg(self, jpeg: bytes, *, captured_at: float | None = None) -> VisionSnapshot:
+        captured_at = time.monotonic() if captured_at is None else captured_at
+        fallback: VisionSnapshot | None = None
+        errors: list[str] = []
+        for detector in self.detectors:
+            snapshot = detector.analyze_jpeg(jpeg, captured_at=captured_at)
+            if snapshot.faces:
+                return snapshot
+            if snapshot.error:
+                errors.append(snapshot.error)
+            elif fallback is None:
+                fallback = snapshot
+        if fallback is not None:
+            return fallback
+        return VisionSnapshot(captured_at=captured_at, detector=self.name, error=";".join(errors) or "no_detector")
+
+
+def create_face_detector(*, auto_download_yunet: bool = False) -> CompositeFaceDetector:
+    return CompositeFaceDetector(
+        (
+            YuNetFaceDetector(auto_download=auto_download_yunet),
+            HaarFaceDetector(),
+        )
+    )
+
+
+def _face_from_box(
+    box: Any,
+    *,
+    image_width: int,
+    image_height: int,
+    confidence: float | None = None,
+) -> FaceObservation:
     x, y, width, height = [float(value) for value in box]
     cx = (x + width / 2.0) / max(1.0, float(image_width))
     cy = (y + height / 2.0) / max(1.0, float(image_height))
@@ -222,7 +378,10 @@ def _face_from_box(box: Any, *, image_width: int, image_height: int) -> FaceObse
     normalized_y = max(-1.0, min(1.0, (0.5 - cy) * 2.0))
     width_fraction = max(0.0, min(1.0, width / max(1.0, float(image_width))))
     height_fraction = max(0.0, min(1.0, height / max(1.0, float(image_height))))
-    confidence = max(0.35, min(1.0, 0.55 + (width_fraction * height_fraction * 2.0)))
+    if confidence is None:
+        confidence = max(0.35, min(1.0, 0.55 + (width_fraction * height_fraction * 2.0)))
+    else:
+        confidence = max(0.0, min(1.0, float(confidence)))
     return FaceObservation(
         x=normalized_x,
         y=normalized_y,
@@ -239,6 +398,33 @@ def _dedupe_faces(faces: tuple[FaceObservation, ...]) -> tuple[FaceObservation, 
             continue
         result.append(face)
     return tuple(result)
+
+
+def _smooth_face(previous: FaceObservation, current: FaceObservation, *, alpha: float = 0.42) -> FaceObservation:
+    alpha = max(0.0, min(1.0, float(alpha)))
+    if abs(previous.x - current.x) + abs(previous.y - current.y) > 1.35:
+        alpha = max(alpha, 0.75)
+    beta = 1.0 - alpha
+    return FaceObservation(
+        x=previous.x * beta + current.x * alpha,
+        y=previous.y * beta + current.y * alpha,
+        width=previous.width * beta + current.width * alpha,
+        height=previous.height * beta + current.height * alpha,
+        confidence=max(previous.confidence * 0.88, current.confidence),
+        identity=current.identity or previous.identity,
+    )
+
+
+def _download_yunet_model(path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = path.with_suffix(path.suffix + ".tmp")
+    request = urllib.request.Request(YUNET_MODEL_URL, headers={"User-Agent": "stacky"})
+    with urllib.request.urlopen(request, timeout=20.0) as response:
+        data = response.read()
+    if len(data) < 100_000:
+        raise ValueError("downloaded_yunet_model_too_small")
+    temp_path.write_bytes(data)
+    temp_path.replace(path)
 
 
 def _enhance_for_detection(jpeg: bytes, *, target_mean: float = 130.0) -> bytes:

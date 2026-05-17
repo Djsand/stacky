@@ -51,7 +51,7 @@ from .voice.stt_eval import (
 )
 from .voice.transcript_correction import correct_danish_transcript
 from .voice.turn_detection import EnergyTurnDetector, TurnSignalQuality, analyze_turn_signal, pcm16_rms
-from .vision import VisionSnapshot, VisionState
+from .vision import VisionSnapshot, VisionState, create_face_detector
 from .voice.piper_tts import FastPiperTTS, ensure_danish_piper_voice, pitch_shift_wav
 from .voice.roest_tts import RoestTTS, roest_voice
 from .voice.speech_adapter import adapt_for_danish_speech
@@ -140,7 +140,7 @@ def main(argv: list[str] | None = None) -> int:
         default=True,
         help="Use local face tracking to gently orient StackChan's head while listening.",
     )
-    handsfree.add_argument("--vision-interval", type=float, default=2.5, help="Seconds between idle camera captures.")
+    handsfree.add_argument("--vision-interval", type=float, default=1.0, help="Seconds between idle camera captures.")
     handsfree.add_argument("--vision-prompt-timeout", type=float, default=0.8, help="Seconds to wait for a fresh prompt snapshot.")
     handsfree.add_argument(
         "--voice-trust",
@@ -1454,7 +1454,7 @@ async def _handsfree(
     audio_queue: asyncio.Queue[tuple[bytes, int, int]] = asyncio.Queue(maxsize=80)
     vision_payload_queue: asyncio.Queue[dict[str, object]] = asyncio.Queue(maxsize=4)
     vision_snapshot_queue: asyncio.Queue[VisionSnapshot] = asyncio.Queue(maxsize=4)
-    vision_state = VisionState() if vision else None
+    vision_state = VisionState(create_face_detector(auto_download_yunet=True)) if vision else None
     accepting_audio = False
     body_state_name = "neutral"
     audio_meter = {"last_at": 0.0, "max_rms": 0, "max_peak": 0, "chunks": 0}

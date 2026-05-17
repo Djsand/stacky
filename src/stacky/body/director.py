@@ -83,24 +83,24 @@ class BodyDirector:
         y: float,
         *,
         confidence: float = 1.0,
-        speed: int = 145,
+        speed: int = 135,
         now: float | None = None,
     ) -> bool:
         """Gently keep the head oriented toward a detected face."""
 
-        if confidence < 0.45:
+        if confidence < 0.50:
             return True
         now = now if now is not None else time.monotonic()
-        if now - self._last_face_track_at < 0.9:
+        if now - self._last_face_track_at < 0.55:
             return True
-        if max(abs(x), abs(y)) < 0.10:
+        if max(abs(x), abs(y)) < 0.075:
             return True
         self._last_face_track_at = now
         self._last_motion_at = now
         return self.controller.look_at(
-            max(-0.65, min(0.65, float(x) * 0.70)),
-            max(-0.45, min(0.45, float(y) * 0.55)),
-            speed=max(80, min(260, int(speed))),
+            max(-0.78, min(0.78, float(x) * 0.88)),
+            max(-0.55, min(0.55, float(y) * 0.68)),
+            speed=max(80, min(240, int(speed))),
         )
 
     def _motion(
