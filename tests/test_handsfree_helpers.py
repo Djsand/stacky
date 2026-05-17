@@ -336,6 +336,64 @@ class HandsfreeHelpersTest(unittest.TestCase):
         self.assertFalse(accepted)
         self.assertEqual(reason, "repetitivt filler-støjfragment")
 
+    def test_rejects_repeated_den_er_noise_turn_even_with_moderate_confidence(self) -> None:
+        result = STTResult(
+            text="den er den den",
+            audio=AudioStats(duration_seconds=7.70, rms=2150, peak=30000, sample_rate=24000, channels=1),
+            avg_logprob=-0.47,
+            no_speech_prob=0.0,
+            compression_ratio=0.0,
+        )
+        quality = TurnSignalQuality(
+            duration_seconds=7.70,
+            median_rms=500,
+            p80_rms=1800,
+            p95_rms=3400,
+            peak=30000,
+            active_ratio=0.45,
+            active_ms=3460,
+            max_active_run_ms=520,
+            crest_factor=11.0,
+            active_threshold=420,
+            zero_crossing_rate=0.16,
+            speech_band_ms=3400,
+            max_speech_band_run_ms=520,
+        )
+
+        accepted, reason = _accept_stt_result(result, signal_quality=quality)
+
+        self.assertFalse(accepted)
+        self.assertEqual(reason, "repetitivt filler-støjfragment")
+
+    def test_rejects_den_her_jeg_kan_noise_turn(self) -> None:
+        result = STTResult(
+            text="den her jeg kan",
+            audio=AudioStats(duration_seconds=5.28, rms=3092, peak=30722, sample_rate=24000, channels=1),
+            avg_logprob=-0.89,
+            no_speech_prob=0.0,
+            compression_ratio=0.0,
+        )
+        quality = TurnSignalQuality(
+            duration_seconds=5.28,
+            median_rms=620,
+            p80_rms=2400,
+            p95_rms=4200,
+            peak=30722,
+            active_ratio=0.48,
+            active_ms=2540,
+            max_active_run_ms=560,
+            crest_factor=14.0,
+            active_threshold=420,
+            zero_crossing_rate=0.18,
+            speech_band_ms=2500,
+            max_speech_band_run_ms=500,
+        )
+
+        accepted, reason = _accept_stt_result(result, signal_quality=quality)
+
+        self.assertFalse(accepted)
+        self.assertEqual(reason, "repetitivt filler-støjfragment")
+
     def test_rejects_clipped_sparse_repeating_noise_turn(self) -> None:
         result = STTResult(
             text="den her den her til for",
