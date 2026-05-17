@@ -366,6 +366,35 @@ class HandsfreeHelpersTest(unittest.TestCase):
         self.assertFalse(accepted)
         self.assertEqual(reason, "kort højfrekvent STT-fragment")
 
+    def test_rejects_single_bare_reference_turn(self) -> None:
+        result = STTResult(
+            text="den",
+            audio=AudioStats(duration_seconds=6.14, rms=2512, peak=30000, sample_rate=24000, channels=1),
+            avg_logprob=-0.50,
+            no_speech_prob=0.0,
+            compression_ratio=0.0,
+        )
+        quality = TurnSignalQuality(
+            duration_seconds=6.14,
+            median_rms=127,
+            p80_rms=1800,
+            p95_rms=6362,
+            peak=30000,
+            active_ratio=0.38,
+            active_ms=2360,
+            max_active_run_ms=660,
+            crest_factor=22.4,
+            active_threshold=420,
+            zero_crossing_rate=0.21,
+            speech_band_ms=2340,
+            max_speech_band_run_ms=660,
+        )
+
+        accepted, reason = _accept_stt_result(result, signal_quality=quality)
+
+        self.assertFalse(accepted)
+        self.assertEqual(reason, "for tyndt referencefragment")
+
     def test_rejects_medium_confidence_filler_noise_turn(self) -> None:
         result = STTResult(
             text="den her du den",

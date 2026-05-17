@@ -2150,6 +2150,8 @@ def _accept_stt_result(
         return True, "kort hilsen"
     if _is_short_uncertain_stt_fragment(transcript, result):
         return False, "kort usikkert STT-fragment"
+    if signal_quality is not None and _is_semantically_thin_reference_fragment(transcript, result, signal_quality):
+        return False, "for tyndt referencefragment"
 
     audio = result.audio
     if audio.duration_seconds < 0.45:
@@ -2200,6 +2202,53 @@ def _is_short_uncertain_stt_fragment(transcript: str, result: STTResult) -> bool
     if any(token in key for token in ("volumen", "volume", "hojre", "venstre", "batteri", "status", "strom")):
         return False
     return result.avg_logprob < -0.55
+
+
+def _is_semantically_thin_reference_fragment(
+    transcript: str,
+    result: STTResult,
+    signal_quality: TurnSignalQuality,
+) -> bool:
+    words = [word.strip(".,!?").lower() for word in transcript.split() if word.strip(".,!?")]
+    if not words or len(words) > 2:
+        return False
+    key = _transcript_key(transcript)
+    protected_keys = {
+        "ja",
+        "nej",
+        "ok",
+        "okay",
+        "hej",
+        "hejsa",
+        "hejstacky",
+        "stacky",
+        "vent",
+        "ventlige",
+        "stop",
+        "stoplige",
+        "pause",
+        "holdpause",
+        "skruop",
+        "skruned",
+        "kigop",
+        "kigned",
+        "center",
+        "ligeud",
+    }
+    if key in protected_keys:
+        return False
+    if any(token in key for token in ("volumen", "volume", "hojre", "venstre", "batteri", "status", "strom")):
+        return False
+    thin_words = {"den", "det", "der", "her", "du", "dig", "jeg", "kan", "er", "nu"}
+    if any(word not in thin_words for word in words):
+        return False
+    if len(words) == 1:
+        return True
+    return (
+        result.avg_logprob <= -0.35
+        or signal_quality.crest_factor >= 10.0
+        or signal_quality.duration_seconds >= 2.0
+    )
 
 
 def _is_clipped_sparse_noise_turn(result: STTResult, transcript: str, signal_quality: TurnSignalQuality) -> bool:
