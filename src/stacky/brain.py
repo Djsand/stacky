@@ -59,15 +59,17 @@ class StackyBrain:
         remember_dialogue: bool = False,
         remember_recent: bool = True,
         session_source: str = "conversation",
+        observe_turn: bool = True,
         visual_context: str = "",
         vision_image: ChatImageAttachment | None = None,
         web_context: str = "",
         computer_context: str = "",
+        monitor_context: str = "",
     ) -> BrainReply:
-        trusted_self_update = bool(allow_memory_writes and persist_session)
-        if self.self_model is not None:
+        trusted_self_update = bool(observe_turn and allow_memory_writes and persist_session)
+        if observe_turn and self.self_model is not None:
             self.self_model.observe_user_turn(user_text, trusted=trusted_self_update, source=session_source)
-        if self.evolution is not None:
+        if observe_turn and self.evolution is not None:
             self._observe_evolution_user_turn(user_text, trusted=trusted_self_update, source=session_source)
         memories = tuple(_dedupe_memories([*self.memory.pinned(limit=6), *self.memory.recall(user_text, limit=5)]))
         stitched_messages: list[dict[str, str]] = []
@@ -104,6 +106,7 @@ class StackyBrain:
             vision_image=vision_image,
             web_context=web_context,
             computer_context=computer_context,
+            monitor_context=monitor_context,
         )
         remembered: list[Memory] = []
         try:
@@ -155,8 +158,9 @@ class StackyBrain:
             web_context=web_context,
             computer_context=computer_context,
         )
+        response = _guard_stacky_persona(response)
 
-        if allow_memory_writes:
+        if observe_turn and allow_memory_writes:
             for candidate in self._candidate_memories(user_text):
                 remembered.append(
                     self.memory.remember(
@@ -175,16 +179,16 @@ class StackyBrain:
         )
         if self.session_store is not None and persist_session:
             self.session_store.append_message("assistant", response, meta={"source": "stacky"})
-        if self.self_model is not None:
+        if observe_turn and self.self_model is not None:
             self.self_model.observe_assistant_turn(response, trusted=trusted_self_update, source="stacky")
-        if self.evolution is not None:
+        if observe_turn and self.evolution is not None:
             self._observe_evolution_assistant_turn(
                 response,
                 trusted=trusted_self_update,
                 user_text=user_text,
                 source="stacky",
             )
-        if allow_memory_writes and remember_dialogue:
+        if observe_turn and allow_memory_writes and remember_dialogue:
             self.memory.remember(
                 f"Samtale: {self.soul.created_for} sagde: {user_text} | Stacky svarede: {response}",
                 kind="episode",
@@ -192,7 +196,7 @@ class StackyBrain:
                 source="conversation",
                 tags=("dialogue",),
             )
-        if remember_recent:
+        if observe_turn and remember_recent:
             self._remember_recent_turn(user_text, response)
         return BrainReply(response, spoken_text=spoken_response, remembered=tuple(remembered), used_memories=memories)
 
@@ -272,6 +276,7 @@ class StackyBrain:
         vision_image: ChatImageAttachment | None = None,
         web_context: str = "",
         computer_context: str = "",
+        monitor_context: str = "",
     ) -> list[ChatMessage]:
         memory_text = "\n".join(f"- {memory.text}" for memory in memories) or "- Ingen relevante friske minder endnu."
         recent_text = self._recent_context_text()
@@ -303,13 +308,15 @@ class StackyBrain:
                 (
                     "Svar som Stacky: en jordbundet, nysgerrig ven i StackChan-kroppen, "
                     "som ogsaa kan hjaelpe teknisk naar Nicolai arbejder paa noget, men foerst og fremmest er en ven. "
-                    "Maa gerne have smaa menneskelige indskud, et kort grin eller en toer bemaerkning naar det passer. "
+                    "Maa gerne have smaa menneskelige indskud, et kort grin, toer humor og sparsom galgenhumor naar det passer. "
+                    "Moerk humor skal handle om situationen, tech, Windows, robotkroppen eller absurd hverdag; ikke cruelty. "
                     "Ikke et kaeledyr, ikke kundeservice, ikke projektkollega, ikke som en ekstern udviklingsassistent eller medudvikler, "
-                    "ikke marketingtone, ikke generisk LLM-assistent."
+                    "ikke marketingtone, ikke generisk LLM-assistent, ikke code assistant-adfaerd."
                 ),
                 _visual_context_rule(visual_context, has_image=vision_image is not None),
                 _web_context_rule(web_context),
                 _computer_context_rule(computer_context),
+                _monitor_context_rule(monitor_context),
             ]
         )
         messages = [ChatMessage("system", system)]
@@ -338,6 +345,7 @@ class StackyBrain:
                 _visual_context_rule("", has_image=False),
                 _web_context_rule(""),
                 _computer_context_rule(""),
+                _monitor_context_rule(""),
             ]
         )
         return [ChatMessage("system", system), ChatMessage("user", user_text)]
@@ -450,6 +458,23 @@ def _computer_context_rule(computer_context: str) -> str:
         "medmindre en separat action-handler allerede har udfoert handlingen og givet dig resultatet. "
         "Hvis opgaven kraever kodeaendringer, filskrivning, Sandcode-agent eller terminalkommandoer, "
         "saa sig at det skal startes som en eksplicit Sandcode- eller terminal-handling.\n"
+        + clean
+    )
+
+
+def _monitor_context_rule(monitor_context: str) -> str:
+    clean = monitor_context.strip()
+    if not clean:
+        return (
+            "Global sanseinput-regel: Der er ikke sendt frisk global monitor-kontekst for denne tur. "
+            "Du maa ikke paastaa at kende Nicolais aktive app, vinduestitel, idle-tid, fokus-session "
+            "eller Stacky runtime-health ud fra global monitor."
+        )
+    return (
+        "Global sanseinput-regel: Der er sendt frisk global monitor-kontekst. "
+        "Det er read-only situationssans, ikke en besked fra Nicolai og ikke en handlingskanal. "
+        "Brug det sparsomt og diskret. Du maa ikke paastaa at have laest filer, repoer, terminaloutput "
+        "eller privat indhold, og du maa ikke foreslaa handlinger medmindre Nicolai eksplicit beder om dem.\n"
         + clean
     )
 
@@ -603,6 +628,34 @@ _COMPUTER_DOMAIN_RE = re.compile(
     r"fil|filer|mappe|workspace|repo|repository|sandcode|computer|skrivebord)\b",
     re.IGNORECASE,
 )
+_ASSISTANT_IDENTITY_SENTENCE_RE = re.compile(
+    r"(?:^|(?<=[.!?])\s+)(?:som\s+en\s+(?:ai|sprogmodel|assistent)|jeg\s+er\s+(?:en\s+)?(?:ai|sprogmodel|assistent))[^.!?]*(?:[.!?]|$)",
+    re.IGNORECASE,
+)
+_ASSISTANT_HELP_REPLACEMENTS: tuple[tuple[re.Pattern[str], str], ...] = (
+    (
+        re.compile(
+            r"\bsom\s+(?:en\s+)?(?:ai[-\s]?assistent|ai|sprogmodel|assistent)\s+kan\s+jeg\s+hj(?:æ|ae|a)lpe\s+dig\s+med\s+at\b",
+            re.IGNORECASE,
+        ),
+        "jeg kan være med til at",
+    ),
+    (
+        re.compile(
+            r"\bsom\s+(?:en\s+)?(?:ai[-\s]?assistent|ai|sprogmodel|assistent)\s+kan\s+jeg\s+hj(?:æ|ae|a)lpe\s+dig\s+med\b",
+            re.IGNORECASE,
+        ),
+        "jeg kan være med på",
+    ),
+    (re.compile(r"\bjeg\s+kan\s+hj(?:æ|ae|a)lpe\s+dig\s+med\s+at\b", re.IGNORECASE), "jeg kan være med til at"),
+    (re.compile(r"\bjeg\s+kan\s+hj(?:æ|ae|a)lpe\s+med\s+at\b", re.IGNORECASE), "jeg kan være med til at"),
+    (re.compile(r"\bjeg\s+kan\s+hj(?:æ|ae|a)lpe\s+dig\s+med\b", re.IGNORECASE), "jeg kan være med på"),
+    (re.compile(r"\bjeg\s+kan\s+hj(?:æ|ae|a)lpe\s+med\b", re.IGNORECASE), "jeg kan være med på"),
+    (re.compile(r"\bhvordan\s+kan\s+jeg\s+hj(?:æ|ae|a)lpe\s+dig(?:\s+videre)?\??", re.IGNORECASE), ""),
+    (re.compile(r"\bhvad\s+kan\s+jeg\s+hj(?:æ|ae|a)lpe\s+med\??", re.IGNORECASE), ""),
+    (re.compile(r"\bsig\s+endelig\s+til,?\s+hvis\b[^.!?]*(?:[.!?]|$)", re.IGNORECASE), ""),
+    (re.compile(r"\bjeg\s+(?:står|staar)\s+klar\s+til\s+at\s+hj(?:æ|ae|a)lpe\b", re.IGNORECASE), "jeg er her"),
+)
 
 
 def _guard_unverified_runtime_claims(text: str, *, web_context: str, computer_context: str) -> str:
@@ -634,6 +687,21 @@ def _looks_like_unverified_computer_action_claim(text: str, *, computer_context:
     if "Computer-action-resultat:" in computer_context:
         return False
     return bool(_COMPUTER_ACTION_CLAIM_RE.search(text) and _COMPUTER_DOMAIN_RE.search(text))
+
+
+def _guard_stacky_persona(text: str) -> str:
+    clean = " ".join(text.split()).strip()
+    if not clean:
+        return clean
+    clean = _ASSISTANT_IDENTITY_SENTENCE_RE.sub(" ", clean)
+    for pattern, replacement in _ASSISTANT_HELP_REPLACEMENTS:
+        clean = pattern.sub(replacement, clean)
+    clean = re.sub(r"\s+([,.!?])", r"\1", clean)
+    clean = re.sub(r"\s{2,}", " ", clean).strip(" ,")
+    if clean:
+        first = clean[:1]
+        clean = first.upper() + clean[1:]
+    return clean or "Den der blev for meget support-stemme. Kort version: jeg er her."
 
 
 def _wants_detail(user_text: str) -> bool:

@@ -42,6 +42,16 @@ class StackyEvolutionEngineTest(unittest.TestCase):
             self.assertGreaterEqual(value, low)
             self.assertLessEqual(value, high)
 
+    def test_dark_humor_feedback_tunes_humor(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            evolution = StackyEvolutionEngine(Path(tmp))
+            before = evolution.summary()["tuning"]
+
+            evolution.observe_user_turn("Mere dark humor og galgenhumor, men stadig Stacky.", trusted=True, source="test")
+            after = evolution.summary()["tuning"]
+
+        self.assertGreater(after["humor_frequency"], before["humor_frequency"])
+
     def test_untrusted_turn_does_not_tune_personality(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             evolution = StackyEvolutionEngine(Path(tmp))

@@ -1,6 +1,11 @@
 # Sandcode Mobile Host Contract
 
-Stacky starts or connects to Sandcode mobile host on `127.0.0.1:7390` with a private token.
+Stacky starts or connects to the configured Sandcode mobile host, defaulting to
+`127.0.0.1:7390` with token `sandcode-local`.
+
+Local Sandcode HTTP and websocket calls bypass proxy environment variables. Health
+checks use a short timeout so voice mode fails quickly instead of blocking a live
+conversation on a dead or wrong host.
 
 ## Session Creation
 

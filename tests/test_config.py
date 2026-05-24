@@ -19,6 +19,11 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(config.websearch.provider, "duckduckgo_lite")
         self.assertTrue(config.websearch.allow_insecure_tls_fallback)
         self.assertTrue(config.computer.enabled)
+        self.assertTrue(config.monitor.enabled)
+        self.assertEqual(config.monitor.interval_seconds, 20.0)
+        self.assertEqual(config.sandcode.token, "sandcode-local")
+        self.assertEqual(config.sandcode.health_timeout_seconds, 1.5)
+        self.assertEqual(config.sandcode.request_timeout_seconds, 12.0)
 
     def test_gemini_provider_uses_gemini_env_over_lmstudio_config(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -74,6 +79,59 @@ class ConfigTest(unittest.TestCase):
                 config = load_config(config_path)
 
         self.assertFalse(config.computer.enabled)
+
+    def test_monitor_can_be_disabled_by_env(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "stacky.toml"
+            with patch.dict("os.environ", {"STACKY_MONITOR_ENABLED": "false"}, clear=False):
+                config = load_config(config_path)
+
+        self.assertFalse(config.monitor.enabled)
+
+    def test_monitor_can_be_configured_from_toml(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "stacky.toml"
+            config_path.write_text(
+                "\n".join(
+                    [
+                        "[monitor]",
+                        "enabled = true",
+                        "interval_seconds = 5",
+                        "long_silence_seconds = 60",
+                        "min_importance_to_speak = 90",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            config = load_config(config_path)
+
+        self.assertEqual(config.monitor.interval_seconds, 5.0)
+        self.assertEqual(config.monitor.long_silence_seconds, 60.0)
+        self.assertEqual(config.monitor.min_importance_to_speak, 90)
+
+    def test_sandcode_timeouts_can_be_configured_from_toml(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "stacky.toml"
+            config_path.write_text(
+                "\n".join(
+                    [
+                        "[sandcode]",
+                        'token = "custom-token"',
+                        "health_timeout_seconds = 0.4",
+                        "request_timeout_seconds = 5",
+                        "startup_timeout_seconds = 3",
+                        "websocket_open_timeout_seconds = 2",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            config = load_config(config_path)
+
+        self.assertEqual(config.sandcode.token, "custom-token")
+        self.assertEqual(config.sandcode.health_timeout_seconds, 0.4)
+        self.assertEqual(config.sandcode.request_timeout_seconds, 5.0)
+        self.assertEqual(config.sandcode.startup_timeout_seconds, 3.0)
+        self.assertEqual(config.sandcode.websocket_open_timeout_seconds, 2.0)
 
 
 if __name__ == "__main__":

@@ -18,6 +18,7 @@ from stacky.cli import (
     _resolve_capture_speech_styles,
     _resolve_stt_bench_specs,
     _run_motion_gesture,
+    _should_comment_on_monitor_observation,
     _should_capture_vision_runtime,
     _should_track_face_runtime,
     _transcript_key,
@@ -25,6 +26,8 @@ from stacky.cli import (
     _wants_visual_context,
     _word_error_rate,
 )
+from stacky.config import MonitorConfig
+from stacky.monitor import MonitorObservation
 from stacky.voice.stt import AudioStats, STTResult
 from stacky.voice.transcript_correction import correct_danish_transcript
 from stacky.voice.turn_detection import TurnSignalQuality
@@ -918,6 +921,65 @@ class HandsfreeHelpersTest(unittest.TestCase):
             _should_capture_vision_runtime(
                 controller_connected=False,
                 accepting_audio=True,
+            )
+        )
+
+    def test_monitor_comment_requires_listening_sparse_important_observation(self) -> None:
+        observation = MonitorObservation(
+            kind="long_silence",
+            summary="Der har vaeret stille i 15 min.",
+            importance=80,
+            observed_at=1000.0,
+            speakable=True,
+        )
+        config = MonitorConfig(recent_speech_grace_seconds=120, speak_cooldown_seconds=900)
+
+        self.assertTrue(
+            _should_comment_on_monitor_observation(
+                observation,
+                config,
+                accepting_audio=True,
+                body_state_name="listening",
+                now=1000.0,
+                last_user_voice_at=800.0,
+                last_stacky_speech_at=800.0,
+                last_monitor_comment_at=0.0,
+            )
+        )
+        self.assertFalse(
+            _should_comment_on_monitor_observation(
+                observation,
+                config,
+                accepting_audio=True,
+                body_state_name="thinking",
+                now=1000.0,
+                last_user_voice_at=800.0,
+                last_stacky_speech_at=800.0,
+                last_monitor_comment_at=0.0,
+            )
+        )
+        self.assertFalse(
+            _should_comment_on_monitor_observation(
+                observation,
+                config,
+                accepting_audio=True,
+                body_state_name="listening",
+                now=1000.0,
+                last_user_voice_at=950.0,
+                last_stacky_speech_at=800.0,
+                last_monitor_comment_at=0.0,
+            )
+        )
+        self.assertFalse(
+            _should_comment_on_monitor_observation(
+                observation,
+                config,
+                accepting_audio=True,
+                body_state_name="listening",
+                now=1000.0,
+                last_user_voice_at=800.0,
+                last_stacky_speech_at=800.0,
+                last_monitor_comment_at=500.0,
             )
         )
 

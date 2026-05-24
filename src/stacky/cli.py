@@ -11,6 +11,7 @@ import sys
 import time
 import unicodedata
 import wave
+from collections import deque
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from io import BytesIO
@@ -33,11 +34,18 @@ from .body.controller import BodyPresence, StackChanBodyController
 from .body.director import BodyDirector
 from .body.protocol import decode_pcm_payload, decode_vision_frame_payload, expression
 from .computer import LocalComputerActions, LocalComputerContext, parse_local_computer_action
-from .config import DEFAULT_CONFIG_PATH, ROOT, load_config
+from .config import DEFAULT_CONFIG_PATH, ROOT, MonitorConfig, load_config
 from .evolution import StackyEvolutionEngine
 from .llm import create_chat_client
 from .llm import ChatImageAttachment
 from .memory import MemoryStore
+from .monitor import (
+    DefaultMonitorProbe,
+    GlobalFriendMonitor,
+    MonitorObservation,
+    format_monitor_context,
+    monitor_prompt_for_observation,
+)
 from .personality import StackySelfModel
 from .sandcode import (
     SandcodeDanishSummarizer,
@@ -186,6 +194,12 @@ def main(argv: list[str] | None = None) -> int:
         action=argparse.BooleanOptionalAction,
         default=None,
         help="Enable local read-only computer/code context for explicit terminal, grep, repo, or code requests.",
+    )
+    handsfree.add_argument(
+        "--monitor",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Enable Stacky's sparse global friend monitor sanseinput.",
     )
     handsfree.add_argument(
         "--voice-trust",
@@ -459,6 +473,7 @@ def main(argv: list[str] | None = None) -> int:
                 vision_prompt_timeout=args.vision_prompt_timeout,
                 websearch=args.websearch,
                 computer=args.computer,
+                monitor=args.monitor,
                 voice_trust=args.voice_trust,
                 listen_only=args.listen_only,
                 debug_audio=args.debug_audio,
@@ -1685,6 +1700,7 @@ async def _handsfree(
     vision_prompt_timeout: float,
     websearch: bool | None,
     computer: bool | None,
+    monitor: bool | None,
     voice_trust: str,
     mic_channel: str,
     mic_preamp: float,
@@ -1711,6 +1727,28 @@ async def _handsfree(
         else None
     )
     sandcode_client = SandcodeMobileHostClient(config.sandcode) if not listen_only else None
+    monitor_enabled = (config.monitor.enabled if monitor is None else monitor) and not listen_only
+    monitor_queue: asyncio.Queue[MonitorObservation] | None = (
+        asyncio.Queue(maxsize=8) if monitor_enabled else None
+    )
+    recent_monitor_observations: deque[MonitorObservation] = deque(maxlen=max(1, config.monitor.max_context_observations))
+    friend_monitor: GlobalFriendMonitor | None = None
+    last_user_voice_at = time.monotonic()
+    last_stacky_speech_at = last_user_voice_at
+    last_monitor_comment_at = 0.0
+    if monitor_enabled:
+        voice_bits = [tts_engine, speaker]
+        if tts_engine == "supertonic":
+            voice_bits.append(supertonic_voice or supertonic_profile)
+        friend_monitor = GlobalFriendMonitor(
+            config.monitor,
+            DefaultMonitorProbe(
+                monitor_config=config.monitor,
+                websearch_config=config.websearch,
+                sandcode_config=config.sandcode,
+                voice_mode="/".join(voice_bits),
+            ),
+        )
 
     loop = asyncio.get_running_loop()
     audio_queue: asyncio.Queue[tuple[bytes, int, int]] = asyncio.Queue(maxsize=80)
@@ -1884,6 +1922,7 @@ async def _handsfree(
     vision_processor_task = None
     vision_capture_task = None
     body_presence_task = None
+    monitor_task = None
     if vision_state is not None:
         print(f"Vision mode ready ({vision_state.detector_status}).", flush=True)
         vision_processor_task = asyncio.create_task(
@@ -1907,6 +1946,9 @@ async def _handsfree(
                 ),
             )
         )
+    if friend_monitor is not None and monitor_queue is not None:
+        print("Global friend monitor ready (read-only sparse sanseinput).", flush=True)
+        monitor_task = asyncio.create_task(friend_monitor.run(monitor_queue))
 
     def record_local_turn(user_text: str, assistant_text: str) -> None:
         if brain is None:
@@ -1988,6 +2030,16 @@ async def _handsfree(
     await stt.preload()
     print(f"STT ready ({time.perf_counter() - started:.1f}s). Speak to StackChan now.", flush=True)
 
+    async def speak_reply(spoken: str) -> None:
+        nonlocal last_stacky_speech_at
+        if output is None:
+            return
+        await output.speak(spoken)
+        await output.wait()
+        last_stacky_speech_at = time.monotonic()
+        if friend_monitor is not None:
+            friend_monitor.mark_stacky_speech(last_stacky_speech_at)
+
     detector = EnergyTurnDetector(
         threshold=vad_threshold,
         start_speech_ms=start_speech_ms,
@@ -2002,6 +2054,52 @@ async def _handsfree(
     set_body_state("listening")
     try:
         while True:
+            observation = _pop_monitor_observation(monitor_queue)
+            if observation is not None:
+                recent_monitor_observations.append(observation)
+                print(f"[monitor] {observation.kind}: {observation.summary}", flush=True)
+                now = time.monotonic()
+                if (
+                    brain is not None
+                    and output is not None
+                    and _should_comment_on_monitor_observation(
+                        observation,
+                        config.monitor,
+                        accepting_audio=accepting_audio,
+                        body_state_name=body_state_name,
+                        now=now,
+                        last_user_voice_at=last_user_voice_at,
+                        last_stacky_speech_at=last_stacky_speech_at,
+                        last_monitor_comment_at=last_monitor_comment_at,
+                    )
+                ):
+                    accepting_audio = False
+                    _drain_queue(audio_queue)
+                    detector.reset()
+                    set_body_state("thinking")
+                    monitor_context = format_monitor_context([observation], max_items=1)
+                    reply = await brain.respond(
+                        monitor_prompt_for_observation(observation),
+                        max_spoken_chars=config.monitor.max_spoken_chars,
+                        detail_spoken_chars=config.monitor.max_spoken_chars,
+                        persist_session=False,
+                        allow_memory_writes=False,
+                        remember_recent=False,
+                        session_source="stacky-monitor",
+                        observe_turn=False,
+                        monitor_context=monitor_context,
+                    )
+                    set_body_state("speaking")
+                    if body_director is not None:
+                        await asyncio.to_thread(body_director.reply_started, reply.spoken_text or reply.text)
+                    await speak_reply(reply.spoken_text or reply.text)
+                    last_monitor_comment_at = last_stacky_speech_at
+                    _drain_queue(audio_queue)
+                    detector.reset()
+                    await asyncio.sleep(0.25)
+                    set_body_state("listening")
+                    accepting_audio = True
+                continue
             pcm, sample_rate, channels = await audio_queue.get()
             if time.monotonic() < motion_audio_guard_until:
                 detector.reset()
@@ -2060,6 +2158,9 @@ async def _handsfree(
                 continue
             last_transcript = transcript_key
             last_transcript_at = now
+            last_user_voice_at = time.monotonic()
+            if friend_monitor is not None:
+                friend_monitor.mark_user_turn(last_user_voice_at)
             print(f"Nicolai: {text}", flush=True)
             if listen_only:
                 set_body_state("listening")
@@ -2079,8 +2180,7 @@ async def _handsfree(
                 speak_started = time.perf_counter()
                 spoken_reply = _format_battery_status_reply(body_status) if ok else "Jeg kunne ikke hente batteristatus lige nu."
                 record_local_turn(text, spoken_reply)
-                await output.speak(spoken_reply)
-                await output.wait()
+                await speak_reply(spoken_reply)
                 speak_seconds = time.perf_counter() - speak_started
                 print(
                     f"[timing] stt={stt_seconds:.2f}s command={reply_seconds:.2f}s "
@@ -2104,8 +2204,7 @@ async def _handsfree(
                 speak_started = time.perf_counter()
                 spoken_reply = spoken if ok else "Jeg kunne ikke ændre min volumen lige nu."
                 record_local_turn(text, spoken_reply)
-                await output.speak(spoken_reply)
-                await output.wait()
+                await speak_reply(spoken_reply)
                 speak_seconds = time.perf_counter() - speak_started
                 print(
                     f"[timing] stt={stt_seconds:.2f}s command={reply_seconds:.2f}s "
@@ -2134,8 +2233,7 @@ async def _handsfree(
                 speak_started = time.perf_counter()
                 spoken_reply = brightness_command.spoken if ok else "Jeg kunne ikke ændre skærmens lysstyrke lige nu."
                 record_local_turn(text, spoken_reply)
-                await output.speak(spoken_reply)
-                await output.wait()
+                await speak_reply(spoken_reply)
                 speak_seconds = time.perf_counter() - speak_started
                 print(
                     f"[timing] stt={stt_seconds:.2f}s command={reply_seconds:.2f}s "
@@ -2154,8 +2252,7 @@ async def _handsfree(
                 controller.set_expression("happy")
                 spoken_reply = motion_command.spoken
                 record_local_turn(text, spoken_reply)
-                await output.speak(spoken_reply)
-                await output.wait()
+                await speak_reply(spoken_reply)
                 speak_seconds = time.perf_counter() - speak_started
                 reply_started = time.perf_counter()
                 ok = _run_motion_gesture(body_director or controller, motion_command.gesture)
@@ -2210,8 +2307,7 @@ async def _handsfree(
                 speak_started = time.perf_counter()
                 spoken_reply = calibration_command.spoken if ok else "Jeg kunne ikke gemme hovedkalibreringen lige nu."
                 record_local_turn(text, spoken_reply)
-                await output.speak(spoken_reply)
-                await output.wait()
+                await speak_reply(spoken_reply)
                 speak_seconds = time.perf_counter() - speak_started
                 print(
                     f"[timing] stt={stt_seconds:.2f}s command={reply_seconds:.2f}s "
@@ -2229,8 +2325,7 @@ async def _handsfree(
                 set_body_state("happy")
                 speak_started = time.perf_counter()
                 record_local_turn(text, local_reply)
-                await output.speak(local_reply)
-                await output.wait()
+                await speak_reply(local_reply)
                 speak_seconds = time.perf_counter() - speak_started
                 print(
                     f"[timing] stt={stt_seconds:.2f}s local=0.00s "
@@ -2251,8 +2346,7 @@ async def _handsfree(
                 if sandcode_action.prompt == "__cancel__":
                     spoken_reply = "Jeg kan ikke afbryde en kørende Sandcode-session fra voice endnu."
                     record_local_turn(text, spoken_reply)
-                    await output.speak(spoken_reply)
-                    await output.wait()
+                    await speak_reply(spoken_reply)
                     print(
                         f"[timing] stt={stt_seconds:.2f}s sandcode=0.00s "
                         f"tts_send={time.perf_counter() - reply_started:.2f}s "
@@ -2267,8 +2361,7 @@ async def _handsfree(
                     continue
                 lead_reply = "Jeg sætter agenten i gang."
                 record_local_turn(text, f"{lead_reply} Opgave: {sandcode_action.prompt}")
-                await output.speak(lead_reply)
-                await output.wait()
+                await speak_reply(lead_reply)
 
                 spoken_updates = 0
 
@@ -2279,8 +2372,7 @@ async def _handsfree(
                         return
                     spoken_updates += 1
                     set_body_state("thinking")
-                    await output.speak(update)
-                    await output.wait()
+                    await speak_reply(update)
 
                 try:
                     session = await _run_sandcode_with_updates(
@@ -2291,13 +2383,11 @@ async def _handsfree(
                         chat_only=sandcode_action.chat_only,
                     )
                     if spoken_updates == 0:
-                        await output.speak(f"Sandcode er færdig. Sessionen hedder {session.session_id}.")
-                        await output.wait()
+                        await speak_reply(f"Sandcode er færdig. Sessionen hedder {session.session_id}.")
                 except SandcodeError as exc:
                     error_reply = f"Sandcode kunne ikke starte: {exc}"
                     print(f"[Sandcode] {error_reply}", flush=True)
-                    await output.speak(error_reply)
-                    await output.wait()
+                    await speak_reply(error_reply)
                 set_body_state("happy")
                 print(
                     f"[timing] stt={stt_seconds:.2f}s sandcode={time.perf_counter() - reply_started:.2f}s "
@@ -2329,8 +2419,7 @@ async def _handsfree(
                 record_local_turn(text, spoken_reply)
                 set_body_state("happy" if result.ok else "thinking")
                 speak_started = time.perf_counter()
-                await output.speak(spoken_reply)
-                await output.wait()
+                await speak_reply(spoken_reply)
                 speak_seconds = time.perf_counter() - speak_started
                 print(
                     f"[timing] stt={stt_seconds:.2f}s computer={time.perf_counter() - reply_started:.2f}s "
@@ -2362,6 +2451,10 @@ async def _handsfree(
                     image_base64 = vision_state.image_base64(max_age_seconds=10.0)
                     if image_base64 is not None:
                         prompt_image = ChatImageAttachment("image/jpeg", image_base64)
+            monitor_context = format_monitor_context(
+                recent_monitor_observations,
+                max_items=config.monitor.max_context_observations,
+            )
             reply = await brain.respond(
                 text,
                 max_spoken_chars=reply_chars,
@@ -2374,6 +2467,7 @@ async def _handsfree(
                 vision_image=prompt_image,
                 web_context=web_context,
                 computer_context=computer_context,
+                monitor_context=monitor_context,
             )
             brain_seconds = time.perf_counter() - brain_started
             set_body_state("speaking")
@@ -2381,8 +2475,7 @@ async def _handsfree(
             reply_text = reply.spoken_text or reply.text
             if body_director is not None:
                 await asyncio.to_thread(body_director.reply_started, reply_text)
-            await output.speak(reply_text)
-            await output.wait()
+            await speak_reply(reply_text)
             speak_seconds = time.perf_counter() - speak_started
             print(
                 f"[timing] stt={stt_seconds:.2f}s brain={brain_seconds:.2f}s "
@@ -2397,7 +2490,7 @@ async def _handsfree(
     except (KeyboardInterrupt, asyncio.CancelledError):
         return 0
     finally:
-        for task in (vision_capture_task, vision_processor_task, body_presence_task):
+        for task in (vision_capture_task, vision_processor_task, body_presence_task, monitor_task):
             if task is not None:
                 task.cancel()
                 try:
@@ -2408,6 +2501,42 @@ async def _handsfree(
             await output.stop()
         set_body_state("neutral")
         controller.stop()
+
+
+def _pop_monitor_observation(
+    monitor_queue: asyncio.Queue[MonitorObservation] | None,
+) -> MonitorObservation | None:
+    if monitor_queue is None:
+        return None
+    try:
+        return monitor_queue.get_nowait()
+    except asyncio.QueueEmpty:
+        return None
+
+
+def _should_comment_on_monitor_observation(
+    observation: MonitorObservation,
+    config: MonitorConfig,
+    *,
+    accepting_audio: bool,
+    body_state_name: str,
+    now: float,
+    last_user_voice_at: float,
+    last_stacky_speech_at: float,
+    last_monitor_comment_at: float,
+) -> bool:
+    if not config.enabled:
+        return False
+    if not accepting_audio or body_state_name != "listening":
+        return False
+    if not observation.speakable or observation.importance < config.min_importance_to_speak:
+        return False
+    last_conversation_at = max(last_user_voice_at, last_stacky_speech_at)
+    if now - last_conversation_at < config.recent_speech_grace_seconds:
+        return False
+    if last_monitor_comment_at > 0 and now - last_monitor_comment_at < config.speak_cooldown_seconds:
+        return False
+    return True
 
 
 def _drain_queue(queue: asyncio.Queue[tuple[bytes, int, int]]) -> None:
@@ -3405,7 +3534,11 @@ async def _speech_output(enabled: bool):
 async def _sandcode_health(config_path: str) -> int:
     config = load_config(config_path)
     client = SandcodeMobileHostClient(config.sandcode)
-    await client.ensure_host()
+    try:
+        await client.ensure_host()
+    except SandcodeError as exc:
+        print(f"Sandcode health failed: {exc}", flush=True)
+        return 1
     print(f"Sandcode mobile host is healthy at {client.base_url}")
     return 0
 

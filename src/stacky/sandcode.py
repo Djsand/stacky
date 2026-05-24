@@ -53,7 +53,8 @@ class SandcodeMobileHostClient:
         return f"ws://{self.config.host}:{self.config.port}/?token={self.config.token}"
 
     async def ensure_host(self) -> None:
-        if await self.is_healthy():
+        healthy, last_error = await self._health_result()
+        if healthy:
             return
         if not self.config.host_script.exists():
             raise SandcodeError(f"Sandcode mobile host script not found: {self.config.host_script}")
@@ -75,18 +76,38 @@ class SandcodeMobileHostClient:
             text=True,
             creationflags=creationflags,
         )
-        for _ in range(30):
-            if await self.is_healthy():
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + max(0.1, self.config.startup_timeout_seconds)
+        while loop.time() < deadline:
+            healthy, last_error = await self._health_result()
+            if healthy:
                 return
+            if self._process.poll() is not None:
+                detail = self._host_process_detail()
+                raise SandcodeError(f"Sandcode mobile host exited before becoming healthy.{detail}") from last_error
             await asyncio.sleep(0.2)
-        raise SandcodeError("Sandcode mobile host did not become healthy.")
+        detail = f" Last health error: {last_error}" if last_error else ""
+        raise SandcodeError(
+            f"Sandcode mobile host did not become healthy at {self.base_url} "
+            f"within {self.config.startup_timeout_seconds:.1f}s.{detail}"
+        ) from last_error
 
     async def is_healthy(self) -> bool:
+        healthy, _ = await self._health_result()
+        return healthy
+
+    async def _health_result(self) -> tuple[bool, SandcodeError | None]:
         try:
-            await asyncio.to_thread(self._request_json, "GET", "/api/health", None)
-            return True
-        except SandcodeError:
-            return False
+            await asyncio.to_thread(
+                self._request_json,
+                "GET",
+                "/api/health",
+                None,
+                timeout_seconds=self.config.health_timeout_seconds,
+            )
+            return True, None
+        except SandcodeError as exc:
+            return False, exc
 
     async def start_session(self, cwd: Path, *, chat_only: bool = False) -> SandcodeSession:
         await self.ensure_host()
@@ -98,7 +119,13 @@ class SandcodeMobileHostClient:
             "effort": self.config.effort,
             "chatOnly": chat_only,
         }
-        data = await asyncio.to_thread(self._request_json, "POST", "/api/sessions", payload)
+        data = await asyncio.to_thread(
+            self._request_json,
+            "POST",
+            "/api/sessions",
+            payload,
+            timeout_seconds=self.config.request_timeout_seconds,
+        )
         return SandcodeSession(
             session_id=str(data["sessionId"]),
             cwd=Path(str(data.get("cwd", cwd))),
@@ -133,7 +160,11 @@ class SandcodeMobileHostClient:
         except ImportError as exc:
             raise SandcodeError("Install websockets or stacky[voice] to listen to Sandcode events.") from exc
 
-        async with websockets.connect(self.ws_url) as ws:
+        async with websockets.connect(
+            self.ws_url,
+            proxy=None,
+            open_timeout=self.config.websocket_open_timeout_seconds,
+        ) as ws:
             async for raw in ws:
                 event = json.loads(str(raw))
                 if isinstance(event, dict):
@@ -174,10 +205,21 @@ class SandcodeMobileHostClient:
             raise SandcodeError("Install websockets or stacky[voice] to send Sandcode websocket messages.") from exc
 
         await self.ensure_host()
-        async with websockets.connect(self.ws_url) as ws:
+        async with websockets.connect(
+            self.ws_url,
+            proxy=None,
+            open_timeout=self.config.websocket_open_timeout_seconds,
+        ) as ws:
             await ws.send(json.dumps(message, ensure_ascii=False))
 
-    def _request_json(self, method: str, path: str, payload: dict[str, Any] | None) -> dict[str, Any]:
+    def _request_json(
+        self,
+        method: str,
+        path: str,
+        payload: dict[str, Any] | None,
+        *,
+        timeout_seconds: float | None = None,
+    ) -> dict[str, Any]:
         url = self.base_url + path
         body = None if payload is None else json.dumps(payload).encode("utf-8")
         request = urllib.request.Request(
@@ -189,15 +231,46 @@ class SandcodeMobileHostClient:
                 "Content-Type": "application/json",
             },
         )
+        timeout = self.config.request_timeout_seconds if timeout_seconds is None else timeout_seconds
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
         try:
-            with urllib.request.urlopen(request, timeout=20) as response:
+            with opener.open(request, timeout=timeout) as response:
                 text = response.read().decode("utf-8")
                 return json.loads(text) if text else {}
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="replace")
+            if exc.code in {401, 403}:
+                raise SandcodeError(
+                    f"Sandcode rejected the token at {self.base_url}. "
+                    f"Check [sandcode].token matches the mobile host token. HTTP {exc.code}: {detail}"
+                ) from exc
             raise SandcodeError(f"Sandcode HTTP {exc.code}: {detail}") from exc
+        except urllib.error.URLError as exc:
+            reason = getattr(exc, "reason", exc)
+            raise SandcodeError(f"Sandcode connection failed at {url}: {reason}") from exc
         except OSError as exc:
-            raise SandcodeError(f"Sandcode connection failed: {exc}") from exc
+            raise SandcodeError(f"Sandcode connection failed at {url}: {exc}") from exc
+
+    def _host_process_detail(self) -> str:
+        if self._process is None:
+            return ""
+        try:
+            stdout, stderr = self._process.communicate(timeout=0.2)
+        except (OSError, subprocess.TimeoutExpired):
+            return ""
+        parts = []
+        if stdout.strip():
+            parts.append(f"stdout: {_compact_log(stdout)}")
+        if stderr.strip():
+            parts.append(f"stderr: {_compact_log(stderr)}")
+        return " " + " ".join(parts) if parts else ""
+
+
+def _compact_log(text: str, *, max_chars: int = 360) -> str:
+    clean = re.sub(r"\s+", " ", text).strip()
+    if len(clean) <= max_chars:
+        return clean
+    return clean[: max_chars - 1].rstrip() + "..."
 
 
 class SandcodeDanishSummarizer:

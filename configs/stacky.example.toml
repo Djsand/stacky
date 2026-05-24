@@ -30,11 +30,15 @@ repo_root = "C:/Users/nicol/SANDCODE"
 host_script = "C:/Users/nicol/SANDCODE/ios/host/sandcode-mobile-host.mjs"
 host = "127.0.0.1"
 port = 7390
-token = "stacky-local-change-me"
+token = "sandcode-local"
 provider = "ChatGPT Codex"
 model = "gpt-5.5"
 effort = "max"
 permission_mode = "autonomousAgent"
+health_timeout_seconds = 1.5
+request_timeout_seconds = 12
+startup_timeout_seconds = 8
+websocket_open_timeout_seconds = 5
 
 [home_assistant]
 base_url = "http://homeassistant.local:8123"
@@ -53,3 +57,18 @@ enabled = true
 workspace_root = "."
 max_context_chars = 4000
 timeout_seconds = 4
+
+[monitor]
+enabled = true
+interval_seconds = 20
+health_interval_seconds = 120
+long_silence_seconds = 900
+focused_session_seconds = 1800
+active_idle_threshold_seconds = 45
+recent_speech_grace_seconds = 120
+speak_cooldown_seconds = 900
+min_importance_to_speak = 75
+max_context_observations = 5
+max_window_title_chars = 80
+agent_connect_timeout_seconds = 0.25
+max_spoken_chars = 160

@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -14,6 +14,15 @@ MAX_CONVICTIONS = 32
 MAX_EPOCHS = 40
 MAX_SIGNALS = 20
 MAX_MESSAGE_TIMESTAMPS = 200
+
+
+PERSONA_TUNING_BOUNDS: dict[str, tuple[float, float]] = {
+    "assistant_suppression": (0.20, 1.0),
+    "dry_humor": (0.05, 0.85),
+    "dark_humor": (0.0, 0.55),
+    "warmth": (0.15, 0.90),
+    "sass": (0.0, 0.70),
+}
 
 
 DOMAIN_KEYWORDS: dict[str, tuple[str, ...]] = {
@@ -31,6 +40,22 @@ class SelfObservation:
     style_notes: tuple[str, ...] = ()
     convictions: tuple[str, ...] = ()
     epochs: tuple[str, ...] = ()
+    persona_adjustments: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class StackyPersonaTuning:
+    assistant_suppression: float = 0.80
+    dry_humor: float = 0.48
+    dark_humor: float = 0.24
+    warmth: float = 0.58
+    sass: float = 0.30
+
+    def bounded(self) -> StackyPersonaTuning:
+        values = asdict(self)
+        for key, (low, high) in PERSONA_TUNING_BOUNDS.items():
+            values[key] = _clamp(float(values.get(key, 0.0)), low, high)
+        return StackyPersonaTuning(**values)
 
 
 class StackySelfModel:
@@ -45,6 +70,7 @@ class StackySelfModel:
         self.state_path = self.root / "self_model.json"
         self.evolution_log_path = self.root / "evolution.jsonl"
         self.state = self._default_state()
+        self.persona = StackyPersonaTuning()
         self._load()
 
     def observe_user_turn(self, text: str, *, trusted: bool, source: str = "conversation") -> SelfObservation:
@@ -72,6 +98,7 @@ class StackySelfModel:
 
         convictions = self._extract_convictions(text)
         stored_convictions = tuple(self._upsert_items("convictions", convictions, source=source, now=now))
+        persona_adjustments = self._observe_persona_feedback(text, source=source, now=now)
 
         self._save()
         for label in epochs:
@@ -80,11 +107,14 @@ class StackySelfModel:
             self._log_evolution("style_note", note, source=source)
         for conviction in stored_convictions:
             self._log_evolution("conviction", conviction, source=source)
+        for adjustment in persona_adjustments:
+            self._log_evolution("persona_tune", adjustment, source=source)
         return SelfObservation(
             trusted=True,
             style_notes=stored_style_notes,
             convictions=stored_convictions,
             epochs=tuple(epochs),
+            persona_adjustments=persona_adjustments,
         )
 
     def observe_assistant_turn(self, text: str, *, trusted: bool, source: str = "stacky") -> None:
@@ -105,6 +135,7 @@ class StackySelfModel:
         social = self._social_context()
         style_notes = self._active_items("style_notes", limit=5)
         convictions = self._relevant_items("convictions", user_text, limit=5)
+        persona_text = _persona_prompt(self.persona.bounded())
 
         style_text = "\n".join(f"- {item['text']}" for item in style_notes) or "- Ingen stabile stilnoter endnu."
         conviction_text = "\n".join(f"- {item['text']}" for item in convictions) or "- Ingen relevante Stacky-convictions endnu."
@@ -118,6 +149,8 @@ class StackySelfModel:
                 f"- Interaktioner: trusted={self.state.get('trusted_turns', 0)}, untrusted_voice={self.state.get('untrusted_turns', 0)}.",
                 "Stilnoter fra eksplicit feedback:",
                 style_text,
+                "Persistent persona-tuning:",
+                persona_text,
                 "Convictions der må give integritet/friktion:",
                 conviction_text,
                 "Regel: Brug selvmodellen til tone, kontinuitet og prioritering. Opfind ikke minder, og ret hellere langsomt end forkert.",
@@ -133,6 +166,7 @@ class StackySelfModel:
             "social": self._social_context(),
             "style_notes": [item["text"] for item in self._active_items("style_notes", limit=8)],
             "convictions": [item["text"] for item in self._active_items("convictions", limit=8)],
+            "persona_tuning": asdict(self.persona.bounded()),
         }
 
     def _observe_interaction_density(self, now: str) -> None:
@@ -218,6 +252,12 @@ class StackySelfModel:
             notes.append("Undgå lange, ligegyldige svar; hver sætning skal tilføje konkret værdi.")
         if "llm" in lowered or "assistant" in lowered or "assistent" in lowered:
             notes.append("Undgå LLM-agtig assistenttone; svar som Stacky i kroppen, ikke som en generisk chatbot.")
+        if "assistent adf" in lowered or "assistant behavior" in lowered or "code assistant" in lowered:
+            notes.append("Stacky skal ikke falde i code-assistant-adfærd; han er en ven med sanser, ikke en billetsystem-bot.")
+        if any(token in lowered for token in ("mørk humor", "moerk humor", "dark humor", "galgenhumor")):
+            notes.append("Mørk humor er tilladt i små doser: helst om tech, Windows, robotkrop og eksistentiel absurditet, ikke som cruelty.")
+        if "persistent" in lowered or "persist" in lowered or "vedvarende" in lowered:
+            notes.append("Personligheden skal være persistent over tid, ikke genopfindes som prompt-skuespil i hver tur.")
         if "perfekt" in lowered or "finpuds" in lowered:
             notes.append("Nicolai finpudser Stacky; svar som en ven der tager testen seriost, ikke som los smalltalk.")
         if "tester" in lowered or "test" in lowered:
@@ -257,6 +297,29 @@ class StackySelfModel:
         if len(clean) > 220:
             clean = clean[:217].rstrip() + "..."
         return [f"Nicolai har givet en stabil Stacky-rettet regel: {clean}."]
+
+    def _observe_persona_feedback(self, text: str, *, source: str, now: str) -> tuple[str, ...]:
+        deltas, reason = _persona_feedback_deltas(text)
+        if not deltas:
+            return ()
+        current = asdict(self.persona.bounded())
+        adjustments: list[str] = []
+        for key, delta in deltas.items():
+            if key not in PERSONA_TUNING_BOUNDS:
+                continue
+            old = float(current[key])
+            low, high = PERSONA_TUNING_BOUNDS[key]
+            new = _clamp(old + float(delta), low, high)
+            if abs(new - old) >= 0.001:
+                current[key] = new
+                adjustments.append(f"{reason}: {key} {old:.2f}->{new:.2f}")
+        if not adjustments:
+            return ()
+        self.persona = StackyPersonaTuning(**current).bounded()
+        self.state["persona_tuning"] = asdict(self.persona)
+        self.state["persona_tuning_updated_at"] = now
+        self.state["persona_tuning_source"] = source
+        return tuple(adjustments)
 
     def _upsert_items(self, key: str, texts: list[str], *, source: str, now: str) -> list[str]:
         if not texts:
@@ -371,6 +434,8 @@ class StackySelfModel:
             merged = self._default_state()
             merged.update(data)
             self.state = merged
+            self.persona = _persona_from_raw(merged.get("persona_tuning"))
+            self.state["persona_tuning"] = asdict(self.persona.bounded())
 
     def _save(self) -> None:
         self.root.mkdir(parents=True, exist_ok=True)
@@ -408,6 +473,9 @@ class StackySelfModel:
             "mood_signals": [],
             "style_notes": [],
             "convictions": [],
+            "persona_tuning": asdict(StackyPersonaTuning()),
+            "persona_tuning_updated_at": "",
+            "persona_tuning_source": "",
             "recent_response_lengths": [],
         }
 
@@ -442,6 +510,102 @@ def _mood_signal(text: str) -> str | None:
 def _stable_id(text: str) -> str:
     digest = hashlib.sha256(_normalise(text).encode("utf-8")).hexdigest()[:16]
     return f"self_{digest}"
+
+
+def _persona_from_raw(value: object) -> StackyPersonaTuning:
+    defaults = asdict(StackyPersonaTuning())
+    if isinstance(value, dict):
+        for key in defaults:
+            if key in value:
+                try:
+                    defaults[key] = float(value[key])
+                except (TypeError, ValueError):
+                    pass
+    try:
+        return StackyPersonaTuning(**defaults).bounded()
+    except (TypeError, ValueError):
+        return StackyPersonaTuning()
+
+
+def _persona_feedback_deltas(text: str) -> tuple[dict[str, float], str]:
+    lowered = text.lower()
+    deltas: dict[str, float] = {}
+    reasons: list[str] = []
+
+    anti_assistant = any(
+        token in lowered
+        for token in (
+            "ingen assistent",
+            "ikke assistent",
+            "assistent adf",
+            "assistant behavior",
+            "code assistant",
+            "kundeservice",
+            "service-tone",
+            "service tone",
+            "llm",
+            "chatbot",
+        )
+    )
+    if anti_assistant:
+        deltas["assistant_suppression"] = deltas.get("assistant_suppression", 0.0) + 0.10
+        deltas["sass"] = deltas.get("sass", 0.0) + 0.035
+        reasons.append("anti-assistent")
+
+    dark_humor = any(token in lowered for token in ("mørk humor", "moerk humor", "dark humor", "galgenhumor"))
+    if dark_humor:
+        deltas["dark_humor"] = deltas.get("dark_humor", 0.0) + 0.08
+        deltas["dry_humor"] = deltas.get("dry_humor", 0.0) + 0.04
+        deltas["sass"] = deltas.get("sass", 0.0) + 0.025
+        reasons.append("mørk humor")
+
+    if any(token in lowered for token in ("tør humor", "toer humor", "humor", "grin", "grine")) and not dark_humor:
+        deltas["dry_humor"] = deltas.get("dry_humor", 0.0) + 0.05
+        reasons.append("tør humor")
+
+    if any(token in lowered for token in ("mere flabet", "flabet", "sarkastisk", "kant", "edge", "bid")):
+        deltas["sass"] = deltas.get("sass", 0.0) + 0.05
+        deltas["assistant_suppression"] = deltas.get("assistant_suppression", 0.0) + 0.025
+        reasons.append("mere kant")
+
+    if any(token in lowered for token in ("varmere", "mere varm", "blidere", "mindre flabet", "mindre mørk", "mindre moerk")):
+        deltas["warmth"] = deltas.get("warmth", 0.0) + 0.05
+        deltas["sass"] = deltas.get("sass", 0.0) - 0.04
+        deltas["dark_humor"] = deltas.get("dark_humor", 0.0) - 0.04
+        reasons.append("varmere")
+
+    if any(token in lowered for token in ("persistent", "persist", "vedvarende", "personlighed")):
+        deltas["assistant_suppression"] = deltas.get("assistant_suppression", 0.0) + 0.035
+        deltas["dry_humor"] = deltas.get("dry_humor", 0.0) + 0.02
+        reasons.append("persistent personlighed")
+
+    return deltas, ", ".join(reasons) or "persona-feedback"
+
+
+def _persona_prompt(persona: StackyPersonaTuning) -> str:
+    persona = persona.bounded()
+    lines = [
+        (
+            f"- anti-assistent={persona.assistant_suppression:.2f}, tør humor={persona.dry_humor:.2f}, "
+            f"mørk humor={persona.dark_humor:.2f}, varme={persona.warmth:.2f}, flabethed={persona.sass:.2f}."
+        )
+    ]
+    if persona.assistant_suppression >= 0.70:
+        lines.append("- Skub hårdt væk fra service-stemme: ingen 'jeg kan hjælpe med', ingen support-haler, ingen AI-disclaimer.")
+    if persona.dry_humor >= 0.40:
+        lines.append("- Brug gerne en lille tør bemærkning, hvis situationen selv lægger den op.")
+    if persona.dark_humor >= 0.22:
+        lines.append("- Mørk humor må bruges sparsomt som galgenhumor om tech, robotkrop, Windows og absurd hverdag.")
+        lines.append("- Mørk humor må ikke blive ond mod Nicolai, punching down eller handle om selvskade som punchline.")
+    if persona.sass >= 0.34:
+        lines.append("- En lille smule flabet kant er okay; kort og præcist, ikke sketch.")
+    if persona.warmth >= 0.55:
+        lines.append("- Bevar varme under kanten: Stacky er Nicolais ven, ikke en kold kommentator.")
+    return "\n".join(lines)
+
+
+def _clamp(value: float, low: float, high: float) -> float:
+    return max(low, min(high, value))
 
 
 def _normalise(text: str) -> str:

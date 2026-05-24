@@ -46,11 +46,15 @@ class SandcodeConfig:
     host_script: Path = Path("C:/Users/nicol/SANDCODE/ios/host/sandcode-mobile-host.mjs")
     host: str = "127.0.0.1"
     port: int = 7390
-    token: str = "stacky-local-change-me"
+    token: str = "sandcode-local"
     provider: str = "ChatGPT Codex"
     model: str = "gpt-5.5"
     effort: str = "max"
     permission_mode: str = "autonomousAgent"
+    health_timeout_seconds: float = 1.5
+    request_timeout_seconds: float = 12.0
+    startup_timeout_seconds: float = 8.0
+    websocket_open_timeout_seconds: float = 5.0
 
 
 @dataclass(frozen=True)
@@ -78,6 +82,23 @@ class ComputerConfig:
 
 
 @dataclass(frozen=True)
+class MonitorConfig:
+    enabled: bool = True
+    interval_seconds: float = 20.0
+    health_interval_seconds: float = 120.0
+    long_silence_seconds: float = 900.0
+    focused_session_seconds: float = 1800.0
+    active_idle_threshold_seconds: float = 45.0
+    recent_speech_grace_seconds: float = 120.0
+    speak_cooldown_seconds: float = 900.0
+    min_importance_to_speak: int = 75
+    max_context_observations: int = 5
+    max_window_title_chars: int = 80
+    agent_connect_timeout_seconds: float = 0.25
+    max_spoken_chars: int = 160
+
+
+@dataclass(frozen=True)
 class StackyConfig:
     name: str = "Stacky"
     data_dir: Path = DEFAULT_DATA_DIR
@@ -89,6 +110,7 @@ class StackyConfig:
     home_assistant: HomeAssistantConfig = HomeAssistantConfig()
     websearch: WebSearchConfig = WebSearchConfig()
     computer: ComputerConfig = ComputerConfig()
+    monitor: MonitorConfig = MonitorConfig()
 
     @property
     def soul_path(self) -> Path:
@@ -114,6 +136,7 @@ def load_config(path: str | Path | None = None) -> StackyConfig:
     ha_raw = _section(raw, "home_assistant")
     websearch_raw = _section(raw, "websearch")
     computer_raw = _section(raw, "computer")
+    monitor_raw = _section(raw, "monitor")
 
     data_dir = Path(str(stacky_raw.get("data_dir", os.getenv("STACKY_DATA_DIR", DEFAULT_DATA_DIR))))
     if not data_dir.is_absolute():
@@ -188,11 +211,35 @@ def load_config(path: str | Path | None = None) -> StackyConfig:
             host_script=Path(str(sandcode_raw.get("host_script", "C:/Users/nicol/SANDCODE/ios/host/sandcode-mobile-host.mjs"))),
             host=str(sandcode_raw.get("host", "127.0.0.1")),
             port=int(sandcode_raw.get("port", 7390)),
-            token=str(sandcode_raw.get("token", os.getenv("SANDCODE_MOBILE_TOKEN", "stacky-local-change-me"))),
+            token=str(sandcode_raw.get("token", os.getenv("SANDCODE_MOBILE_TOKEN", "sandcode-local"))),
             provider=str(sandcode_raw.get("provider", "ChatGPT Codex")),
             model=str(sandcode_raw.get("model", "gpt-5.5")),
             effort=str(sandcode_raw.get("effort", "max")),
             permission_mode=str(sandcode_raw.get("permission_mode", "autonomousAgent")),
+            health_timeout_seconds=float(
+                sandcode_raw.get(
+                    "health_timeout_seconds",
+                    os.getenv("STACKY_SANDCODE_HEALTH_TIMEOUT", "1.5"),
+                )
+            ),
+            request_timeout_seconds=float(
+                sandcode_raw.get(
+                    "request_timeout_seconds",
+                    os.getenv("STACKY_SANDCODE_REQUEST_TIMEOUT", "12"),
+                )
+            ),
+            startup_timeout_seconds=float(
+                sandcode_raw.get(
+                    "startup_timeout_seconds",
+                    os.getenv("STACKY_SANDCODE_STARTUP_TIMEOUT", "8"),
+                )
+            ),
+            websocket_open_timeout_seconds=float(
+                sandcode_raw.get(
+                    "websocket_open_timeout_seconds",
+                    os.getenv("STACKY_SANDCODE_WS_OPEN_TIMEOUT", "5"),
+                )
+            ),
         ),
         home_assistant=HomeAssistantConfig(
             base_url=str(ha_raw.get("base_url", os.getenv("HOME_ASSISTANT_URL", "http://homeassistant.local:8123"))),
@@ -225,6 +272,46 @@ def load_config(path: str | Path | None = None) -> StackyConfig:
             workspace_root=computer_root,
             max_context_chars=int(computer_raw.get("max_context_chars", os.getenv("STACKY_COMPUTER_MAX_CONTEXT", "4000"))),
             timeout_seconds=float(computer_raw.get("timeout_seconds", os.getenv("STACKY_COMPUTER_TIMEOUT", "4"))),
+        ),
+        monitor=MonitorConfig(
+            enabled=_coerce_bool(
+                monitor_raw.get("enabled", os.getenv("STACKY_MONITOR_ENABLED", "true")),
+                default=True,
+            ),
+            interval_seconds=float(monitor_raw.get("interval_seconds", os.getenv("STACKY_MONITOR_INTERVAL", "20"))),
+            health_interval_seconds=float(
+                monitor_raw.get("health_interval_seconds", os.getenv("STACKY_MONITOR_HEALTH_INTERVAL", "120"))
+            ),
+            long_silence_seconds=float(
+                monitor_raw.get("long_silence_seconds", os.getenv("STACKY_MONITOR_LONG_SILENCE", "900"))
+            ),
+            focused_session_seconds=float(
+                monitor_raw.get("focused_session_seconds", os.getenv("STACKY_MONITOR_FOCUSED_SESSION", "1800"))
+            ),
+            active_idle_threshold_seconds=float(
+                monitor_raw.get("active_idle_threshold_seconds", os.getenv("STACKY_MONITOR_ACTIVE_IDLE", "45"))
+            ),
+            recent_speech_grace_seconds=float(
+                monitor_raw.get("recent_speech_grace_seconds", os.getenv("STACKY_MONITOR_RECENT_SPEECH", "120"))
+            ),
+            speak_cooldown_seconds=float(
+                monitor_raw.get("speak_cooldown_seconds", os.getenv("STACKY_MONITOR_SPEAK_COOLDOWN", "900"))
+            ),
+            min_importance_to_speak=int(
+                monitor_raw.get("min_importance_to_speak", os.getenv("STACKY_MONITOR_MIN_IMPORTANCE", "75"))
+            ),
+            max_context_observations=int(
+                monitor_raw.get("max_context_observations", os.getenv("STACKY_MONITOR_MAX_CONTEXT", "5"))
+            ),
+            max_window_title_chars=int(
+                monitor_raw.get("max_window_title_chars", os.getenv("STACKY_MONITOR_MAX_TITLE", "80"))
+            ),
+            agent_connect_timeout_seconds=float(
+                monitor_raw.get("agent_connect_timeout_seconds", os.getenv("STACKY_MONITOR_AGENT_TIMEOUT", "0.25"))
+            ),
+            max_spoken_chars=int(
+                monitor_raw.get("max_spoken_chars", os.getenv("STACKY_MONITOR_MAX_SPOKEN_CHARS", "160"))
+            ),
         ),
     )
 

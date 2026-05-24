@@ -486,7 +486,9 @@ def _feedback_deltas(text: str) -> tuple[dict[str, float], str]:
         _add_delta(deltas, "body_motion_energy", 0.020)
         _add_delta(deltas, "proactive_threshold", -0.025)
         reasons.append("mere kant/personlighed")
-    if not less_humor and any(token in lowered for token in ("humor", "grin", "grine", "dril", "tør", "toer")):
+    if not less_humor and any(
+        token in lowered for token in ("humor", "grin", "grine", "dril", "tør", "toer", "mørk", "moerk", "dark", "galgenhumor")
+    ):
         _add_delta(deltas, "humor_frequency", 0.045)
         reasons.append("mere tør humor")
     if any(token in lowered for token in ("generisk", "hvad har du på hjerte", "hvad har du paa hjerte", "kundeservice")):
