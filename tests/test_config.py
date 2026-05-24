@@ -17,6 +17,7 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(config.voice.tts_engine, "supertonic")
         self.assertTrue(config.websearch.enabled)
         self.assertEqual(config.websearch.provider, "duckduckgo_lite")
+        self.assertTrue(config.websearch.allow_insecure_tls_fallback)
         self.assertTrue(config.computer.enabled)
 
     def test_gemini_provider_uses_gemini_env_over_lmstudio_config(self) -> None:
@@ -53,6 +54,18 @@ class ConfigTest(unittest.TestCase):
                 config = load_config(config_path)
 
         self.assertFalse(config.websearch.enabled)
+
+    def test_websearch_tls_fallback_can_be_disabled_by_env(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "stacky.toml"
+            with patch.dict(
+                "os.environ",
+                {"STACKY_WEBSEARCH_ALLOW_INSECURE_TLS_FALLBACK": "false"},
+                clear=False,
+            ):
+                config = load_config(config_path)
+
+        self.assertFalse(config.websearch.allow_insecure_tls_fallback)
 
     def test_computer_context_can_be_disabled_by_env(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

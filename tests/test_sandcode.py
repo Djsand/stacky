@@ -59,6 +59,26 @@ class SandcodeTest(unittest.IsolatedAsyncioTestCase):
         assert action is not None
         self.assertEqual(action.prompt, "rette testen")
 
+    def test_parse_sandcode_action_accepts_agent_aliases_without_vague_trigger(self) -> None:
+        self.assertIsNone(parse_sandcode_action("agent skills halter stadig"))
+
+        action = parse_sandcode_action("brug agenten til at fikse web search")
+        self.assertIsNotNone(action)
+        assert action is not None
+        self.assertEqual(action.prompt, "fikse web search")
+
+        codex_action = parse_sandcode_action("codex agent skal rette testen")
+        self.assertIsNotNone(codex_action)
+        assert codex_action is not None
+        self.assertEqual(codex_action.prompt, "rette testen")
+
+    def test_parse_sandcode_action_accepts_agent_cancel_alias(self) -> None:
+        action = parse_sandcode_action("stop agenten")
+
+        self.assertIsNotNone(action)
+        assert action is not None
+        self.assertEqual(action.prompt, "__cancel__")
+
     async def test_summarizer_speaks_danish_status(self) -> None:
         summarizer = SandcodeDanishSummarizer()
         spoken = summarizer.summarize_event(

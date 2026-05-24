@@ -9,12 +9,23 @@ import socket
 import subprocess
 import sys
 import time
+import unicodedata
 import wave
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
-from slugify import slugify
+
+try:
+    from slugify import slugify
+except ModuleNotFoundError:
+
+    def slugify(value: object, *, max_length: int = 0) -> str:
+        normalized = unicodedata.normalize("NFKD", str(value))
+        ascii_text = normalized.encode("ascii", "ignore").decode("ascii").lower()
+        slug = re.sub(r"[^a-z0-9]+", "-", ascii_text).strip("-")
+        slug = re.sub(r"-{2,}", "-", slug) or "stacky"
+        return slug[:max_length].strip("-") if max_length > 0 else slug
 
 from .brain import StackyBrain
 from .body.calibration import BodyCalibration, load_body_calibration, save_body_calibration
@@ -1119,7 +1130,10 @@ def _create_web_search_client(config, *, enabled_override: bool | None = None) -
         return None
     provider = config.websearch.provider.strip().lower()
     if provider in {"duckduckgo_lite", "duckduckgo-lite", "ddg_lite", "ddg"}:
-        return DuckDuckGoLiteSearch(timeout_seconds=config.websearch.timeout_seconds)
+        return DuckDuckGoLiteSearch(
+            timeout_seconds=config.websearch.timeout_seconds,
+            allow_insecure_tls_fallback=config.websearch.allow_insecure_tls_fallback,
+        )
     raise ValueError(f"Ukendt websearch-provider: {config.websearch.provider}")
 
 
@@ -2251,7 +2265,7 @@ async def _handsfree(
                     set_body_state("listening")
                     accepting_audio = True
                     continue
-                lead_reply = "Jeg starter Sandcode på Stacky-projektet."
+                lead_reply = "Jeg sætter agenten i gang."
                 record_local_turn(text, f"{lead_reply} Opgave: {sandcode_action.prompt}")
                 await output.speak(lead_reply)
                 await output.wait()

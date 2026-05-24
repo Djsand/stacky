@@ -3,6 +3,7 @@ from __future__ import annotations
 import html
 import json
 import re
+import ssl
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -48,10 +49,13 @@ class DuckDuckGoLiteSearch:
         timeout_seconds: float = 8.0,
         opener: UrlOpen | None = None,
         user_agent: str = "Stacky/0.1 local websearch",
+        allow_insecure_tls_fallback: bool = True,
     ) -> None:
         self.timeout_seconds = timeout_seconds
         self.opener = opener or urllib.request.urlopen
+        self._custom_opener = opener is not None
         self.user_agent = user_agent
+        self.allow_insecure_tls_fallback = allow_insecure_tls_fallback
 
     def search(self, query: str, *, max_results: int = 3) -> tuple[WebSearchResult, ...]:
         clean_query = " ".join(query.split())
@@ -64,18 +68,41 @@ class DuckDuckGoLiteSearch:
             method="GET",
         )
         try:
-            response = self.opener(request, timeout=self.timeout_seconds)
-            with response:  # type: ignore[attr-defined]
-                body = response.read().decode("utf-8", errors="replace")  # type: ignore[attr-defined]
+            body = self._read_response(request)
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="replace")[:240]
             raise WebSearchError(f"DuckDuckGo HTTP {exc.code}: {detail}") from exc
+        except urllib.error.URLError as exc:
+            if self._can_retry_without_tls_verification(exc):
+                try:
+                    body = self._read_response(request, ssl_context=ssl._create_unverified_context())
+                except urllib.error.HTTPError as fallback_exc:
+                    detail = fallback_exc.read().decode("utf-8", errors="replace")[:240]
+                    raise WebSearchError(f"DuckDuckGo HTTP {fallback_exc.code}: {detail}") from fallback_exc
+                except OSError as fallback_exc:
+                    raise WebSearchError(f"DuckDuckGo connection failed: {fallback_exc}") from fallback_exc
+            else:
+                raise WebSearchError(f"DuckDuckGo connection failed: {exc}") from exc
         except OSError as exc:
             raise WebSearchError(f"DuckDuckGo connection failed: {exc}") from exc
 
         parser = DuckDuckGoLiteParser()
         parser.feed(body)
         return tuple(parser.results[: max(0, max_results)])
+
+    def _read_response(self, request: urllib.request.Request, *, ssl_context: ssl.SSLContext | None = None) -> str:
+        if ssl_context is None or self._custom_opener:
+            response = self.opener(request, timeout=self.timeout_seconds)
+        else:
+            response = urllib.request.urlopen(request, timeout=self.timeout_seconds, context=ssl_context)
+        with response:  # type: ignore[attr-defined]
+            return response.read().decode("utf-8", errors="replace")  # type: ignore[attr-defined]
+
+    def _can_retry_without_tls_verification(self, exc: urllib.error.URLError) -> bool:
+        if self._custom_opener or not self.allow_insecure_tls_fallback:
+            return False
+        reason = getattr(exc, "reason", exc)
+        return isinstance(reason, ssl.SSLError) or "CERTIFICATE_VERIFY_FAILED" in str(exc)
 
 
 class DuckDuckGoLiteParser(HTMLParser):

@@ -103,7 +103,7 @@ Stacky's personality/self-development layer stores persistent style notes, convi
 .\.venv\Scripts\python.exe -m stacky self-status
 ```
 
-Web search is planned as an early Stacky feature, but it is not active in runtime yet. Until that provider/router exists, Stacky should not claim that it has searched the web.
+Web search is active for explicit requests such as "søg på nettet efter ...", "slå op ...", and current-info questions that the ability router classifies as needing fresh internet context. Stacky should only claim web search when runtime sends `Web search-kontekst` into the turn. The default provider is DuckDuckGo Lite; if the local Python install hits a proxy/self-signed certificate chain, Stacky retries that search with the configured TLS fallback and still refuses to invent fresh facts when search fails.
 
 ## Danish STT Dataset Loop
 

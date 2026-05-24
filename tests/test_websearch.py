@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import ssl
 import unittest
+import urllib.error
 import urllib.request
+from unittest.mock import patch
 
 from stacky.llm import ChatMessage
 from stacky.websearch import (
@@ -100,6 +103,38 @@ class WebSearchTest(unittest.IsolatedAsyncioTestCase):
                 WebSearchResult("First & result", "https://example.com/one", "Short snippet here."),
                 WebSearchResult("Second result", "https://example.org/two", "Another snippet."),
             ),
+        )
+
+    def test_duckduckgo_retries_certificate_error_with_tls_fallback(self) -> None:
+        html = """
+        <html><body>
+          <a class="result-link" href="https://example.com/one">Fallback result</a>
+          <td class="result-snippet">Fetched after TLS fallback.</td>
+        </body></html>
+        """
+        contexts: list[ssl.SSLContext | None] = []
+
+        def fake_urlopen(
+            request: urllib.request.Request,
+            *,
+            timeout: float,
+            context: ssl.SSLContext | None = None,
+        ) -> FakeResponse:
+            contexts.append(context)
+            if context is None:
+                raise urllib.error.URLError(ssl.SSLCertVerificationError("CERTIFICATE_VERIFY_FAILED"))
+            self.assertEqual(timeout, 2.0)
+            return FakeResponse(html)
+
+        with patch("urllib.request.urlopen", fake_urlopen):
+            client = DuckDuckGoLiteSearch(timeout_seconds=2.0)
+            results = client.search("stacky", max_results=1)
+
+        self.assertIsNone(contexts[0])
+        self.assertIsNotNone(contexts[1])
+        self.assertEqual(
+            results,
+            (WebSearchResult("Fallback result", "https://example.com/one", "Fetched after TLS fallback."),),
         )
 
     def test_format_web_search_context_keeps_sources_compact(self) -> None:

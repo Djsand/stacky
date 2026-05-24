@@ -231,14 +231,14 @@ class SandcodeDanishSummarizer:
 def parse_sandcode_action(text: str) -> SandcodeAction | None:
     """Parse explicit Danish Sandcode requests.
 
-    The word "sandcode" is required on purpose. Stacky should not start a
-    coding agent from vague speech or noisy STT fragments.
+    The request must still be explicit. Stacky should not start a coding agent
+    from vague speech or noisy STT fragments.
     """
 
     normalized = _normalize_for_intent(text)
-    if "sandcode" not in normalized:
+    if not _looks_like_sandcode_request(normalized):
         return None
-    if any(phrase in normalized for phrase in ("stop sandcode", "afbryd sandcode", "annuller sandcode")):
+    if _wants_cancel_sandcode(normalized):
         return SandcodeAction(prompt="__cancel__")
 
     chat_only = any(phrase in normalized for phrase in ("chat only", "kun chat", "uden tools", "uden vaerktoejer"))
@@ -252,7 +252,7 @@ def _extract_sandcode_prompt(text: str) -> str:
     clean = text.strip()
     if not clean:
         return ""
-    clean = re.sub(r"(?i)\bsand\s+(?:code|kode)\b", "sandcode", clean)
+    clean = _canonicalize_sandcode_aliases(clean)
     patterns = (
         r"(?i)^\s*(?:brug|start|k[øo]r|bed|s[æa]t|lad|send)\s+sandcode\s+(?:til\s+at|om\s+at|på|paa|med)?\s*(.+)$",
         r"(?i)^\s*sandcode\s+(?:skal|må|maa|kan|til\s+at|om\s+at)?\s*(.+)$",
@@ -272,6 +272,34 @@ def _cleanup_prompt(prompt: str) -> str:
     prompt = re.sub(r"(?i)\b(kun chat|chat only|uden tools|uden v[æa]rkt[øo]jer)\b", "", prompt)
     prompt = re.sub(r"\s+", " ", prompt).strip(" .,:;-")
     return prompt
+
+
+def _looks_like_sandcode_request(normalized: str) -> bool:
+    if "sandcode" in normalized:
+        return True
+    agent_alias = r"(?:kodeagenten?|kodningsagenten?|codex(?:\s*agent)?|agenten?|agent)"
+    if re.search(rf"\b(?:stop|afbryd|annuller)\s+(?:den\s+)?{agent_alias}\b", normalized):
+        return True
+    command = r"(?:brug|start|koer|kor|bed|saet|send|lad)"
+    if re.search(rf"\b{command}\s+(?:den\s+)?{agent_alias}\b", normalized):
+        return True
+    return bool(re.search(rf"\b{agent_alias}\s+(?:skal|maa|ma|kan|til\s+at|om\s+at)\b", normalized))
+
+
+def _wants_cancel_sandcode(normalized: str) -> bool:
+    if any(phrase in normalized for phrase in ("stop sandcode", "afbryd sandcode", "annuller sandcode")):
+        return True
+    agent_alias = r"(?:kodeagenten?|kodningsagenten?|codex(?:\s*agent)?|agenten?|agent)"
+    return bool(re.search(rf"\b(?:stop|afbryd|annuller)\s+(?:den\s+)?{agent_alias}\b", normalized))
+
+
+def _canonicalize_sandcode_aliases(text: str) -> str:
+    clean = re.sub(r"(?i)\bsand\s+(?:code|kode)\b", "sandcode", text)
+    return re.sub(
+        r"(?i)\b(?:kodeagent(?:en)?|kodningsagent(?:en)?|codex(?:\s*agent)?|agenten|agent)\b",
+        "sandcode",
+        clean,
+    )
 
 
 def _normalize_for_intent(text: str) -> str:

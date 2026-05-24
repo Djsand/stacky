@@ -46,6 +46,7 @@ enabled = true
 provider = "duckduckgo_lite"
 max_results = 3
 timeout_seconds = 8
+allow_insecure_tls_fallback = true
 
 [computer]
 enabled = true

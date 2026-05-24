@@ -66,6 +66,7 @@ class WebSearchConfig:
     provider: str = "duckduckgo_lite"
     max_results: int = 3
     timeout_seconds: float = 8.0
+    allow_insecure_tls_fallback: bool = True
 
 
 @dataclass(frozen=True)
@@ -207,6 +208,13 @@ def load_config(path: str | Path | None = None) -> StackyConfig:
             max_results=int(websearch_raw.get("max_results", os.getenv("STACKY_WEBSEARCH_MAX_RESULTS", "3"))),
             timeout_seconds=float(
                 websearch_raw.get("timeout_seconds", os.getenv("STACKY_WEBSEARCH_TIMEOUT", "8"))
+            ),
+            allow_insecure_tls_fallback=_coerce_bool(
+                websearch_raw.get(
+                    "allow_insecure_tls_fallback",
+                    os.getenv("STACKY_WEBSEARCH_ALLOW_INSECURE_TLS_FALLBACK", "true"),
+                ),
+                default=True,
             ),
         ),
         computer=ComputerConfig(
