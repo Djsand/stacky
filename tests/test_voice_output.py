@@ -90,20 +90,6 @@ class VoiceOutputTest(unittest.IsolatedAsyncioTestCase):
         await output.wait()
         self.assertIsNone(output._task)
 
-    async def test_piper_output_normalizes_question_mark_before_logging_and_speech(self) -> None:
-        output = PiperSpeechOutput(FakeTTS())
-        seen: list[str] = []
-
-        async def fake_speak_chunks(text: str, utterance_id: int) -> None:
-            seen.append(text)
-
-        output._speak_chunks = fake_speak_chunks  # type: ignore[method-assign]
-
-        await output.speak("Har du haft en god dag?")
-        await output.wait()
-
-        self.assertEqual(seen, ["Har du haft en god dag spørgsmål"])
-
     async def test_stop_cancels_playback_task(self) -> None:
         output = PiperSpeechOutput(FakeTTS())
         started = asyncio.Event()
@@ -183,21 +169,6 @@ class VoiceOutputTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(len(controller.audio_calls), 1)
         self.assertEqual(controller.hold_states, [True, False])
-
-    async def test_stackchan_output_normalizes_question_mark_before_speech(self) -> None:
-        controller = FakeController()
-        output = StackChanSpeechOutput(FakeTTS(), controller)  # type: ignore[arg-type]
-        seen: list[str] = []
-
-        async def fake_speak_chunks(text: str, utterance_id: int) -> None:
-            seen.append(text)
-
-        output._speak_chunks = fake_speak_chunks  # type: ignore[method-assign]
-
-        await output.speak("Hvad tænker du?")
-        await output.wait()
-
-        self.assertEqual(seen, ["Hvad tænker du spørgsmål"])
 
     async def test_stackchan_wait_absorbs_playback_task_error(self) -> None:
         output = StackChanSpeechOutput(FakeTTS(), FakeController())  # type: ignore[arg-type]

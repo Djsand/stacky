@@ -13,7 +13,6 @@ from typing import Protocol
 
 from ..body.controller import StackChanBodyController
 from ..config import ROOT
-from ..danish import add_spoken_question_markers
 from .piper_tts import FastPiperTTS, ensure_danish_piper_voice
 from .speech_adapter import split_for_speech
 from .supertonic_tts import SupertonicTTS, SupertonicVoice
@@ -51,7 +50,6 @@ class PiperSpeechOutput:
 
     async def speak(self, text: str) -> None:
         await self.stop()
-        text = add_spoken_question_markers(text)
         print(f"Stacky: {text}", flush=True)
         self._utterance_id += 1
         utterance_id = self._utterance_id
@@ -161,7 +159,6 @@ class StackChanSpeechOutput:
     async def speak(self, text: str) -> None:
         await self.stop()
         self._stop_requested.clear()
-        text = add_spoken_question_markers(text)
         print(f"Stacky: {text}", flush=True)
         self._utterance_id += 1
         utterance_id = self._utterance_id
