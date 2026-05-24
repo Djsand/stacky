@@ -15,6 +15,9 @@ class ConfigTest(unittest.TestCase):
             config = load_config(config_path)
 
         self.assertEqual(config.voice.tts_engine, "piper")
+        self.assertTrue(config.websearch.enabled)
+        self.assertEqual(config.websearch.provider, "duckduckgo_lite")
+        self.assertTrue(config.computer.enabled)
 
     def test_gemini_provider_uses_gemini_env_over_lmstudio_config(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -42,6 +45,22 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(config.lmstudio.api_key, "gemini-key")
         self.assertEqual(config.lmstudio.model, "gemini-3.1-flash-lite-preview")
         self.assertEqual(config.lmstudio.base_url, "https://generativelanguage.googleapis.com/v1beta")
+
+    def test_websearch_can_be_disabled_by_env(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "stacky.toml"
+            with patch.dict("os.environ", {"STACKY_WEBSEARCH_ENABLED": "false"}, clear=False):
+                config = load_config(config_path)
+
+        self.assertFalse(config.websearch.enabled)
+
+    def test_computer_context_can_be_disabled_by_env(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "stacky.toml"
+            with patch.dict("os.environ", {"STACKY_COMPUTER_ENABLED": "false"}, clear=False):
+                config = load_config(config_path)
+
+        self.assertFalse(config.computer.enabled)
 
 
 if __name__ == "__main__":

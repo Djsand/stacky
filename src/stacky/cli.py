@@ -7,9 +7,10 @@ import re
 import shutil
 import socket
 import subprocess
+import sys
 import time
 import wave
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
@@ -20,12 +21,20 @@ from .body.calibration import BodyCalibration, load_body_calibration, save_body_
 from .body.controller import BodyPresence, StackChanBodyController
 from .body.director import BodyDirector
 from .body.protocol import decode_pcm_payload, decode_vision_frame_payload, expression
+from .computer import LocalComputerActions, LocalComputerContext, parse_local_computer_action
 from .config import DEFAULT_CONFIG_PATH, ROOT, load_config
+from .evolution import StackyEvolutionEngine
 from .llm import create_chat_client
 from .llm import ChatImageAttachment
 from .memory import MemoryStore
 from .personality import StackySelfModel
-from .sandcode import SandcodeMobileHostClient
+from .sandcode import (
+    SandcodeDanishSummarizer,
+    SandcodeError,
+    SandcodeMobileHostClient,
+    SandcodeSession,
+    parse_sandcode_action,
+)
 from .sessions import InfiniteSessionStore
 from .soul import load_soul, write_default_soul
 from .voice.output import (
@@ -52,6 +61,15 @@ from .voice.stt_eval import (
 from .voice.transcript_correction import correct_danish_transcript
 from .voice.turn_detection import EnergyTurnDetector, TurnSignalQuality, analyze_turn_signal, pcm16_rms
 from .vision import VisionSnapshot, VisionState, create_face_detector
+from .websearch import (
+    DuckDuckGoLiteSearch,
+    WebSearchClient,
+    WebSearchError,
+    classify_web_search_intent,
+    extract_web_search_query,
+    format_web_search_context,
+    wants_web_search,
+)
 from .voice.piper_tts import FastPiperTTS, ensure_danish_piper_voice, pitch_shift_wav
 from .voice.roest_tts import RoestTTS, roest_voice
 from .voice.speech_adapter import adapt_for_danish_speech
@@ -63,6 +81,10 @@ def main(argv: list[str] | None = None) -> int:
     sub = parser.add_subparsers(dest="command", required=False)
     sub.add_parser("init", help="Create fresh Stacky local state.")
     sub.add_parser("self-status", help="Show Stacky's local personality/self-model state.")
+    web_search = sub.add_parser("web-search", help="Run Stacky's configured web search once.")
+    web_search.add_argument("query", nargs="+", help="Search query.")
+    computer_context = sub.add_parser("computer-context", help="Show Stacky's local read-only computer context once.")
+    computer_context.add_argument("query", nargs="*", help="Optional Danish request/search text.")
     chat = sub.add_parser("chat", help="Run a Danish text-mode voice loop.")
     chat.add_argument("--speak", action="store_true", help="Speak replies through local low-latency Piper TTS.")
     live = sub.add_parser("live-text", help="Run Danish text chat while driving StackChan's face.")
@@ -107,8 +129,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     handsfree.add_argument(
         "--supertonic-profile",
-        choices=("stacky", "calm", "clear", "quick"),
-        default="quick",
+        choices=("stacky", "calm", "clear", "quick", "alive"),
+        default="alive",
         help="Supertonic tuning profile for Stacky's Danish voice.",
     )
     handsfree.add_argument("--supertonic-voice", default="", help="Override Supertonic voice style: F1-F5 or M1-M5.")
@@ -143,9 +165,21 @@ def main(argv: list[str] | None = None) -> int:
     handsfree.add_argument("--vision-interval", type=float, default=1.0, help="Seconds between idle camera captures.")
     handsfree.add_argument("--vision-prompt-timeout", type=float, default=0.8, help="Seconds to wait for a fresh prompt snapshot.")
     handsfree.add_argument(
+        "--websearch",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Enable explicit web search requests such as 'søg på nettet efter ...'.",
+    )
+    handsfree.add_argument(
+        "--computer",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Enable local read-only computer/code context for explicit terminal, grep, repo, or code requests.",
+    )
+    handsfree.add_argument(
         "--voice-trust",
         choices=("trusted", "session-only", "off"),
-        default="trusted",
+        default="session-only",
         help="How accepted StackChan voice turns are logged. trusted writes session + safe memories; session-only logs context; off keeps the old untrusted mode.",
     )
     stt_capture = sub.add_parser("stt-capture", help="Record labelled StackChan mic clips for Danish STT evaluation.")
@@ -221,6 +255,10 @@ def main(argv: list[str] | None = None) -> int:
         help="Limit sample count; 0 uses the engine default.",
     )
     sub.add_parser("sandcode-health", help="Start/check Sandcode mobile host.")
+    sandcode_run = sub.add_parser("sandcode-run", help="Start a Sandcode session for an explicit coding task.")
+    sandcode_run.add_argument("--cwd", default="", help="Project directory. Defaults to Stacky's configured workspace.")
+    sandcode_run.add_argument("--chat-only", action="store_true", help="Ask Sandcode without allowing tool use.")
+    sandcode_run.add_argument("prompt", nargs="+", help="Task prompt for Sandcode.")
     speaker_test = sub.add_parser("speaker-test", help="Play a short Danish test phrase through StackChan.")
     speaker_test.add_argument("--body-timeout", type=float, default=12.0, help="Seconds to wait for StackChan to connect.")
     speaker_test.add_argument(
@@ -232,8 +270,8 @@ def main(argv: list[str] | None = None) -> int:
     speaker_test.add_argument("--text", default="Hej Nicolai, jeg er her.", help="Danish phrase to speak.")
     speaker_test.add_argument(
         "--supertonic-profile",
-        choices=("stacky", "calm", "clear", "quick"),
-        default="quick",
+        choices=("stacky", "calm", "clear", "quick", "alive"),
+        default="alive",
         help="Supertonic tuning profile for Stacky's Danish voice.",
     )
     speaker_test.add_argument("--supertonic-voice", default="", help="Override Supertonic voice style: F1-F5 or M1-M5.")
@@ -286,6 +324,9 @@ def main(argv: list[str] | None = None) -> int:
         default=str(ROOT / "artifacts" / "vision" / "stackchan-latest.jpg"),
         help="Output JPEG path.",
     )
+    sensor_test = sub.add_parser("sensor-test", help="Read StackChan status and I2C sensor scan through the bridge.")
+    sensor_test.add_argument("--body-timeout", type=float, default=12.0, help="Seconds to wait for StackChan to connect.")
+    sensor_test.add_argument("--event-timeout", type=float, default=8.0, help="Seconds to wait for i2c.scan.")
     body = sub.add_parser("body-server", help="Run the StackChan body server.")
     body.add_argument("--duration", type=float, default=0.0, help="Stop after N seconds; 0 means run forever.")
     args = parser.parse_args(argv)
@@ -294,10 +335,28 @@ def main(argv: list[str] | None = None) -> int:
         return _init(args.config)
     if args.command == "self-status":
         return _self_status(args.config)
+    if args.command == "web-search":
+        return _run_async(_web_search_once(args.config, " ".join(args.query)))
+    if args.command == "computer-context":
+        query = " ".join(args.query) if args.query else "terminal status kode"
+        return _run_async(_computer_context_once(args.config, query))
     if args.command == "sandcode-health":
         return _run_async(_sandcode_health(args.config))
+    if args.command == "sandcode-run":
+        return _run_async(
+            _sandcode_run_once(
+                args.config,
+                " ".join(args.prompt),
+                cwd_arg=args.cwd,
+                chat_only=args.chat_only,
+            )
+        )
     if args.command == "body-server":
         return _body_server(args.config, duration=args.duration)
+    if args.command == "sensor-test":
+        return _run_async(
+            _sensor_test(args.config, body_timeout=args.body_timeout, event_timeout=args.event_timeout)
+        )
     if args.command == "speaker-test":
         return _run_async(
             _speaker_test(
@@ -387,6 +446,8 @@ def main(argv: list[str] | None = None) -> int:
                 face_tracking=args.face_tracking,
                 vision_interval=args.vision_interval,
                 vision_prompt_timeout=args.vision_prompt_timeout,
+                websearch=args.websearch,
+                computer=args.computer,
                 voice_trust=args.voice_trust,
                 listen_only=args.listen_only,
                 debug_audio=args.debug_audio,
@@ -438,6 +499,11 @@ def _run_async(coro) -> int:
         return asyncio.run(coro)
     except KeyboardInterrupt:
         return 0
+
+
+def _safe_console_text(text: str) -> str:
+    encoding = sys.stdout.encoding or "utf-8"
+    return text.encode(encoding, errors="replace").decode(encoding, errors="replace")
 
 
 _LOW_LATENCY_STT_SPECS = (("wav2vec2", "roest-v3"), ("wav2vec2", "roest-v2"))
@@ -1036,19 +1102,106 @@ def _create_brain(config) -> StackyBrain:
     soul = load_soul(config.soul_path)
     memory = MemoryStore(config.memory_path)
     self_model = StackySelfModel(config.data_dir)
+    evolution = StackyEvolutionEngine(config.data_dir)
     return StackyBrain(
         soul,
         memory,
         create_chat_client(config.lmstudio),
         InfiniteSessionStore(config.data_dir),
         self_model,
+        evolution,
     )
+
+
+def _create_web_search_client(config, *, enabled_override: bool | None = None) -> WebSearchClient | None:
+    enabled = config.websearch.enabled if enabled_override is None else enabled_override
+    if not enabled:
+        return None
+    provider = config.websearch.provider.strip().lower()
+    if provider in {"duckduckgo_lite", "duckduckgo-lite", "ddg_lite", "ddg"}:
+        return DuckDuckGoLiteSearch(timeout_seconds=config.websearch.timeout_seconds)
+    raise ValueError(f"Ukendt websearch-provider: {config.websearch.provider}")
+
+
+def _create_web_context_provider(config, *, enabled_override: bool | None = None, intent_brain=None):
+    client = _create_web_search_client(config, enabled_override=enabled_override)
+    max_results = config.websearch.max_results
+
+    async def provider(text: str) -> str:
+        return await _web_context_for_text(text, client, max_results=max_results, intent_brain=intent_brain)
+
+    return provider
+
+
+async def _web_context_for_text(
+    text: str,
+    client: WebSearchClient | None,
+    *,
+    max_results: int,
+    intent_brain=None,
+) -> str:
+    if client is None:
+        return ""
+    intent = await classify_web_search_intent(text, intent_brain)
+    if not intent.wants_search:
+        return ""
+    query = intent.query or extract_web_search_query(text)
+    if not query:
+        return format_web_search_context("", (), error="tom søgeforespørgsel")
+    try:
+        results = await asyncio.to_thread(lambda: client.search(query, max_results=max_results))
+    except WebSearchError as exc:
+        print(f"[web] search failed query={query!r}: {exc}", flush=True)
+        return format_web_search_context(query, (), error=str(exc))
+    print(f"[web] search query={query!r} results={len(results)}", flush=True)
+    return format_web_search_context(query, results)
+
+
+async def _web_search_once(config_path: str, query: str) -> int:
+    config = load_config(config_path)
+    client = _create_web_search_client(config, enabled_override=True)
+    context = await _web_context_for_text(
+        f"søg på nettet efter {query}",
+        client,
+        max_results=config.websearch.max_results,
+    )
+    print(_safe_console_text(context))
+    return 0
+
+
+def _create_computer_context_provider(config, *, enabled_override: bool | None = None):
+    enabled = config.computer.enabled if enabled_override is None else enabled_override
+    if not enabled:
+        return None
+    context = LocalComputerContext(
+        config.computer.workspace_root,
+        max_chars=config.computer.max_context_chars,
+        timeout_seconds=config.computer.timeout_seconds,
+    )
+
+    async def provider(text: str) -> str:
+        return await asyncio.to_thread(context.context_for, text)
+
+    return provider
+
+
+async def _computer_context_once(config_path: str, query: str) -> int:
+    config = load_config(config_path)
+    provider = _create_computer_context_provider(config, enabled_override=True)
+    if provider is None:
+        print("Computer-kontekst er slået fra.")
+        return 1
+    context = await provider(query)
+    print(_safe_console_text(context or "Ingen computer-kontekst for denne forespørgsel."))
+    return 0
 
 
 def _self_status(config_path: str) -> int:
     config = load_config(config_path)
     self_model = StackySelfModel(config.data_dir)
+    evolution = StackyEvolutionEngine(config.data_dir)
     summary = self_model.summary()
+    evolution_summary = evolution.summary()
     print(f"Stacky self-model: {summary['path']}")
     print(f"Trusted turns: {summary['trusted_turns']}")
     print(f"Untrusted voice turns: {summary['untrusted_turns']}")
@@ -1060,6 +1213,15 @@ def _self_status(config_path: str) -> int:
     print("Convictions:")
     for conviction in summary["convictions"] or ["Ingen endnu."]:
         print(f"- {conviction}")
+    print(f"Stacky evolution: {evolution_summary['path']}")
+    print(f"Assistant turns measured: {evolution_summary['assistant_turns']}")
+    print(f"Evolution observation: {evolution_summary['recent_summary']}")
+    print("Tunings:")
+    for key, value in evolution_summary["tuning"].items():
+        print(f"- {key}: {value:.2f}")
+    print("Evolution reflections:")
+    for reflection in evolution_summary["reflections"] or ["Ingen endnu."]:
+        print(f"- {reflection}")
     return 0
 
 
@@ -1116,14 +1278,23 @@ def _voice_lab_supertonic(phrases: list[str], *, play: bool) -> int:
 async def _chat(config_path: str, *, speak: bool = False) -> int:
     config = load_config(config_path)
     brain = _create_brain(config)
+    web_context_provider = _create_web_context_provider(config, intent_brain=brain.lmstudio)
+    computer_context_provider = _create_computer_context_provider(config)
     output = await _speech_output(speak)
-    await LocalTextVoiceRuntime(brain, output=output).interactive()
+    await LocalTextVoiceRuntime(
+        brain,
+        output=output,
+        web_context_provider=web_context_provider,
+        computer_context_provider=computer_context_provider,
+    ).interactive()
     return 0
 
 
 async def _live_text(config_path: str, *, body_timeout: float, speak: bool = False) -> int:
     config = load_config(config_path)
     brain = _create_brain(config)
+    web_context_provider = _create_web_context_provider(config, intent_brain=brain.lmstudio)
+    computer_context_provider = _create_computer_context_provider(config)
 
     def on_event(event) -> None:
         if event.type in {"status", "touch"}:
@@ -1141,7 +1312,13 @@ async def _live_text(config_path: str, *, body_timeout: float, speak: bool = Fal
         print("No StackChan connection yet; continuing text chat without body.", flush=True)
     try:
         output = await _speech_output(speak)
-        await LocalTextVoiceRuntime(brain, output=output, presence=BodyPresence(controller)).interactive()
+        await LocalTextVoiceRuntime(
+            brain,
+            output=output,
+            presence=BodyPresence(controller),
+            web_context_provider=web_context_provider,
+            computer_context_provider=computer_context_provider,
+        ).interactive()
     finally:
         controller.stop()
     return 0
@@ -1367,6 +1544,60 @@ async def _camera_test(
         controller.stop()
 
 
+async def _sensor_test(config_path: str, *, body_timeout: float, event_timeout: float) -> int:
+    config = load_config(config_path)
+    loop = asyncio.get_running_loop()
+    scan_future: asyncio.Future[dict[str, object]] | None = None
+
+    def on_event(event) -> None:
+        nonlocal scan_future
+        if event.type == "status":
+            print(f"[StackChan] status: {event.payload}", flush=True)
+            return
+        if event.type == "i2c.scan" and scan_future is not None and not scan_future.done():
+            loop.call_soon_threadsafe(scan_future.set_result, dict(event.payload))
+            return
+        print(f"[StackChan] event {event.type}: {event.payload}", flush=True)
+
+    controller = StackChanBodyController(port=config.stackchan.port, on_event=on_event)
+    controller.start()
+    print(f"Stacky sensor-test server listening on 0.0.0.0:{config.stackchan.port}", flush=True)
+    try:
+        if not controller.wait_connected(body_timeout):
+            print("StackChan did not connect yet.", flush=True)
+            return 1
+        address = controller.client_address
+        where = f"{address[0]}:{address[1]}" if address else "StackChan"
+        print(f"StackChan connected from {where}", flush=True)
+        controller.request_status()
+        scan_future = loop.create_future()
+        print("Requesting I2C scan.", flush=True)
+        if not controller.request_i2c_scan():
+            print("Failed to send body.i2c_scan.", flush=True)
+            return 1
+        try:
+            payload = await asyncio.wait_for(scan_future, timeout=event_timeout)
+        except TimeoutError:
+            print("Timed out waiting for i2c.scan.", flush=True)
+            return 1
+        devices = payload.get("devices", [])
+        if isinstance(devices, list):
+            labels = []
+            for device in devices:
+                if isinstance(device, dict):
+                    name = str(device.get("name") or "unknown")
+                    labels.append(f"{device.get('hex', '?')}:{name}")
+            print(f"I2C devices: {', '.join(labels) if labels else 'none'}", flush=True)
+        proximity = bool(payload.get("proximityAvailable", False))
+        if proximity:
+            print("Proximity sensor candidate detected on I2C.", flush=True)
+        else:
+            print("No physical I2C proximity sensor detected; use camera-derived proximity or add external hardware.", flush=True)
+        return 0
+    finally:
+        controller.stop()
+
+
 def _fourcc(value: object) -> str:
     try:
         number = int(value)
@@ -1438,6 +1669,8 @@ async def _handsfree(
     face_tracking: bool,
     vision_interval: float,
     vision_prompt_timeout: float,
+    websearch: bool | None,
+    computer: bool | None,
     voice_trust: str,
     mic_channel: str,
     mic_preamp: float,
@@ -1449,6 +1682,21 @@ async def _handsfree(
     if not listen_only:
         brain = _create_brain(config)
     voice_policy = _voice_memory_policy(voice_trust)
+    web_context_provider = (
+        _create_web_context_provider(config, enabled_override=websearch, intent_brain=brain.lmstudio if brain else None)
+        if not listen_only
+        else None
+    )
+    computer_enabled = config.computer.enabled if computer is None else computer
+    computer_context_provider = (
+        _create_computer_context_provider(config, enabled_override=computer) if not listen_only else None
+    )
+    computer_actions = (
+        LocalComputerActions(config.computer.workspace_root, timeout_seconds=config.computer.timeout_seconds)
+        if not listen_only and computer_enabled
+        else None
+    )
+    sandcode_client = SandcodeMobileHostClient(config.sandcode) if not listen_only else None
 
     loop = asyncio.get_running_loop()
     audio_queue: asyncio.Queue[tuple[bytes, int, int]] = asyncio.Queue(maxsize=80)
@@ -1467,6 +1715,14 @@ async def _handsfree(
     display_brightness_level = 80
     last_brightness_direction = 0
 
+    def guard_audio_after_body_motion() -> None:
+        nonlocal motion_audio_guard_until
+        motion_audio_guard_until = max(motion_audio_guard_until, time.monotonic() + 0.45)
+
+    def guard_audio_after_tracking_motion() -> None:
+        nonlocal motion_audio_guard_until
+        motion_audio_guard_until = max(motion_audio_guard_until, time.monotonic() + 0.45)
+
     def on_event(event) -> None:
         nonlocal display_brightness_level
         if event.type == "status":
@@ -1483,6 +1739,38 @@ async def _handsfree(
             return
         if event.type == "touch":
             print(f"[StackChan] touch: {event.payload}", flush=True)
+            payload = dict(event.payload)
+
+            def react_touch() -> None:
+                if body_director is not None:
+                    asyncio.create_task(
+                        _body_event_reaction(
+                            body_director,
+                            "touch",
+                            payload,
+                            on_motion=guard_audio_after_body_motion,
+                        )
+                    )
+
+            loop.call_soon_threadsafe(react_touch)
+            return
+        if event.type == "proximity":
+            if debug_audio or listen_only:
+                print(f"[StackChan] proximity: {event.payload}", flush=True)
+            payload = dict(event.payload)
+
+            def react_proximity() -> None:
+                if body_director is not None:
+                    asyncio.create_task(
+                        _body_event_reaction(
+                            body_director,
+                            "proximity",
+                            payload,
+                            on_motion=guard_audio_after_body_motion,
+                        )
+                    )
+
+            loop.call_soon_threadsafe(react_proximity)
             return
         if event.type == "vision.frame":
             if vision_state is None:
@@ -1579,12 +1867,9 @@ async def _handsfree(
             and time.monotonic() >= motion_audio_guard_until
         )
 
-    def guard_audio_after_tracking_motion() -> None:
-        nonlocal motion_audio_guard_until
-        motion_audio_guard_until = max(motion_audio_guard_until, time.monotonic() + 0.45)
-
     vision_processor_task = None
     vision_capture_task = None
+    body_presence_task = None
     if vision_state is not None:
         print(f"Vision mode ready ({vision_state.detector_status}).", flush=True)
         vision_processor_task = asyncio.create_task(
@@ -1602,7 +1887,10 @@ async def _handsfree(
             _vision_capture_loop(
                 controller,
                 interval_seconds=vision_interval,
-                should_capture=lambda: controller.connected and accepting_audio,
+                should_capture=lambda: _should_capture_vision_runtime(
+                    controller_connected=controller.connected,
+                    accepting_audio=accepting_audio,
+                ),
             )
         )
 
@@ -1673,6 +1961,7 @@ async def _handsfree(
         min_speech_ms=min_speech_ms,
         end_silence_ms=end_silence_ms,
     )
+    body_presence_task = None
     turn_index = 0
     last_transcript = ""
     last_transcript_at = 0.0
@@ -1921,9 +2210,113 @@ async def _handsfree(
                 set_body_state("listening")
                 accepting_audio = True
                 continue
+            sandcode_action = parse_sandcode_action(text)
+            if sandcode_action is not None:
+                reply_started = time.perf_counter()
+                set_body_state("thinking")
+                cwd = _resolve_sandcode_cwd(config, "")
+                if sandcode_action.prompt == "__cancel__":
+                    spoken_reply = "Jeg kan ikke afbryde en kørende Sandcode-session fra voice endnu."
+                    record_local_turn(text, spoken_reply)
+                    await output.speak(spoken_reply)
+                    await output.wait()
+                    print(
+                        f"[timing] stt={stt_seconds:.2f}s sandcode=0.00s "
+                        f"tts_send={time.perf_counter() - reply_started:.2f}s "
+                        f"total={time.perf_counter() - pipeline_started:.2f}s",
+                        flush=True,
+                    )
+                    _drain_queue(audio_queue)
+                    detector.reset()
+                    await asyncio.sleep(0.25)
+                    set_body_state("listening")
+                    accepting_audio = True
+                    continue
+                lead_reply = "Jeg starter Sandcode på Stacky-projektet."
+                record_local_turn(text, f"{lead_reply} Opgave: {sandcode_action.prompt}")
+                await output.speak(lead_reply)
+                await output.wait()
+
+                spoken_updates = 0
+
+                async def speak_sandcode_update(update: str) -> None:
+                    nonlocal spoken_updates
+                    print(f"[Sandcode] {update}", flush=True)
+                    if spoken_updates >= 4 and not update.startswith(("Sandcode siger", "Sandcode meldte fejl")):
+                        return
+                    spoken_updates += 1
+                    set_body_state("thinking")
+                    await output.speak(update)
+                    await output.wait()
+
+                try:
+                    session = await _run_sandcode_with_updates(
+                        sandcode_client,
+                        cwd,
+                        sandcode_action.prompt,
+                        on_update=speak_sandcode_update,
+                        chat_only=sandcode_action.chat_only,
+                    )
+                    if spoken_updates == 0:
+                        await output.speak(f"Sandcode er færdig. Sessionen hedder {session.session_id}.")
+                        await output.wait()
+                except SandcodeError as exc:
+                    error_reply = f"Sandcode kunne ikke starte: {exc}"
+                    print(f"[Sandcode] {error_reply}", flush=True)
+                    await output.speak(error_reply)
+                    await output.wait()
+                set_body_state("happy")
+                print(
+                    f"[timing] stt={stt_seconds:.2f}s sandcode={time.perf_counter() - reply_started:.2f}s "
+                    f"total={time.perf_counter() - pipeline_started:.2f}s",
+                    flush=True,
+                )
+                _drain_queue(audio_queue)
+                detector.reset()
+                await asyncio.sleep(0.25)
+                set_body_state("listening")
+                accepting_audio = True
+                continue
+            early_web_context = ""
+            if web_context_provider is not None:
+                early_web_context = await web_context_provider(text)
+            computer_action = None
+            if not early_web_context:
+                computer_action = (
+                    parse_local_computer_action(text, root=config.computer.workspace_root)
+                    if computer_actions is not None
+                    else None
+                )
+            if computer_action is not None:
+                reply_started = time.perf_counter()
+                set_body_state("thinking")
+                result = await asyncio.to_thread(computer_actions.run, computer_action)
+                print(f"[computer] {computer_action.kind} ok={result.ok} detail={result.detail}", flush=True)
+                spoken_reply = result.spoken
+                record_local_turn(text, spoken_reply)
+                set_body_state("happy" if result.ok else "thinking")
+                speak_started = time.perf_counter()
+                await output.speak(spoken_reply)
+                await output.wait()
+                speak_seconds = time.perf_counter() - speak_started
+                print(
+                    f"[timing] stt={stt_seconds:.2f}s computer={time.perf_counter() - reply_started:.2f}s "
+                    f"tts_send={speak_seconds:.2f}s total={time.perf_counter() - pipeline_started:.2f}s",
+                    flush=True,
+                )
+                _drain_queue(audio_queue)
+                detector.reset()
+                await asyncio.sleep(0.25)
+                set_body_state("listening")
+                accepting_audio = True
+                continue
             brain_started = time.perf_counter()
             visual_context = ""
             prompt_image = None
+            web_context = early_web_context
+            computer_context = ""
+            if computer_context_provider is not None and not web_context:
+                computer_context = await computer_context_provider(text)
             use_visual_context = _wants_visual_context(text)
             if vision_state is not None and use_visual_context:
                 await _capture_prompt_vision(
@@ -1946,26 +2339,17 @@ async def _handsfree(
                 session_source=voice_policy.session_source,
                 visual_context=visual_context,
                 vision_image=prompt_image,
+                web_context=web_context,
+                computer_context=computer_context,
             )
             brain_seconds = time.perf_counter() - brain_started
-            set_body_state("happy")
+            set_body_state("speaking")
             speak_started = time.perf_counter()
-            motion_task = None
+            reply_text = reply.spoken_text or reply.text
             if body_director is not None:
-                motion_task = asyncio.create_task(
-                    _delayed_reply_motion(body_director, reply.spoken_text or reply.text)
-                )
-            await output.speak(reply.spoken_text or reply.text)
+                await asyncio.to_thread(body_director.reply_started, reply_text)
+            await output.speak(reply_text)
             await output.wait()
-            if motion_task is not None:
-                try:
-                    await asyncio.wait_for(motion_task, timeout=0.5)
-                except asyncio.TimeoutError:
-                    motion_task.cancel()
-                    try:
-                        await motion_task
-                    except asyncio.CancelledError:
-                        pass
             speak_seconds = time.perf_counter() - speak_started
             print(
                 f"[timing] stt={stt_seconds:.2f}s brain={brain_seconds:.2f}s "
@@ -1980,7 +2364,7 @@ async def _handsfree(
     except (KeyboardInterrupt, asyncio.CancelledError):
         return 0
     finally:
-        for task in (vision_capture_task, vision_processor_task):
+        for task in (vision_capture_task, vision_processor_task, body_presence_task):
             if task is not None:
                 task.cancel()
                 try:
@@ -2007,6 +2391,67 @@ async def _delayed_reply_motion(director: BodyDirector, text: str, *, delay_seco
         await asyncio.to_thread(director.reply_started, text)
     except Exception as exc:  # pragma: no cover - body motion must never break speech.
         print(f"[Stacky] body motion skipped: {exc}", flush=True)
+
+
+def _should_track_face_runtime(
+    *,
+    face_tracking: bool,
+    body_state_name: str,
+    detector_ready: bool,
+    detector_active: bool,
+) -> bool:
+    return bool(
+        face_tracking
+        and detector_ready
+        and body_state_name == "listening"
+        and not detector_active
+    )
+
+
+def _should_capture_vision_runtime(
+    *,
+    controller_connected: bool,
+    accepting_audio: bool,
+) -> bool:
+    return bool(controller_connected and accepting_audio)
+
+
+async def _body_presence_loop(
+    director: BodyDirector,
+    *,
+    get_state: Callable[[], str],
+    should_tick: Callable[[], bool],
+    interval_seconds: float = 0.35,
+) -> None:
+    interval_seconds = max(0.20, float(interval_seconds))
+    while True:
+        await asyncio.sleep(interval_seconds)
+        if not should_tick():
+            continue
+        state = get_state()
+        try:
+            await asyncio.to_thread(director.presence_tick, state)
+        except Exception as exc:  # pragma: no cover - body presence must not break audio.
+            print(f"[Stacky] body presence skipped: {exc}", flush=True)
+
+
+async def _body_event_reaction(
+    director: BodyDirector,
+    event_type: str,
+    payload: dict[str, object],
+    *,
+    on_motion: Callable[[], None] | None = None,
+) -> None:
+    try:
+        before = director.last_motion_at
+        if event_type == "touch":
+            await asyncio.to_thread(director.handle_touch, payload)
+        elif event_type == "proximity":
+            await asyncio.to_thread(director.handle_proximity, payload)
+        if director.last_motion_at > before and on_motion is not None:
+            on_motion()
+    except Exception as exc:  # pragma: no cover - physical reactions must not break audio.
+        print(f"[Stacky] body event reaction skipped: {exc}", flush=True)
 
 
 async def _vision_processor_loop(
@@ -2043,7 +2488,7 @@ async def _vision_processor_loop(
         if body_director is not None and face is not None and should_track_face():
             try:
                 last_motion_at = body_director.last_motion_at
-                body_director.track_face(face.x, face.y, confidence=face.confidence)
+                body_director.track_face(face.x, face.y, confidence=face.confidence, area=face.area)
                 if body_director.last_motion_at > last_motion_at and on_tracking_motion is not None:
                     on_tracking_motion()
             except Exception as exc:  # pragma: no cover - vision must not break audio.
@@ -2169,6 +2614,8 @@ def _accept_stt_result(
         if signal_quality is not None and _is_noisy_short_greeting(result, signal_quality):
             return False, "kort hilsen fra støj"
         return True, "kort hilsen"
+    if signal_quality is not None and _is_too_thin_single_word_fragment(transcript, signal_quality):
+        return False, "kort tyndt STT-fragment"
     if _is_short_uncertain_stt_fragment(transcript, result):
         return False, "kort usikkert STT-fragment"
     if signal_quality is not None and _is_semantically_thin_reference_fragment(transcript, result, signal_quality):
@@ -2223,6 +2670,41 @@ def _is_short_uncertain_stt_fragment(transcript: str, result: STTResult) -> bool
     if any(token in key for token in ("volumen", "volume", "hojre", "venstre", "batteri", "status", "strom")):
         return False
     return result.avg_logprob < -0.55
+
+
+def _is_too_thin_single_word_fragment(transcript: str, signal_quality: TurnSignalQuality) -> bool:
+    words = [word.strip(".,!?").lower() for word in transcript.split() if word.strip(".,!?")]
+    if len(words) != 1:
+        return False
+    key = _transcript_key(words[0])
+    protected_keys = {
+        "ja",
+        "nej",
+        "ok",
+        "okay",
+        "hej",
+        "hejsa",
+        "tak",
+        "vent",
+        "stop",
+        "pause",
+        "igen",
+        "center",
+        "op",
+        "ned",
+        "lys",
+        "lyd",
+        "nik",
+    }
+    if key in protected_keys:
+        return False
+    if any(token in key for token in ("volumen", "volume", "hojre", "venstre", "batteri", "status", "strom")):
+        return False
+    return len(key) < 4 and (
+        signal_quality.active_ratio < 0.30
+        or signal_quality.active_ms <= 380
+        or signal_quality.max_active_run_ms <= 360
+    )
 
 
 def _is_semantically_thin_reference_fragment(
@@ -2337,6 +2819,17 @@ def _is_repetitive_filler_noise_turn(result: STTResult, transcript: str, signal_
         return False
     noise_word_ratio = sum(1 for word in words if word in filler_words or word in weak_connectors) / len(words)
     repeated_count = max(words.count(word) for word in set(words))
+    if (
+        noise_word_ratio >= 0.95
+        and len(words) >= 3
+        and result.avg_logprob <= -0.55
+        and (
+            result.audio.rms < 900
+            or signal_quality.active_ratio < 0.45
+            or signal_quality.duration_seconds >= 2.5
+        )
+    ):
+        return True
     sparse_or_spiky = (
         signal_quality.peak >= 7000
         or signal_quality.crest_factor >= 8.0
@@ -2882,6 +3375,69 @@ async def _sandcode_health(config_path: str) -> int:
     await client.ensure_host()
     print(f"Sandcode mobile host is healthy at {client.base_url}")
     return 0
+
+
+async def _sandcode_run_once(config_path: str, prompt: str, *, cwd_arg: str = "", chat_only: bool = False) -> int:
+    config = load_config(config_path)
+    cwd = _resolve_sandcode_cwd(config, cwd_arg)
+    client = SandcodeMobileHostClient(config.sandcode)
+    print(f"Starting Sandcode in {cwd}", flush=True)
+
+    async def print_update(text: str) -> None:
+        print(text, flush=True)
+
+    try:
+        session = await _run_sandcode_with_updates(
+            client,
+            cwd,
+            prompt,
+            on_update=print_update,
+            chat_only=chat_only,
+        )
+    except SandcodeError as exc:
+        print(f"Sandcode failed: {exc}", flush=True)
+        return 1
+    print(f"Sandcode session complete: {session.session_id}", flush=True)
+    return 0
+
+
+def _resolve_sandcode_cwd(config, cwd_arg: str = "") -> Path:
+    cwd = Path(cwd_arg.strip()) if cwd_arg.strip() else config.computer.workspace_root
+    if not cwd.is_absolute():
+        cwd = ROOT / cwd
+    return cwd.resolve()
+
+
+async def _run_sandcode_with_updates(
+    client: SandcodeMobileHostClient,
+    cwd: Path,
+    prompt: str,
+    *,
+    on_update: Callable[[str], Awaitable[None]],
+    chat_only: bool = False,
+) -> SandcodeSession:
+    summarizer = SandcodeDanishSummarizer()
+    queue: asyncio.Queue[str | None] = asyncio.Queue()
+    loop = asyncio.get_running_loop()
+
+    def on_event(event: dict[str, object]) -> None:
+        spoken = summarizer.summarize_event(event)
+        if spoken:
+            loop.call_soon_threadsafe(queue.put_nowait, spoken)
+
+    async def run() -> SandcodeSession:
+        try:
+            return await client.run_session(cwd, prompt, on_event, chat_only=chat_only)
+        finally:
+            loop.call_soon_threadsafe(queue.put_nowait, None)
+
+    task = asyncio.create_task(run())
+    while True:
+        update = await queue.get()
+        if update is None:
+            break
+        await on_update(update)
+    return await task
 
 
 def _body_server(config_path: str, *, duration: float = 0.0) -> int:

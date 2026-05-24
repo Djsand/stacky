@@ -22,6 +22,15 @@ _LEADING_PHRASE_MARKER_RE = re.compile(
     r"^(Det giver mening|Det lyder godt)\s+(?=[a-zæøå])",
     re.IGNORECASE,
 )
+_PAREN_LAUGHTER_RE = re.compile(r"\s*[\[(]griner[\])]\s*", re.IGNORECASE)
+_LAUGHTER_WORD_RE = re.compile(r"\b(ha){2,}\b", re.IGNORECASE)
+_NATURAL_PHRASE_REPLACEMENTS: tuple[tuple[re.Pattern[str], str], ...] = (
+    (re.compile(r"\bdet\s+er\s+modtaget\b", re.IGNORECASE), "Okay"),
+    (re.compile(r"\bjeg\s+afventer\s+dit\b", re.IGNORECASE), "jeg venter på dit"),
+    (re.compile(r"\bjeg\s+afventer\b", re.IGNORECASE), "jeg venter"),
+    (re.compile(r"\bjeg\s+(?:står|staar)\s+klar\b", re.IGNORECASE), "jeg er her"),
+    (re.compile(r"\bdet\s+lyder\s+spændende\b", re.IGNORECASE), "hm"),
+)
 
 _DANISH_DIGITS = {
     "1": "en",
@@ -54,6 +63,7 @@ def adapt_for_danish_speech(text: str) -> str:
     spoken = _LEADING_NAME_GREETING_RE.sub("Hej, ", spoken)
     spoken = _AFTER_GREETING_RE.sub(lambda match: f"Hej, {match.group(1).lower()}", spoken)
     spoken = _BULLET_RE.sub("", spoken)
+    spoken = _apply_natural_phrase_replacements(spoken)
     spoken = spoken.replace(" / ", " eller ")
     spoken = spoken.replace("->", " til ")
     spoken = spoken.replace("&", " og ")
@@ -62,6 +72,7 @@ def adapt_for_danish_speech(text: str) -> str:
         spoken = re.sub(re.escape(source), target, spoken, flags=re.IGNORECASE)
     for pattern, target in WORD_PRONUNCIATION_FIXES:
         spoken = pattern.sub(target, spoken)
+    spoken = _normalize_laughter(spoken)
     spoken = _AFTER_GREETING_RE.sub(lambda match: f"Hej, {match.group(1).lower()}", spoken)
     spoken = _collapse_duplicate_words(spoken)
     spoken = _shape_rhythm(spoken)
@@ -84,6 +95,17 @@ def _collapse_duplicate_words(text: str) -> str:
         previous = current
         current = _DUPLICATE_WORD_RE.sub(lambda match: match.group(1), current)
     return current
+
+
+def _apply_natural_phrase_replacements(text: str) -> str:
+    for pattern, replacement in _NATURAL_PHRASE_REPLACEMENTS:
+        text = pattern.sub(replacement, text)
+    return text
+
+
+def _normalize_laughter(text: str) -> str:
+    text = _PAREN_LAUGHTER_RE.sub(" ha, ", text)
+    return _LAUGHTER_WORD_RE.sub("ha ha", text)
 
 
 def _shape_rhythm(text: str) -> str:

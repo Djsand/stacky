@@ -23,6 +23,7 @@ BODY_COMMAND_TYPES = {
     "body.set_expression",
     "body.look_at",
     "body.gesture",
+    "body.i2c_scan",
     "body.leds",
     "body.motion_config",
     "body.status",
@@ -37,6 +38,7 @@ BODY_EVENT_TYPES = {
     "touch",
     "battery",
     "imu",
+    "i2c.scan",
     "proximity",
     "status",
     "vision.frame",
@@ -98,13 +100,46 @@ def look_at(x: float, y: float, *, speed: int = 500) -> BodyCommand:
     )
 
 
-def gesture(name: str, *, intensity: float = 1.0, speed: int = 500) -> BodyCommand:
+def gesture(
+    name: str,
+    *,
+    intensity: float = 1.0,
+    speed: int = 500,
+    base_x: float | None = None,
+    base_y: float | None = None,
+) -> BodyCommand:
+    payload: dict[str, Any] = {
+        "name": name,
+        "intensity": max(0.0, min(1.0, float(intensity))),
+        "speed": max(0, min(1000, int(speed))),
+    }
+    if base_x is not None:
+        payload["baseX"] = max(-1.0, min(1.0, float(base_x)))
+    if base_y is not None:
+        payload["baseY"] = max(-1.0, min(1.0, float(base_y)))
+    return BodyCommand("body.gesture", payload)
+
+
+def leds(
+    *,
+    r: int = 0,
+    g: int = 0,
+    b: int = 0,
+    brightness: float = 1.0,
+    duration_ms: int = 300,
+    side: str = "both",
+    mode: str = "solid",
+) -> BodyCommand:
     return BodyCommand(
-        "body.gesture",
+        "body.leds",
         {
-            "name": name,
-            "intensity": max(0.0, min(1.0, float(intensity))),
-            "speed": max(0, min(1000, int(speed))),
+            "r": max(0, min(255, int(r))),
+            "g": max(0, min(255, int(g))),
+            "b": max(0, min(255, int(b))),
+            "brightness": max(0.0, min(1.0, float(brightness))),
+            "durationMs": max(0, min(5000, int(duration_ms))),
+            "side": side if side in {"left", "right", "both"} else "both",
+            "mode": mode if mode in {"solid", "pulse", "off"} else "solid",
         },
     )
 
@@ -206,6 +241,10 @@ def display_brightness(level: int, *, permanent: bool = True) -> BodyCommand:
 
 def body_status() -> BodyCommand:
     return BodyCommand("body.status", {})
+
+
+def i2c_scan() -> BodyCommand:
+    return BodyCommand("body.i2c_scan", {})
 
 
 def vision_capture(

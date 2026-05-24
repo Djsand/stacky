@@ -3,7 +3,14 @@ from __future__ import annotations
 import unittest
 
 from stacky.config import LMStudioConfig
-from stacky.llm import ChatImageAttachment, ChatMessage, GeminiClient, LMStudioClient, create_chat_client
+from stacky.llm import (
+    ChatImageAttachment,
+    ChatMessage,
+    GeminiClient,
+    GeminiPromptBlockedError,
+    LMStudioClient,
+    create_chat_client,
+)
 
 
 class LLMTest(unittest.TestCase):
@@ -53,6 +60,14 @@ class LLMTest(unittest.TestCase):
         self.assertEqual(parts[0]["text"], "Hvad ser du?")
         self.assertEqual(parts[1]["inline_data"]["mime_type"], "image/jpeg")
         self.assertEqual(parts[1]["inline_data"]["data"], "abc123")
+
+    def test_gemini_prompt_feedback_block_raises_prompt_blocked_error(self) -> None:
+        client = GeminiClient(LMStudioConfig(provider="gemini", api_key="key"))
+
+        with self.assertRaises(GeminiPromptBlockedError) as caught:
+            client._extract_content({"promptFeedback": {"blockReason": "PROHIBITED_CONTENT"}})
+
+        self.assertEqual(caught.exception.block_reason, "PROHIBITED_CONTENT")
 
 
 if __name__ == "__main__":

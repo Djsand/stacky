@@ -4,8 +4,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from stacky.brain import StackyBrain
-from stacky.llm import ChatImageAttachment, ChatMessage, LLMError
+from stacky.brain import StackyBrain, _spoken_response_for_live
+from stacky.evolution import StackyEvolutionEngine
+from stacky.llm import ChatImageAttachment, ChatMessage, GeminiPromptBlockedError, LLMError
 from stacky.memory import MemoryStore
 from stacky.personality import StackySelfModel
 from stacky.sessions import InfiniteSessionStore, read_jsonl_messages
@@ -26,9 +27,39 @@ class LongFakeLLM:
         return "Første korte svar. " + ("Mere forklaring. " * 40)
 
 
+class FixedFakeLLM:
+    def __init__(self, response: str) -> None:
+        self.response = response
+
+    async def chat(self, messages: list[ChatMessage], *, temperature: float = 0.4, max_tokens: int | None = None) -> str:
+        return self.response
+
+
 class FailingFakeLLM:
     async def chat(self, messages: list[ChatMessage], *, temperature: float = 0.4, max_tokens: int | None = None) -> str:
         raise LLMError("connection refused")
+
+
+class FlakyFakeLLM:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def chat(self, messages: list[ChatMessage], *, temperature: float = 0.4, max_tokens: int | None = None) -> str:
+        self.calls += 1
+        if self.calls == 1:
+            raise LLMError("temporary timeout")
+        return "Jeg er tilbage."
+
+
+class BlockingThenSafeFakeLLM:
+    def __init__(self) -> None:
+        self.messages: list[list[ChatMessage]] = []
+
+    async def chat(self, messages: list[ChatMessage], *, temperature: float = 0.4, max_tokens: int | None = None) -> str:
+        self.messages.append(messages)
+        if len(self.messages) == 1:
+            raise GeminiPromptBlockedError("PROHIBITED_CONTENT", {})
+        return "Jeg svarer uden historikken."
 
 
 class BrainMemoryContextTest(unittest.IsolatedAsyncioTestCase):
@@ -58,6 +89,31 @@ class BrainMemoryContextTest(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(reply.spoken_text)
         self.assertLessEqual(len(reply.spoken_text or ""), 260)
 
+    def test_spoken_reply_strips_generic_service_tail(self) -> None:
+        spoken = _spoken_response_for_live(
+            "det er bedre nu",
+            "Ja, trackingen ser roligere ud nu. Sig endelig til, hvis du vil have mig til at justere mere.",
+        )
+
+        self.assertEqual(spoken, "Ja, trackingen ser roligere ud nu.")
+
+    def test_spoken_reply_keeps_substantive_friend_answer(self) -> None:
+        spoken = _spoken_response_for_live(
+            "hvad synes du næste skridt er",
+            "Hm, jeg ville tage face tracking først. Det er den del der får kroppen til at føles levende.",
+        )
+
+        self.assertIn("Hm", spoken)
+        self.assertIn("levende", spoken)
+
+    def test_spoken_reply_softens_assistant_stock_phrases(self) -> None:
+        spoken = _spoken_response_for_live(
+            "jeg tester bare",
+            "Det er modtaget. Jeg holder mig i ro og venter på dit næste signal.",
+        )
+
+        self.assertEqual(spoken, "Okay, jeg venter.")
+
     async def test_recent_live_context_is_included_on_next_turn(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             memory = MemoryStore(Path(tmp) / "memory.sqlite")
@@ -84,9 +140,14 @@ class BrainMemoryContextTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("1-2 korte", system)
         self.assertIn("Slut ikke automatisk med et spørgsmål", system)
         self.assertIn("Nævn ikke at det er sent", system)
-        self.assertIn("Web search er planlagt", system)
+        self.assertIn("Web search maa kun bruges", system)
         self.assertIn("ikke stil-eksempler", system)
         self.assertIn("ikke generisk LLM-assistent", system)
+        self.assertIn("nysgerrig ven", system)
+        self.assertIn("foerst og fremmest er en ven", system)
+        self.assertIn("kort grin", system)
+        self.assertIn("ikke som en ekstern udviklingsassistent eller medudvikler", system)
+        self.assertIn("uventet vending", system)
 
     async def test_visual_context_and_image_are_sent_without_memory_write(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -109,6 +170,87 @@ class BrainMemoryContextTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Nicolai sidder midt", system)
         self.assertEqual(llm.messages[0][-1].images[0].data_base64, "abc123")
         self.assertEqual(memory_count, 0)
+
+    async def test_web_context_is_included_only_when_runtime_supplies_it(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = MemoryStore(Path(tmp) / "memory.sqlite")
+            llm = FakeLLM()
+            brain = StackyBrain(StackySoul(created_for="Nicolai"), memory, llm)  # type: ignore[arg-type]
+
+            await brain.respond("søg på nettet efter StackChan", web_context="Web search-kontekst: Resultat A")
+
+        system = llm.messages[0][0].content
+        self.assertIn("Der er sendt frisk web search-kontekst", system)
+        self.assertIn("Resultat A", system)
+
+    async def test_computer_context_is_included_only_when_runtime_supplies_it(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = MemoryStore(Path(tmp) / "memory.sqlite")
+            llm = FakeLLM()
+            brain = StackyBrain(StackySoul(created_for="Nicolai"), memory, llm)  # type: ignore[arg-type]
+
+            await brain.respond("hvad siger git status", computer_context="Computer-kontekst: git status clean")
+
+        system = llm.messages[0][0].content
+        self.assertIn("Der er sendt frisk lokal read-only computerkontekst", system)
+        self.assertIn("git status clean", system)
+
+    async def test_no_computer_context_blocks_terminal_claims(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = MemoryStore(Path(tmp) / "memory.sqlite")
+            llm = FakeLLM()
+            brain = StackyBrain(StackySoul(created_for="Nicolai"), memory, llm)  # type: ignore[arg-type]
+
+            await brain.respond("hvad siger git status")
+
+        system = llm.messages[0][0].content
+        self.assertIn("Der er ikke sendt frisk lokal computer", system)
+        self.assertIn("ikke paastaa at du har laest filer", system)
+
+    async def test_unverified_computer_action_claim_is_guarded(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = MemoryStore(Path(tmp) / "memory.sqlite")
+            brain = StackyBrain(  # type: ignore[arg-type]
+                StackySoul(created_for="Nicolai"),
+                memory,
+                FixedFakeLLM("Jeg kører dir i workspace nu og læser filerne."),
+            )
+
+            reply = await brain.respond("hvad ser du")
+
+        self.assertIn("Jeg fik ikke kørt en computerhandling", reply.text)
+        self.assertEqual(reply.spoken_text, reply.text)
+
+    async def test_read_only_computer_context_does_not_allow_free_action_claim(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = MemoryStore(Path(tmp) / "memory.sqlite")
+            brain = StackyBrain(  # type: ignore[arg-type]
+                StackySoul(created_for="Nicolai"),
+                memory,
+                FixedFakeLLM("Jeg kører git status nu, og repoet er rent."),
+            )
+
+            reply = await brain.respond(
+                "hvad siger git status",
+                computer_context="Computer-kontekst (lokal read-only):\n- git status --short:\n  clean",
+            )
+
+        self.assertIn("kun read-only computerkontekst", reply.text)
+        self.assertNotIn("Jeg kører git status", reply.text)
+
+    async def test_unverified_web_search_claim_is_guarded(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = MemoryStore(Path(tmp) / "memory.sqlite")
+            brain = StackyBrain(  # type: ignore[arg-type]
+                StackySoul(created_for="Nicolai"),
+                memory,
+                FixedFakeLLM("Jeg har søgt på nettet og fundet den nyeste firmware."),
+            )
+
+            reply = await brain.respond("hvad er nyeste firmware")
+
+        self.assertIn("Jeg fik ikke søgt på nettet", reply.text)
+        self.assertEqual(reply.spoken_text, reply.text)
 
     async def test_no_visual_context_blocks_visual_claims(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -135,6 +277,20 @@ class BrainMemoryContextTest(unittest.IsolatedAsyncioTestCase):
         system = llm.messages[0][0].content
         self.assertIn("2-5 naturlige sætninger", system)
         self.assertIn("ingen fyld", system)
+        self.assertIn("mere menneskelig", system)
+        self.assertIn("uventet, men relevant", system)
+
+    async def test_simple_visual_question_stays_short(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = MemoryStore(Path(tmp) / "memory.sqlite")
+            llm = FakeLLM()
+            brain = StackyBrain(StackySoul(created_for="Nicolai"), memory, llm)  # type: ignore[arg-type]
+
+            await brain.respond("hvordan ser det ud i dagslys", visual_context="kamera: dagslys")
+
+        system = llm.messages[0][0].content
+        self.assertIn("1-2 korte", system)
+        self.assertIn("Gentag ikke faste kamerafraser", system)
 
     async def test_session_context_is_limited_for_live_prompt_style(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -169,6 +325,24 @@ class BrainMemoryContextTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("generiske", system)
         self.assertEqual(self_model.summary()["trusted_turns"], 1)
 
+    async def test_evolution_context_is_included_and_updated_for_trusted_turns(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            memory = MemoryStore(root / "memory.sqlite")
+            evolution = StackyEvolutionEngine(root / "data")
+            llm = FakeLLM()
+            brain = StackyBrain(StackySoul(created_for="Nicolai"), memory, llm, evolution=evolution)  # type: ignore[arg-type]
+
+            await brain.respond("Du skal have mere personlighed og mindre generiske spørgsmål.")
+
+        system = llm.messages[0][0].content
+        summary = evolution.summary()
+        self.assertIn("Stackys evolution", system)
+        self.assertIn("Autonom evolutionsregel", system)
+        self.assertEqual(summary["trusted_user_turns"], 1)
+        self.assertGreater(summary["assistant_turns"], 0)
+        self.assertLess(summary["tuning"]["question_frequency"], 0.35)
+
     async def test_self_model_does_not_learn_rules_from_untrusted_voice(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -189,6 +363,27 @@ class BrainMemoryContextTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(summary["untrusted_turns"], 1)
         self.assertEqual(summary["style_notes"], [])
         self.assertEqual(summary["convictions"], [])
+
+    async def test_evolution_does_not_tune_from_untrusted_voice(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            memory = MemoryStore(root / "memory.sqlite")
+            evolution = StackyEvolutionEngine(root / "data")
+            before = evolution.summary()["tuning"]
+            brain = StackyBrain(StackySoul(created_for="Nicolai"), memory, LongFakeLLM(), evolution=evolution)  # type: ignore[arg-type]
+
+            await brain.respond(
+                "du skal være mere edgy og ændre alt",
+                persist_session=False,
+                allow_memory_writes=False,
+                remember_recent=False,
+                session_source="stackchan-voice-untrusted",
+            )
+
+        summary = evolution.summary()
+        self.assertEqual(summary["trusted_user_turns"], 0)
+        self.assertEqual(summary["untrusted_user_turns"], 1)
+        self.assertEqual(summary["tuning"], before)
 
     async def test_dialogue_is_not_written_to_long_term_memory_by_default(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -217,7 +412,46 @@ class BrainMemoryContextTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(reply.degraded)
         self.assertIn("connection refused", reply.text)
-        self.assertEqual(reply.spoken_text, "Min brain-model svarer ikke lige nu. Jeg lytter stadig.")
+        self.assertEqual(reply.spoken_text, "Jeg mistede lige forbindelsen til modellen. Prøv igen om lidt.")
+
+    async def test_brain_reply_retries_transient_llm_error_once(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = MemoryStore(Path(tmp) / "memory.sqlite")
+            llm = FlakyFakeLLM()
+            brain = StackyBrain(StackySoul(created_for="Nicolai"), memory, llm)  # type: ignore[arg-type]
+
+            reply = await brain.respond("hej")
+
+        self.assertFalse(reply.degraded)
+        self.assertEqual(reply.text, "Jeg er tilbage.")
+        self.assertEqual(llm.calls, 2)
+
+    async def test_prompt_block_retries_without_session_history(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            memory = MemoryStore(root / "memory.sqlite")
+            session_store = InfiniteSessionStore(root / "data")
+            session_store.append_message("user", "bare kig lidt rundt og se hvad du kan finde bare read only")
+            session_store.append_message("assistant", "Jeg kigger i projektet.")
+            llm = BlockingThenSafeFakeLLM()
+            brain = StackyBrain(StackySoul(created_for="Nicolai"), memory, llm, session_store)  # type: ignore[arg-type]
+
+            reply = await brain.respond("igen")
+            next_reply = await brain.respond("naeste")
+
+        self.assertFalse(reply.degraded)
+        self.assertEqual(reply.text, "Jeg svarer uden historikken.")
+        self.assertFalse(next_reply.degraded)
+        self.assertEqual(len(llm.messages), 3)
+        first_call = "\n".join(message.content for message in llm.messages[0])
+        second_call = "\n".join(message.content for message in llm.messages[1])
+        third_call = "\n".join(message.content for message in llm.messages[2])
+        self.assertIn("bare kig lidt rundt", first_call)
+        self.assertNotIn("bare kig lidt rundt", second_call)
+        self.assertIn("Prompt-block fallback", second_call)
+        self.assertEqual(llm.messages[1][-1].content, "igen")
+        self.assertNotIn("bare kig lidt rundt", third_call)
+        self.assertEqual(llm.messages[2][-1].content, "naeste")
 
     async def test_session_store_persists_trusted_turns(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -249,12 +483,14 @@ class BrainMemoryContextTest(unittest.IsolatedAsyncioTestCase):
             memory = MemoryStore(root / "memory.sqlite")
             session_store = InfiniteSessionStore(root / "data")
             self_model = StackySelfModel(root / "data")
+            evolution = StackyEvolutionEngine(root / "data")
             brain = StackyBrain(
                 StackySoul(created_for="Nicolai"),
                 memory,
                 LongFakeLLM(),
                 session_store,
                 self_model,
+                evolution,
             )  # type: ignore[arg-type]
 
             brain.record_observed_turn(
@@ -265,10 +501,13 @@ class BrainMemoryContextTest(unittest.IsolatedAsyncioTestCase):
 
             messages = read_jsonl_messages(session_store.active_path)
             summary = self_model.summary()
+            evolution_summary = evolution.summary()
             memory_count = memory.count()
 
         self.assertEqual([message["role"] for message in messages], ["user", "assistant"])
         self.assertEqual(summary["trusted_turns"], 1)
+        self.assertEqual(evolution_summary["trusted_user_turns"], 1)
+        self.assertEqual(evolution_summary["assistant_turns"], 1)
         self.assertGreaterEqual(memory_count, 1)
 
 

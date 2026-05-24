@@ -1,0 +1,249 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      name="description"
+      content="Caseflow automates ecommerce support operations with policy-backed AI agents, order data, and complete audit trails."
+    />
+    <title>Caseflow - AI Support Operations</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header class="site-header" data-header>
+      <a class="brand" href="#top" aria-label="Caseflow home">
+        <span class="brand-mark" aria-hidden="true"></span>
+        <span>Caseflow</span>
+      </a>
+
+      <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="site-nav">
+        <span></span>
+        <span></span>
+        <span></span>
+        <span class="sr-only">Menu</span>
+      </button>
+
+      <nav class="site-nav" id="site-nav" aria-label="Primary">
+        <a href="#coverage">Coverage</a>
+        <a href="#audit">Audit</a>
+        <a href="#setup">Setup</a>
+        <a href="#results">Results</a>
+      </nav>
+
+      <a class="header-cta" href="#demo">Run audit</a>
+    </header>
+
+    <main id="top">
+      <section class="hero" aria-labelledby="hero-title">
+        <img class="hero-visual" src="assets/caseflow-hero-ledger.png" alt="" aria-hidden="true" />
+        <div class="hero-shade" aria-hidden="true"></div>
+        <div class="container hero-inner">
+          <p class="hero-kicker">Caseflow for ecommerce support</p>
+          <h1 id="hero-title">Put support operations on autopilot</h1>
+          <p class="hero-copy">
+            AI agents resolve order tracking, returns, refunds, cancellations,
+            address edits, and product questions by checking policy and acting
+            inside your systems.
+          </p>
+          <div class="hero-actions" aria-label="Primary actions">
+            <a class="button button-primary" href="#demo">Run a support audit</a>
+            <a class="button button-secondary" href="#coverage">Watch a ticket resolve</a>
+          </div>
+        </div>
+      </section>
+
+      <section class="section section-lines" id="coverage" aria-labelledby="coverage-title">
+        <div class="container section-head">
+          <p class="section-label">Coverage</p>
+          <h2 id="coverage-title">The repetitive queue becomes a controlled workflow.</h2>
+        </div>
+
+        <div class="container compare">
+          <div class="compare-head">Manual support</div>
+          <div class="compare-head compare-center">Caseflow</div>
+          <div class="compare-head compare-status">Outcome</div>
+
+          <div class="compare-row">
+            <p>Agent copies an order number between helpdesk, OMS, and carrier tabs.</p>
+            <p>Order, shipment, and customer history are fetched into one case record.</p>
+            <span>ETA sent</span>
+          </div>
+          <div class="compare-row">
+            <p>Refund decisions vary by agent, shift, and policy interpretation.</p>
+            <p>Policy rules are checked before every refund, credit, or replacement.</p>
+            <span>Policy passed</span>
+          </div>
+          <div class="compare-row">
+            <p>Address edits sit in queue until fulfillment has already started.</p>
+            <p>Allowed edits are applied before shipment and written back to the OMS.</p>
+            <span>Updated</span>
+          </div>
+          <div class="compare-row">
+            <p>Low-risk tickets still wait behind complex escalations.</p>
+            <p>Only ambiguous cases hand off, with the transcript and reasoning attached.</p>
+            <span>Escalation filtered</span>
+          </div>
+        </div>
+      </section>
+
+      <section class="section" aria-labelledby="work-title">
+        <div class="container split">
+          <div class="split-copy">
+            <p class="section-label">Work handled</p>
+            <h2 id="work-title">Built around the jobs support teams actually repeat.</h2>
+          </div>
+          <div class="work-list" aria-label="Automated support work">
+            <div class="work-item">
+              <span>01</span>
+              <h3>Where is my order?</h3>
+              <p>Carrier ETA, fulfillment state, and promised delivery windows checked before reply.</p>
+            </div>
+            <div class="work-item">
+              <span>02</span>
+              <h3>Can I change this?</h3>
+              <p>Address edits, cancellations, and order changes approved only inside policy limits.</p>
+            </div>
+            <div class="work-item">
+              <span>03</span>
+              <h3>Can I get a refund?</h3>
+              <p>Return windows, item condition, payment state, and fraud signals reviewed first.</p>
+            </div>
+            <div class="work-item">
+              <span>04</span>
+              <h3>Which product should I buy?</h3>
+              <p>Catalog answers, availability, variant guidance, and compatibility questions handled.</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="section section-ink" id="audit" aria-labelledby="audit-title">
+        <div class="container audit-head">
+          <div>
+            <p class="section-label">Policy and audit</p>
+            <h2 id="audit-title">Every autonomous action leaves a readable trail.</h2>
+          </div>
+          <p>
+            Caseflow does not hide behind a confidence score. It records the
+            source, rule, decision, and system update for each step.
+          </p>
+        </div>
+
+        <div class="container audit-table" role="table" aria-label="Policy audit example">
+          <div class="audit-row audit-row-head" role="row">
+            <span>Event</span>
+            <span>Rule checked</span>
+            <span>Decision</span>
+            <span>By</span>
+          </div>
+          <div class="audit-row" role="row">
+            <span>Refund requested</span>
+            <span>Return window under 30 days</span>
+            <span class="pass">Allowed</span>
+            <span>Policy engine</span>
+          </div>
+          <div class="audit-row" role="row">
+            <span>Shipment ETA requested</span>
+            <span>Use primary carrier data</span>
+            <span class="pass">Fetched</span>
+            <span>Carrier API</span>
+          </div>
+          <div class="audit-row" role="row">
+            <span>Address edit requested</span>
+            <span>Allowed before fulfillment</span>
+            <span class="pass">Updated</span>
+            <span>OMS</span>
+          </div>
+          <div class="audit-row" role="row">
+            <span>Handoff evaluated</span>
+            <span>Escalate below 0.75 confidence</span>
+            <span>Not required</span>
+            <span>Caseflow agent</span>
+          </div>
+        </div>
+      </section>
+
+      <section class="section" id="setup" aria-labelledby="setup-title">
+        <div class="container section-head">
+          <p class="section-label">Setup</p>
+          <h2 id="setup-title">Start narrow. Prove it. Expand from the audit trail.</h2>
+        </div>
+        <ol class="container setup-timeline">
+          <li>
+            <span>01</span>
+            <h3>Connect sources</h3>
+            <p>Helpdesk, OMS, carrier, catalog, payments, and knowledge base.</p>
+          </li>
+          <li>
+            <span>02</span>
+            <h3>Import policies</h3>
+            <p>Return rules, refund thresholds, shipping promises, and escalation paths.</p>
+          </li>
+          <li>
+            <span>03</span>
+            <h3>Approve actions</h3>
+            <p>Set which updates agents can perform and where human review remains required.</p>
+          </li>
+          <li>
+            <span>04</span>
+            <h3>Release by queue</h3>
+            <p>Launch order tracking first, then expand to refunds, returns, and product support.</p>
+          </li>
+        </ol>
+      </section>
+
+      <section class="section results" id="results" aria-labelledby="results-title">
+        <div class="container results-inner">
+          <div>
+            <p class="section-label">Measured after 90 days</p>
+            <h2 id="results-title">Fewer repetitive tickets. More accountable automation.</h2>
+          </div>
+          <div class="metrics" aria-label="Customer results">
+            <div>
+              <strong>68%</strong>
+              <span>tickets resolved without handoff</span>
+            </div>
+            <div>
+              <strong>42%</strong>
+              <span>faster first response</span>
+            </div>
+            <div>
+              <strong>2.3M</strong>
+              <span>order events processed</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="section final-cta" id="demo" aria-labelledby="demo-title">
+        <div class="container final-inner">
+          <h2 id="demo-title">See which support workflows are ready for automation.</h2>
+          <p>
+            Send a sample queue. Caseflow maps the repetitive paths, the policy
+            gates, and the exact actions an agent can safely take.
+          </p>
+          <a class="button button-primary" href="mailto:hello@caseflow.example">Run a support audit</a>
+        </div>
+      </section>
+    </main>
+
+    <footer class="site-footer">
+      <div class="container footer-inner">
+        <a class="brand" href="#top" aria-label="Caseflow home">
+          <span class="brand-mark" aria-hidden="true"></span>
+          <span>Caseflow</span>
+        </a>
+        <nav aria-label="Footer">
+          <a href="#coverage">Coverage</a>
+          <a href="#audit">Audit</a>
+          <a href="#setup">Setup</a>
+          <a href="#results">Results</a>
+        </nav>
+        <p>Support operations, resolved with policy.</p>
+      </div>
+    </footer>
+
+    <script src="script.js"></script>
+  </body>
+</html>

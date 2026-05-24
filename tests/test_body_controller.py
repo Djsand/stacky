@@ -72,6 +72,37 @@ class BodyControllerRawAudioTest(unittest.TestCase):
         self.assertEqual(sent[0].type, "body.gesture")
         self.assertEqual(sent[0].payload["name"], "nod")
 
+    def test_controller_sends_gesture_with_face_lock_base(self) -> None:
+        sent = []
+        controller = StackChanBodyController()
+
+        def send(command) -> bool:
+            sent.append(command)
+            return True
+
+        controller.send = send  # type: ignore[method-assign]
+
+        self.assertTrue(controller.gesture("nod", base_x=0.31, base_y=-0.19))
+
+        self.assertEqual(sent[0].payload["baseX"], 0.31)
+        self.assertEqual(sent[0].payload["baseY"], -0.19)
+
+    def test_controller_sends_leds_command(self) -> None:
+        sent = []
+        controller = StackChanBodyController()
+
+        def send(command) -> bool:
+            sent.append(command)
+            return True
+
+        controller.send = send  # type: ignore[method-assign]
+
+        self.assertTrue(controller.set_leds(r=12, g=34, b=56, brightness=0.4))
+
+        self.assertEqual(sent[0].type, "body.leds")
+        self.assertEqual(sent[0].payload["r"], 12)
+        self.assertEqual(sent[0].payload["brightness"], 0.4)
+
     def test_controller_sends_motion_config_command(self) -> None:
         sent = []
         controller = StackChanBodyController()
@@ -132,6 +163,20 @@ class BodyControllerRawAudioTest(unittest.TestCase):
         self.assertTrue(controller.request_status())
 
         self.assertEqual(sent[0].type, "body.status")
+
+    def test_controller_sends_i2c_scan_request_command(self) -> None:
+        sent = []
+        controller = StackChanBodyController()
+
+        def send(command) -> bool:
+            sent.append(command)
+            return True
+
+        controller.send = send  # type: ignore[method-assign]
+
+        self.assertTrue(controller.request_i2c_scan())
+
+        self.assertEqual(sent[0].type, "body.i2c_scan")
 
     def test_controller_interrupt_audio_sends_stop_and_releases_waiters(self) -> None:
         sent = []

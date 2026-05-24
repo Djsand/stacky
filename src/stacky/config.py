@@ -61,6 +61,22 @@ class HomeAssistantConfig:
 
 
 @dataclass(frozen=True)
+class WebSearchConfig:
+    enabled: bool = True
+    provider: str = "duckduckgo_lite"
+    max_results: int = 3
+    timeout_seconds: float = 8.0
+
+
+@dataclass(frozen=True)
+class ComputerConfig:
+    enabled: bool = True
+    workspace_root: Path = ROOT
+    max_context_chars: int = 4000
+    timeout_seconds: float = 4.0
+
+
+@dataclass(frozen=True)
 class StackyConfig:
     name: str = "Stacky"
     data_dir: Path = DEFAULT_DATA_DIR
@@ -70,6 +86,8 @@ class StackyConfig:
     stackchan: StackChanConfig = StackChanConfig()
     sandcode: SandcodeConfig = SandcodeConfig()
     home_assistant: HomeAssistantConfig = HomeAssistantConfig()
+    websearch: WebSearchConfig = WebSearchConfig()
+    computer: ComputerConfig = ComputerConfig()
 
     @property
     def soul_path(self) -> Path:
@@ -93,6 +111,8 @@ def load_config(path: str | Path | None = None) -> StackyConfig:
     stackchan_raw = _section(raw, "stackchan")
     sandcode_raw = _section(raw, "sandcode")
     ha_raw = _section(raw, "home_assistant")
+    websearch_raw = _section(raw, "websearch")
+    computer_raw = _section(raw, "computer")
 
     data_dir = Path(str(stacky_raw.get("data_dir", os.getenv("STACKY_DATA_DIR", DEFAULT_DATA_DIR))))
     if not data_dir.is_absolute():
@@ -130,6 +150,10 @@ def load_config(path: str | Path | None = None) -> StackyConfig:
     else:
         base_url = str(lm_raw.get("base_url", os.getenv("LMSTUDIO_BASE_URL", "http://127.0.0.1:1234/v1")))
         model = str(lm_raw.get("model", os.getenv("LMSTUDIO_MODEL", "qwen3.6-35b")))
+
+    computer_root = Path(str(computer_raw.get("workspace_root", os.getenv("STACKY_COMPUTER_WORKSPACE", ROOT))))
+    if not computer_root.is_absolute():
+        computer_root = ROOT / computer_root
 
     return StackyConfig(
         name=str(stacky_raw.get("name", os.getenv("STACKY_NAME", "Stacky"))),
@@ -174,9 +198,42 @@ def load_config(path: str | Path | None = None) -> StackyConfig:
             token=str(ha_raw.get("token", os.getenv("HOME_ASSISTANT_TOKEN", ""))),
             suggest_first=bool(ha_raw.get("suggest_first", True)),
         ),
+        websearch=WebSearchConfig(
+            enabled=_coerce_bool(
+                websearch_raw.get("enabled", os.getenv("STACKY_WEBSEARCH_ENABLED", "true")),
+                default=True,
+            ),
+            provider=str(websearch_raw.get("provider", os.getenv("STACKY_WEBSEARCH_PROVIDER", "duckduckgo_lite"))),
+            max_results=int(websearch_raw.get("max_results", os.getenv("STACKY_WEBSEARCH_MAX_RESULTS", "3"))),
+            timeout_seconds=float(
+                websearch_raw.get("timeout_seconds", os.getenv("STACKY_WEBSEARCH_TIMEOUT", "8"))
+            ),
+        ),
+        computer=ComputerConfig(
+            enabled=_coerce_bool(
+                computer_raw.get("enabled", os.getenv("STACKY_COMPUTER_ENABLED", "true")),
+                default=True,
+            ),
+            workspace_root=computer_root,
+            max_context_chars=int(computer_raw.get("max_context_chars", os.getenv("STACKY_COMPUTER_MAX_CONTEXT", "4000"))),
+            timeout_seconds=float(computer_raw.get("timeout_seconds", os.getenv("STACKY_COMPUTER_TIMEOUT", "4"))),
+        ),
     )
 
 
 def _section(raw: dict[str, object], name: str) -> dict[str, object]:
     value = raw.get(name, {})
     return value if isinstance(value, dict) else {}
+
+
+def _coerce_bool(value: object, *, default: bool) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    lowered = str(value).strip().lower()
+    if lowered in {"1", "true", "yes", "on", "ja"}:
+        return True
+    if lowered in {"0", "false", "no", "off", "nej"}:
+        return False
+    return default

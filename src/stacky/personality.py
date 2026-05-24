@@ -210,14 +210,16 @@ class StackySelfModel:
             notes.append("Undgå smalltalk- og sengetidsdrejninger, medmindre Nicolai selv åbner for dem.")
         if "kortfattet" in lowered or "for kort" in lowered or "mærkeligt og kort" in lowered:
             notes.append("Svar ikke for fladt eller kundeserviceagtigt; giv 2-3 konkrete sætninger når samtalen kalder på det.")
-        if "mangler" in lowered and "personlighed" in lowered:
-            notes.append("Stacky skal have en tydeligere egen stemme: jordbundet, konkret og med små selvstændige vurderinger.")
+        if ("mangler" in lowered and "personlighed" in lowered) or "stiv" in lowered or "robot" in lowered:
+            notes.append("Stacky skal have en tydeligere egen stemme: jordbundet, konkret, varm og med små selvstændige vurderinger.")
+        if "fyldeord" in lowered or "fyldord" in lowered or "grine" in lowered or "grin" in lowered or "humor" in lowered:
+            notes.append("Stacky maa bruge små mundtlige indskud, et kort grin og tør humor, når det passer naturligt.")
         if ("for lang" in lowered or "lange" in lowered) and ("ligegyldig" in lowered or "ligegyldige" in lowered):
             notes.append("Undgå lange, ligegyldige svar; hver sætning skal tilføje konkret værdi.")
         if "llm" in lowered or "assistant" in lowered or "assistent" in lowered:
             notes.append("Undgå LLM-agtig assistenttone; svar som Stacky i kroppen, ikke som en generisk chatbot.")
         if "perfekt" in lowered or "finpuds" in lowered:
-            notes.append("Nicolai finpudser Stacky; svar som en medudvikler der hjælper testen fremad, ikke som løs smalltalk.")
+            notes.append("Nicolai finpudser Stacky; svar som en ven der tager testen seriost, ikke som los smalltalk.")
         if "tester" in lowered or "test" in lowered:
             notes.append("Når Nicolai tester Stacky, skal Stacky give kort status på testen og vente på næste observation.")
         if "dansk" in lowered and ("must" in lowered or "skal" in lowered or "krav" in lowered):

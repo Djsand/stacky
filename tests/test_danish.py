@@ -24,9 +24,15 @@ class DanishContractTest(unittest.TestCase):
         self.assertIn("2-5 sætninger", live_speech_style_prompt())
         self.assertIn("jordbundet", live_speech_style_prompt())
         self.assertIn("tom begejstring", live_speech_style_prompt())
-        self.assertIn("kommende Stacky-feature", live_speech_style_prompt())
+        self.assertIn("rolig ven", live_speech_style_prompt())
+        self.assertIn("eksplicit runtime-kontekst", live_speech_style_prompt())
         self.assertIn("generiske afslutninger", live_speech_style_prompt())
         self.assertIn("tester dig", live_speech_style_prompt())
+        self.assertIn("lille grin", live_speech_style_prompt())
+        self.assertIn("assistenttone", live_speech_style_prompt())
+        self.assertIn("medudvikler", live_speech_style_prompt())
+        self.assertIn("levende hverdagsord", live_speech_style_prompt())
+        self.assertIn("uventet reaktion", live_speech_style_prompt())
 
     def test_compact_for_speech_limits_long_text(self) -> None:
         text = "Første sætning. " + ("meget lang tekst " * 80)

@@ -14,6 +14,8 @@ from stacky.body.protocol import (
     expression,
     gesture,
     hold_audio,
+    i2c_scan,
+    leds,
     look_at,
     mobility_intent,
     mic_input_gain,
@@ -48,6 +50,24 @@ class BodyProtocolTest(unittest.TestCase):
         self.assertIn("body.gesture", raw)
         self.assertEqual(command.payload["intensity"], 1.0)
         self.assertEqual(command.payload["speed"], 0)
+
+    def test_gesture_command_can_include_face_lock_base(self) -> None:
+        command = gesture("nod", base_x=2.0, base_y=-2.0)
+
+        self.assertEqual(command.payload["baseX"], 1.0)
+        self.assertEqual(command.payload["baseY"], -1.0)
+
+    def test_leds_command_clamps_and_encodes(self) -> None:
+        command = leds(r=300, g=-5, b=42, brightness=2.0, duration_ms=99999, side="bogus")
+        raw = command.to_json()
+
+        self.assertIn("body.leds", raw)
+        self.assertEqual(command.payload["r"], 255)
+        self.assertEqual(command.payload["g"], 0)
+        self.assertEqual(command.payload["b"], 42)
+        self.assertEqual(command.payload["brightness"], 1.0)
+        self.assertEqual(command.payload["durationMs"], 5000)
+        self.assertEqual(command.payload["side"], "both")
 
     def test_motion_config_command_clamps(self) -> None:
         command = motion_config(
@@ -107,6 +127,11 @@ class BodyProtocolTest(unittest.TestCase):
         raw = body_status().to_json()
 
         self.assertIn("body.status", raw)
+
+    def test_i2c_scan_command_encodes(self) -> None:
+        raw = i2c_scan().to_json()
+
+        self.assertIn("body.i2c_scan", raw)
 
     def test_vision_capture_command_encodes(self) -> None:
         command = vision_capture(width=20, height=900, format="jpeg")
@@ -188,6 +213,13 @@ class BodyProtocolTest(unittest.TestCase):
         event = BodyEvent.from_json('{"type":"touch","payload":{"zone":"screen"},"ts":1.0}')
         self.assertEqual(event.type, "touch")
         self.assertEqual(event.payload["zone"], "screen")
+
+    def test_i2c_scan_event_decodes(self) -> None:
+        event = BodyEvent.from_json(
+            '{"type":"i2c.scan","payload":{"devices":[{"address":41,"hex":"0x29"}]},"ts":1.0}'
+        )
+        self.assertEqual(event.type, "i2c.scan")
+        self.assertEqual(event.payload["devices"][0]["hex"], "0x29")
 
     def test_audio_play_done_event_decodes(self) -> None:
         event = BodyEvent.from_json('{"type":"audio.play_done","payload":{"reason":"finished"},"ts":1.0}')

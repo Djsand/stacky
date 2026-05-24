@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -43,10 +44,14 @@ class LocalTextVoiceRuntime:
         brain: StackyBrain,
         output: SpeechOutput | None = None,
         presence: BodyPresence | None = None,
+        web_context_provider: Callable[[str], Awaitable[str]] | None = None,
+        computer_context_provider: Callable[[str], Awaitable[str]] | None = None,
     ) -> None:
         self.brain = brain
         self.output = output or ConsoleSpeechOutput()
         self.presence = presence or BodyPresence(None)
+        self.web_context_provider = web_context_provider
+        self.computer_context_provider = computer_context_provider
         self.settings = DanishVoiceSettings()
         self.settings.validate()
 
@@ -58,7 +63,11 @@ class LocalTextVoiceRuntime:
         self.presence.set("listening")
         await asyncio.sleep(0.1)
         self.presence.set("thinking")
-        reply = await self.brain.respond(user_text)
+        web_context = await self.web_context_provider(user_text) if self.web_context_provider is not None else ""
+        computer_context = (
+            await self.computer_context_provider(user_text) if self.computer_context_provider is not None else ""
+        )
+        reply = await self.brain.respond(user_text, web_context=web_context, computer_context=computer_context)
         self.presence.set("happy")
         await self.output.speak(reply.spoken_text or reply.text)
         return reply.text

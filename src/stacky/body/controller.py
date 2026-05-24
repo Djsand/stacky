@@ -17,6 +17,8 @@ from .protocol import (
     expression,
     gesture,
     hold_audio,
+    i2c_scan,
+    leds,
     look_at,
     mic_input_gain,
     motion_config,
@@ -99,8 +101,39 @@ class StackChanBodyController:
     def look_at(self, x: float, y: float, *, speed: int = 500) -> bool:
         return self.send(look_at(x, y, speed=speed))
 
-    def gesture(self, name: str, *, intensity: float = 1.0, speed: int = 500) -> bool:
-        return self.send(gesture(name, intensity=intensity, speed=speed))
+    def gesture(
+        self,
+        name: str,
+        *,
+        intensity: float = 1.0,
+        speed: int = 500,
+        base_x: float | None = None,
+        base_y: float | None = None,
+    ) -> bool:
+        return self.send(gesture(name, intensity=intensity, speed=speed, base_x=base_x, base_y=base_y))
+
+    def set_leds(
+        self,
+        *,
+        r: int = 0,
+        g: int = 0,
+        b: int = 0,
+        brightness: float = 1.0,
+        duration_ms: int = 300,
+        side: str = "both",
+        mode: str = "solid",
+    ) -> bool:
+        return self.send(
+            leds(
+                r=r,
+                g=g,
+                b=b,
+                brightness=brightness,
+                duration_ms=duration_ms,
+                side=side,
+                mode=mode,
+            )
+        )
 
     def configure_motion(
         self,
@@ -205,6 +238,9 @@ class StackChanBodyController:
 
     def request_status(self) -> bool:
         return self.send(body_status())
+
+    def request_i2c_scan(self) -> bool:
+        return self.send(i2c_scan())
 
     def capture_vision_frame(
         self,

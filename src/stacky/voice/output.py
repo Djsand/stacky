@@ -174,17 +174,26 @@ class StackChanSpeechOutput:
         self._task = None
         if task is not None:
             task.cancel()
-            with contextlib.suppress(asyncio.CancelledError, asyncio.TimeoutError):
+            try:
                 await asyncio.wait_for(task, timeout=0.8)
+            except (asyncio.CancelledError, asyncio.TimeoutError):
+                pass
+            except Exception as exc:
+                print(f"[speech] StackChan output stopped after task error: {exc}", flush=True)
         self.controller.interrupt_audio()
 
     async def wait(self) -> None:
         task = self._task
         if task is not None:
-            with contextlib.suppress(asyncio.CancelledError):
+            try:
                 await task
-            if self._task is task:
-                self._task = None
+            except asyncio.CancelledError:
+                pass
+            except Exception as exc:
+                print(f"[speech] StackChan output failed: {exc}", flush=True)
+            finally:
+                if self._task is task:
+                    self._task = None
 
     async def _speak_chunks(self, text: str, utterance_id: int) -> None:
         chunks = split_for_speech(text, max_chars=self.chunk_chars, rhythmic=self.rhythmic_chunks)
@@ -286,6 +295,13 @@ class StackChanSpeechOutput:
             return wav_path
 
         output_path = wav_path.with_suffix(".stackchan.wav")
+        if sample_width == 2 and channels in {1, 2}:
+            return _write_stackchan_pcm16_wav(
+                wav_path,
+                output_path,
+                target_sample_rate=self.stackchan_sample_rate,
+            )
+
         ffmpeg_exe = shutil.which("ffmpeg")
         if not ffmpeg_exe:
             for candidate in (
@@ -299,6 +315,9 @@ class StackChanSpeechOutput:
                     break
         if not ffmpeg_exe:
             raise RuntimeError("ffmpeg not found on PATH or known install locations")
+        temp_output = output_path.with_suffix(output_path.suffix + ".tmp")
+        with contextlib.suppress(FileNotFoundError):
+            temp_output.unlink()
         subprocess.run(
             [
                 ffmpeg_exe,
@@ -313,10 +332,14 @@ class StackChanSpeechOutput:
                 str(self.stackchan_sample_rate),
                 "-sample_fmt",
                 "s16",
-                str(output_path),
+                str(temp_output),
             ],
             check=True,
+            timeout=10.0,
         )
+        if not temp_output.exists() or temp_output.stat().st_size <= 44:
+            raise RuntimeError(f"ffmpeg produced empty StackChan WAV: {temp_output}")
+        temp_output.replace(output_path)
         return output_path
 
 
@@ -348,13 +371,79 @@ def create_stackchan_supertonic_output(
         SupertonicTTS(voice),
         controller,
         output_dir=ROOT / "artifacts" / "stackchan_speech_supertonic",
-        chunk_chars=220,
-        rhythm_gap_seconds=0.055,
+        chunk_chars=200,
+        rhythm_gap_seconds=0.035,
         rhythmic_chunks=True,
         target_active_rms=target_active_rms,
         max_gain=max_gain,
         volume_level=volume_level,
     )
+
+
+def _write_stackchan_pcm16_wav(
+    input_path: Path,
+    output_path: Path,
+    *,
+    target_sample_rate: int,
+) -> Path:
+    with wave.open(str(input_path), "rb") as wav_file:
+        channels = wav_file.getnchannels()
+        sample_width = wav_file.getsampwidth()
+        sample_rate = wav_file.getframerate()
+        frames = wav_file.getnframes()
+        raw = wav_file.readframes(frames)
+    if sample_width != 2 or channels not in {1, 2}:
+        raise ValueError("pure StackChan WAV conversion expects mono/stereo PCM16")
+
+    samples = [
+        int.from_bytes(raw[index : index + 2], "little", signed=True)
+        for index in range(0, len(raw), 2)
+    ]
+    if channels == 2:
+        samples = [
+            int((samples[index] + samples[index + 1]) / 2)
+            for index in range(0, len(samples) - 1, 2)
+        ]
+
+    resampled = _resample_pcm16_mono(samples, source_rate=sample_rate, target_rate=target_sample_rate)
+    temp_output = output_path.with_suffix(output_path.suffix + ".tmp")
+    with contextlib.suppress(FileNotFoundError):
+        temp_output.unlink()
+    with wave.open(str(temp_output), "wb") as wav_file:
+        wav_file.setnchannels(1)
+        wav_file.setsampwidth(2)
+        wav_file.setframerate(target_sample_rate)
+        wav_file.writeframes(
+            b"".join(int(sample).to_bytes(2, "little", signed=True) for sample in resampled)
+        )
+    if temp_output.stat().st_size <= 44:
+        raise RuntimeError(f"empty StackChan WAV conversion: {temp_output}")
+    temp_output.replace(output_path)
+    return output_path
+
+
+def _resample_pcm16_mono(samples: list[int], *, source_rate: int, target_rate: int) -> list[int]:
+    if source_rate <= 0 or target_rate <= 0:
+        raise ValueError("sample rates must be positive")
+    if not samples or source_rate == target_rate:
+        return samples
+
+    target_count = max(1, round(len(samples) * target_rate / source_rate))
+    ratio = source_rate / target_rate
+    result: list[int] = []
+    last_index = len(samples) - 1
+    for out_index in range(target_count):
+        source_position = out_index * ratio
+        left_index = min(last_index, int(source_position))
+        right_index = min(last_index, left_index + 1)
+        fraction = source_position - left_index
+        value = samples[left_index] * (1.0 - fraction) + samples[right_index] * fraction
+        if value > 32767:
+            value = 32767
+        elif value < -32768:
+            value = -32768
+        result.append(int(round(value)))
+    return result
 
 
 def clamp_volume_level(level: int) -> int:

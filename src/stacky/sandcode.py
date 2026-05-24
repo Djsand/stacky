@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -28,6 +29,14 @@ class SandcodeSession:
     model: str
     permission_mode: str
     effort: str
+    chat_only: bool = False
+
+
+@dataclass(frozen=True)
+class SandcodeAction:
+    prompt: str
+    cwd: Path | None = None
+    chat_only: bool = False
 
 
 class SandcodeMobileHostClient:
@@ -97,6 +106,7 @@ class SandcodeMobileHostClient:
             model=self.config.model,
             permission_mode=self.config.permission_mode,
             effort=self.config.effort,
+            chat_only=chat_only,
         )
 
     async def send_user_message(self, session: SandcodeSession, text: str) -> None:
@@ -110,7 +120,7 @@ class SandcodeMobileHostClient:
                 "model": session.model,
                 "permissionMode": session.permission_mode,
                 "effort": session.effort,
-                "chatOnly": False,
+                "chatOnly": session.chat_only,
             }
         )
 
@@ -134,15 +144,25 @@ class SandcodeMobileHostClient:
         cwd: Path,
         prompt: str,
         on_event: Callable[[dict[str, Any]], None],
+        *,
+        chat_only: bool = False,
     ) -> SandcodeSession:
-        session = await self.start_session(cwd)
-        listener = asyncio.create_task(self._listen_until_idle(on_event))
+        session = await self.start_session(cwd, chat_only=chat_only)
+        listener = asyncio.create_task(self._listen_until_idle(on_event, session.session_id))
         await self.send_user_message(session, prompt)
         await listener
         return session
 
-    async def _listen_until_idle(self, on_event: Callable[[dict[str, Any]], None]) -> None:
+    async def _listen_until_idle(self, on_event: Callable[[dict[str, Any]], None], session_id: str | None = None) -> None:
+        session_ids = {session_id} if session_id else set()
         async for event in self.events():
+            event_session_id = str(event.get("sessionId") or "")
+            if event.get("type") == "session_rekey" and str(event.get("oldSessionId") or "") in session_ids:
+                new_session_id = str(event.get("sessionId") or "")
+                if new_session_id:
+                    session_ids.add(new_session_id)
+            if session_ids and event_session_id and event_session_id not in session_ids:
+                continue
             on_event(event)
             if event.get("type") == "session_state" and event.get("state") == "idle":
                 return
@@ -206,3 +226,59 @@ class SandcodeDanishSummarizer:
         if event_type == "error":
             return compact_for_speech(f"Sandcode meldte fejl: {event.get('message')}", max_chars=260)
         return None
+
+
+def parse_sandcode_action(text: str) -> SandcodeAction | None:
+    """Parse explicit Danish Sandcode requests.
+
+    The word "sandcode" is required on purpose. Stacky should not start a
+    coding agent from vague speech or noisy STT fragments.
+    """
+
+    normalized = _normalize_for_intent(text)
+    if "sandcode" not in normalized:
+        return None
+    if any(phrase in normalized for phrase in ("stop sandcode", "afbryd sandcode", "annuller sandcode")):
+        return SandcodeAction(prompt="__cancel__")
+
+    chat_only = any(phrase in normalized for phrase in ("chat only", "kun chat", "uden tools", "uden vaerktoejer"))
+    prompt = _extract_sandcode_prompt(text)
+    if not prompt:
+        return None
+    return SandcodeAction(prompt=prompt, chat_only=chat_only)
+
+
+def _extract_sandcode_prompt(text: str) -> str:
+    clean = text.strip()
+    if not clean:
+        return ""
+    clean = re.sub(r"(?i)\bsand\s+(?:code|kode)\b", "sandcode", clean)
+    patterns = (
+        r"(?i)^\s*(?:brug|start|k[øo]r|bed|s[æa]t|lad|send)\s+sandcode\s+(?:til\s+at|om\s+at|på|paa|med)?\s*(.+)$",
+        r"(?i)^\s*sandcode\s+(?:skal|må|maa|kan|til\s+at|om\s+at)?\s*(.+)$",
+    )
+    for pattern in patterns:
+        match = re.match(pattern, clean)
+        if match:
+            return _cleanup_prompt(match.group(1))
+    lowered = _normalize_for_intent(clean)
+    index = lowered.find("sandcode")
+    if index < 0:
+        return ""
+    return _cleanup_prompt(clean[index + len("sandcode") :])
+
+
+def _cleanup_prompt(prompt: str) -> str:
+    prompt = re.sub(r"(?i)\b(kun chat|chat only|uden tools|uden v[æa]rkt[øo]jer)\b", "", prompt)
+    prompt = re.sub(r"\s+", " ", prompt).strip(" .,:;-")
+    return prompt
+
+
+def _normalize_for_intent(text: str) -> str:
+    normalized = (
+        text.lower()
+        .replace("\u00f8", "oe")
+        .replace("\u00e5", "aa")
+        .replace("\u00e6", "ae")
+    )
+    return normalized.replace("sand code", "sandcode").replace("sand kode", "sandcode")

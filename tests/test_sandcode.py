@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 
 from stacky.config import SandcodeConfig
-from stacky.sandcode import SandcodeDanishSummarizer, SandcodeMobileHostClient
+from stacky.sandcode import SandcodeDanishSummarizer, SandcodeMobileHostClient, parse_sandcode_action
 
 
 class FakeSandcodeClient(SandcodeMobileHostClient):
@@ -18,6 +18,7 @@ class FakeSandcodeClient(SandcodeMobileHostClient):
             )
         )
         self.payloads: list[dict[str, object]] = []
+        self.ws_messages: list[dict[str, object]] = []
 
     async def ensure_host(self) -> None:
         return None
@@ -25,6 +26,9 @@ class FakeSandcodeClient(SandcodeMobileHostClient):
     def _request_json(self, method: str, path: str, payload: dict[str, object] | None) -> dict[str, object]:
         self.payloads.append({"method": method, "path": path, "payload": payload or {}})
         return {"sessionId": "mobile-test", "cwd": "C:/project"}
+
+    async def _send_ws(self, message: dict[str, object]) -> None:
+        self.ws_messages.append(message)
 
 
 class SandcodeTest(unittest.IsolatedAsyncioTestCase):
@@ -37,6 +41,23 @@ class SandcodeTest(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(payload, dict)
         self.assertEqual(payload["permissionMode"], "autonomousAgent")
         self.assertFalse(payload["chatOnly"])
+
+    async def test_chat_only_is_sent_to_session_and_message(self) -> None:
+        client = FakeSandcodeClient()
+        session = await client.start_session(Path("C:/project"), chat_only=True)
+        await client.send_user_message(session, "forklar uden tools")
+
+        payload = client.payloads[0]["payload"]
+        self.assertIsInstance(payload, dict)
+        self.assertTrue(payload["chatOnly"])
+        self.assertTrue(client.ws_messages[0]["chatOnly"])
+
+    def test_parse_sandcode_action_requires_explicit_sandcode(self) -> None:
+        self.assertIsNone(parse_sandcode_action("lav en fil på skrivebordet"))
+        action = parse_sandcode_action("brug sand code til at rette testen")
+        self.assertIsNotNone(action)
+        assert action is not None
+        self.assertEqual(action.prompt, "rette testen")
 
     async def test_summarizer_speaks_danish_status(self) -> None:
         summarizer = SandcodeDanishSummarizer()

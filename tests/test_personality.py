@@ -83,7 +83,8 @@ class StackySelfModelTest(unittest.TestCase):
             model = StackySelfModel(Path(tmp))
 
             observation = model.observe_user_turn(
-                "Du mangler personlighed, svarene bliver lange og ligegyldige og meget LLM agtige.",
+                "Du mangler personlighed, svarene bliver lange og ligegyldige og meget LLM agtige. "
+                "Den er for stiv og robotagtig, og den maa gerne kunne grine og bruge lidt humor.",
                 trusted=True,
                 source="test",
             )
@@ -92,6 +93,8 @@ class StackySelfModelTest(unittest.TestCase):
         self.assertIn("tydeligere egen stemme", notes)
         self.assertIn("konkret værdi", notes)
         self.assertIn("generisk chatbot", notes)
+        self.assertIn("kort grin", notes)
+        self.assertIn("tør humor", notes)
 
 
 if __name__ == "__main__":

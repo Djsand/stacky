@@ -53,17 +53,19 @@ class FakeController:
 
 
 class FakeWavTTS:
+    def __init__(self, sample_rate: int = 24_000) -> None:
+        self.sample_rate = sample_rate
+
     def load(self) -> None:
         pass
 
     def synthesize_to_file(self, text: str, output_path: Path, **kwargs: object) -> Path:
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        sample_rate = 24_000
         samples = max(80, len(text) * 16)
         with wave.open(str(output_path), "wb") as wav_file:
             wav_file.setnchannels(1)
             wav_file.setsampwidth(2)
-            wav_file.setframerate(sample_rate)
+            wav_file.setframerate(self.sample_rate)
             wav_file.writeframes(b"".join(int(1200).to_bytes(2, "little", signed=True) for _ in range(samples)))
         return output_path
 
@@ -136,8 +138,8 @@ class VoiceOutputTest(unittest.IsolatedAsyncioTestCase):
     def test_stackchan_supertonic_output_uses_rhythmic_chunks(self) -> None:
         output = create_stackchan_supertonic_output(FakeController())  # type: ignore[arg-type]
 
-        self.assertEqual(output.chunk_chars, 220)
-        self.assertLessEqual(output.rhythm_gap_seconds, 0.06)
+        self.assertEqual(output.chunk_chars, 200)
+        self.assertLessEqual(output.rhythm_gap_seconds, 0.04)
         self.assertTrue(output.rhythmic_chunks)
 
     def test_stackchan_output_can_change_volume(self) -> None:
@@ -167,6 +169,53 @@ class VoiceOutputTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(len(controller.audio_calls), 1)
         self.assertEqual(controller.hold_states, [True, False])
+
+    async def test_stackchan_wait_absorbs_playback_task_error(self) -> None:
+        output = StackChanSpeechOutput(FakeTTS(), FakeController())  # type: ignore[arg-type]
+
+        async def fail_speak_chunks(text: str, utterance_id: int) -> None:
+            raise RuntimeError("conversion failed")
+
+        output._speak_chunks = fail_speak_chunks  # type: ignore[method-assign]
+
+        await output.speak("Hej")
+        await output.wait()
+
+        self.assertIsNone(output._task)
+
+    async def test_stackchan_stop_absorbs_failed_previous_playback_task(self) -> None:
+        output = StackChanSpeechOutput(FakeTTS(), FakeController())  # type: ignore[arg-type]
+
+        async def fail_speak_chunks(text: str, utterance_id: int) -> None:
+            raise RuntimeError("conversion failed")
+
+        async def ok_speak_chunks(text: str, utterance_id: int) -> None:
+            return None
+
+        output._speak_chunks = fail_speak_chunks  # type: ignore[method-assign]
+        await output.speak("Hej")
+        await asyncio.sleep(0)
+        output._speak_chunks = ok_speak_chunks  # type: ignore[method-assign]
+
+        await output.speak("Igen")
+        await output.wait()
+
+        self.assertIsNone(output._task)
+
+    def test_stackchan_wav_conversion_resamples_without_ffmpeg_for_pcm16(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "speech.wav"
+            FakeWavTTS(sample_rate=44_100).synthesize_to_file("hej", path)
+            output = StackChanSpeechOutput(FakeWavTTS(), FakeController())  # type: ignore[arg-type]
+
+            converted = output._prepare_stackchan_wav(path)
+
+            self.assertEqual(converted, path.with_suffix(".stackchan.wav"))
+            self.assertGreater(converted.stat().st_size, 44)
+            with wave.open(str(converted), "rb") as wav_file:
+                self.assertEqual(wav_file.getnchannels(), 1)
+                self.assertEqual(wav_file.getsampwidth(), 2)
+                self.assertEqual(wav_file.getframerate(), 24_000)
 
     def test_join_pcm16_chunks_adds_short_aligned_gap(self) -> None:
         first = int(100).to_bytes(2, "little", signed=True)

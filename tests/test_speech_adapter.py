@@ -56,6 +56,17 @@ class SpeechAdapterTest(unittest.TestCase):
 
         self.assertEqual(spoken, "Det giver mening, så jeg venter.")
 
+    def test_laughter_is_spoken_as_short_sound(self) -> None:
+        spoken = adapt_for_danish_speech("Haha, den var ny. (griner) Det kan jeg godt lide.")
+
+        self.assertIn("ha ha", spoken)
+        self.assertIn("ha, Det", spoken)
+
+    def test_assistant_stock_phrases_are_softened(self) -> None:
+        spoken = adapt_for_danish_speech("Det er modtaget. Jeg afventer dit næste signal.")
+
+        self.assertEqual(spoken, "Okay, jeg venter på dit næste signal.")
+
     def test_split_for_speech(self) -> None:
         chunks = split_for_speech("Hej. " * 100, max_chars=40)
 

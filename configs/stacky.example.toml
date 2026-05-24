@@ -40,3 +40,15 @@ permission_mode = "autonomousAgent"
 base_url = "http://homeassistant.local:8123"
 token = ""
 suggest_first = true
+
+[websearch]
+enabled = true
+provider = "duckduckgo_lite"
+max_results = 3
+timeout_seconds = 8
+
+[computer]
+enabled = true
+workspace_root = "."
+max_context_chars = 4000
+timeout_seconds = 4

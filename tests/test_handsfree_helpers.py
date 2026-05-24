@@ -18,6 +18,8 @@ from stacky.cli import (
     _resolve_capture_speech_styles,
     _resolve_stt_bench_specs,
     _run_motion_gesture,
+    _should_capture_vision_runtime,
+    _should_track_face_runtime,
     _transcript_key,
     _voice_memory_policy,
     _wants_visual_context,
@@ -366,6 +368,63 @@ class HandsfreeHelpersTest(unittest.TestCase):
         self.assertFalse(accepted)
         self.assertEqual(reason, "kort højfrekvent STT-fragment")
 
+    def test_rejects_short_contextless_single_word_fragment(self) -> None:
+        result = STTResult(
+            text="gen",
+            audio=AudioStats(duration_seconds=1.42, rms=745, peak=5322, sample_rate=24000, channels=1),
+            avg_logprob=-0.02,
+            no_speech_prob=0.0,
+            compression_ratio=0.0,
+        )
+        quality = TurnSignalQuality(
+            duration_seconds=1.42,
+            median_rms=172,
+            p80_rms=900,
+            p95_rms=1931,
+            peak=5322,
+            active_ratio=0.23,
+            active_ms=320,
+            max_active_run_ms=320,
+            crest_factor=11.5,
+            active_threshold=420,
+            zero_crossing_rate=0.09,
+            speech_band_ms=320,
+            max_speech_band_run_ms=320,
+        )
+
+        accepted, reason = _accept_stt_result(result, signal_quality=quality)
+
+        self.assertFalse(accepted)
+        self.assertEqual(reason, "kort tyndt STT-fragment")
+
+    def test_keeps_short_single_word_body_command(self) -> None:
+        result = STTResult(
+            text="op",
+            audio=AudioStats(duration_seconds=1.42, rms=745, peak=5322, sample_rate=24000, channels=1),
+            avg_logprob=-0.02,
+            no_speech_prob=0.0,
+            compression_ratio=0.0,
+        )
+        quality = TurnSignalQuality(
+            duration_seconds=1.42,
+            median_rms=172,
+            p80_rms=900,
+            p95_rms=1931,
+            peak=5322,
+            active_ratio=0.23,
+            active_ms=320,
+            max_active_run_ms=320,
+            crest_factor=11.5,
+            active_threshold=420,
+            zero_crossing_rate=0.09,
+            speech_band_ms=320,
+            max_speech_band_run_ms=320,
+        )
+
+        accepted, reason = _accept_stt_result(result, signal_quality=quality)
+
+        self.assertTrue(accepted, reason)
+
     def test_rejects_single_bare_reference_turn(self) -> None:
         result = STTResult(
             text="den",
@@ -656,13 +715,50 @@ class HandsfreeHelpersTest(unittest.TestCase):
         self.assertFalse(accepted)
         self.assertEqual(reason, "clippet støj uden sammenhængende tale")
 
-    def test_voice_memory_policy_defaults_to_trusted_session(self) -> None:
+    def test_rejects_low_confidence_filler_reference_fragment(self) -> None:
+        result = STTResult(
+            text="den her den ned",
+            audio=AudioStats(duration_seconds=3.20, rms=709, peak=3160, sample_rate=24000, channels=1),
+            avg_logprob=-0.86,
+            no_speech_prob=0.0,
+            compression_ratio=0.0,
+        )
+        quality = TurnSignalQuality(
+            duration_seconds=3.20,
+            median_rms=180,
+            p80_rms=600,
+            p95_rms=980,
+            peak=3160,
+            active_ratio=0.48,
+            active_ms=1540,
+            max_active_run_ms=620,
+            crest_factor=4.5,
+            active_threshold=420,
+            zero_crossing_rate=0.12,
+            speech_band_ms=1280,
+            max_speech_band_run_ms=700,
+        )
+
+        accepted, reason = _accept_stt_result(result, signal_quality=quality)
+
+        self.assertFalse(accepted)
+        self.assertEqual(reason, "repetitivt filler-støjfragment")
+
+    def test_voice_memory_policy_trusted_allows_memory_writes(self) -> None:
         policy = _voice_memory_policy("trusted")
 
         self.assertTrue(policy.persist_session)
         self.assertTrue(policy.allow_memory_writes)
         self.assertTrue(policy.remember_recent)
         self.assertEqual(policy.session_source, "stackchan-voice")
+
+    def test_voice_memory_policy_session_only_disables_memory_writes(self) -> None:
+        policy = _voice_memory_policy("session-only")
+
+        self.assertTrue(policy.persist_session)
+        self.assertFalse(policy.allow_memory_writes)
+        self.assertTrue(policy.remember_recent)
+        self.assertEqual(policy.session_source, "stackchan-voice-session")
 
     def test_voice_memory_policy_can_disable_writes(self) -> None:
         policy = _voice_memory_policy("off")
@@ -770,6 +866,60 @@ class HandsfreeHelpersTest(unittest.TestCase):
     def test_capture_prompt_for_fast_and_mumbled_speech(self) -> None:
         self.assertIn("hurtigt", _capture_prompt_for_style("Hej Stacky.", "fast"))
         self.assertIn("Muml", _capture_prompt_for_style("Hej Stacky.", "mumble"))
+
+    def test_face_tracking_is_allowed_only_while_listening(self) -> None:
+        self.assertFalse(
+            _should_track_face_runtime(
+                face_tracking=True,
+                body_state_name="thinking",
+                detector_ready=True,
+                detector_active=False,
+            )
+        )
+        self.assertTrue(
+            _should_track_face_runtime(
+                face_tracking=True,
+                body_state_name="listening",
+                detector_ready=True,
+                detector_active=False,
+            )
+        )
+        self.assertFalse(
+            _should_track_face_runtime(
+                face_tracking=True,
+                body_state_name="listening",
+                detector_ready=True,
+                detector_active=True,
+            )
+        )
+        self.assertFalse(
+            _should_track_face_runtime(
+                face_tracking=True,
+                body_state_name="thinking",
+                detector_ready=False,
+                detector_active=False,
+            )
+        )
+
+    def test_vision_capture_only_runs_while_accepting_audio(self) -> None:
+        self.assertTrue(
+            _should_capture_vision_runtime(
+                controller_connected=True,
+                accepting_audio=True,
+            )
+        )
+        self.assertFalse(
+            _should_capture_vision_runtime(
+                controller_connected=True,
+                accepting_audio=False,
+            )
+        )
+        self.assertFalse(
+            _should_capture_vision_runtime(
+                controller_connected=False,
+                accepting_audio=True,
+            )
+        )
 
     def test_word_error_rate(self) -> None:
         self.assertEqual(_word_error_rate("hej med dig", "hej med dig"), 0.0)

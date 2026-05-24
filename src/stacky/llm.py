@@ -22,6 +22,13 @@ class GeminiError(LLMError):
     pass
 
 
+class GeminiPromptBlockedError(GeminiError):
+    def __init__(self, block_reason: str, response: dict[str, Any] | None = None) -> None:
+        self.block_reason = block_reason
+        self.response = response or {}
+        super().__init__(f"Gemini blocked prompt: {block_reason}")
+
+
 @dataclass(frozen=True)
 class ChatImageAttachment:
     mime_type: str
@@ -196,9 +203,24 @@ class GeminiClient:
         except OSError as exc:
             raise GeminiError(f"Gemini connection failed: {exc}") from exc
 
+        return self._extract_content(data)
+
+    def _extract_content(self, data: dict[str, Any]) -> str:
+        prompt_feedback = data.get("promptFeedback")
+        if isinstance(prompt_feedback, dict):
+            block_reason = prompt_feedback.get("blockReason")
+            if block_reason:
+                raise GeminiPromptBlockedError(str(block_reason), data)
+
         try:
-            parts = data["candidates"][0]["content"]["parts"]
+            candidate = data["candidates"][0]
+            parts = candidate["content"]["parts"]
             content = "".join(str(part.get("text", "")) for part in parts)
         except (KeyError, IndexError, TypeError) as exc:
+            candidates = data.get("candidates")
+            if isinstance(candidates, list) and candidates and isinstance(candidates[0], dict):
+                finish_reason = candidates[0].get("finishReason")
+                if finish_reason in {"SAFETY", "BLOCKLIST", "PROHIBITED_CONTENT", "SPII"}:
+                    raise GeminiPromptBlockedError(str(finish_reason), data) from exc
             raise GeminiError(f"Unexpected Gemini response: {data!r}") from exc
         return content.strip()
