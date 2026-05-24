@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import asyncio
 import unittest
+from contextlib import suppress
 
 from stacky.cli import (
     _accept_stt_result,
+    _body_presence_loop,
     _capture_prompt_for_style,
     _clean_transcript,
     _is_likely_hallucination,
@@ -18,6 +21,7 @@ from stacky.cli import (
     _resolve_capture_speech_styles,
     _resolve_stt_bench_specs,
     _run_motion_gesture,
+    _sandcode_lead_reply,
     _should_comment_on_monitor_observation,
     _should_capture_vision_runtime,
     _should_track_face_runtime,
@@ -39,6 +43,17 @@ class FakeMotionActor:
 
     def gesture(self, name: str, *, intensity: float = 1.0, speed: int = 500) -> bool:
         self.gestures.append((name, intensity, speed))
+        return True
+
+
+class FakePresenceDirector:
+    def __init__(self) -> None:
+        self.last_motion_at = 0.0
+        self.states: list[str] = []
+
+    def presence_tick(self, state: str) -> bool:
+        self.states.append(state)
+        self.last_motion_at += 1.0
         return True
 
 
@@ -950,6 +965,7 @@ class HandsfreeHelpersTest(unittest.TestCase):
             _should_comment_on_monitor_observation(
                 observation,
                 config,
+                presence_mode="stille_ven",
                 accepting_audio=True,
                 body_state_name="thinking",
                 now=1000.0,
@@ -962,6 +978,7 @@ class HandsfreeHelpersTest(unittest.TestCase):
             _should_comment_on_monitor_observation(
                 observation,
                 config,
+                presence_mode="stille_ven",
                 accepting_audio=True,
                 body_state_name="listening",
                 now=1000.0,
@@ -974,6 +991,7 @@ class HandsfreeHelpersTest(unittest.TestCase):
             _should_comment_on_monitor_observation(
                 observation,
                 config,
+                presence_mode="stille_ven",
                 accepting_audio=True,
                 body_state_name="listening",
                 now=1000.0,
@@ -982,6 +1000,88 @@ class HandsfreeHelpersTest(unittest.TestCase):
                 last_monitor_comment_at=500.0,
             )
         )
+
+    def test_monitor_comment_respects_presence_modes(self) -> None:
+        config = MonitorConfig(recent_speech_grace_seconds=120, speak_cooldown_seconds=900)
+        health = MonitorObservation(
+            kind="stacky_health",
+            summary="Stacky health: Sandcode-agent not reachable.",
+            importance=70,
+            observed_at=1000.0,
+            speakable=True,
+            details={"agent": "not reachable"},
+        )
+
+        self.assertFalse(
+            _should_comment_on_monitor_observation(
+                health,
+                config,
+                presence_mode="stille_ven",
+                accepting_audio=True,
+                body_state_name="listening",
+                now=1000.0,
+                last_user_voice_at=800.0,
+                last_stacky_speech_at=800.0,
+                last_monitor_comment_at=0.0,
+            )
+        )
+        self.assertTrue(
+            _should_comment_on_monitor_observation(
+                health,
+                config,
+                presence_mode="agent_vagt",
+                accepting_audio=True,
+                body_state_name="listening",
+                now=1000.0,
+                last_user_voice_at=800.0,
+                last_stacky_speech_at=800.0,
+                last_monitor_comment_at=0.0,
+            )
+        )
+        self.assertFalse(
+            _should_comment_on_monitor_observation(
+                health,
+                config,
+                presence_mode="ikke_forstyr",
+                accepting_audio=True,
+                body_state_name="listening",
+                now=1000.0,
+                last_user_voice_at=800.0,
+                last_stacky_speech_at=800.0,
+                last_monitor_comment_at=0.0,
+            )
+        )
+
+    def test_sandcode_lead_reply_keeps_stacky_out_of_code_assistant_mode(self) -> None:
+        reply = _sandcode_lead_reply("ret testen", presence_mode="agent_vagt")
+
+        self.assertIn("agenten", reply)
+        self.assertIn("forhænget", reply)
+        self.assertNotIn("Sandcode", reply)
+
+    def test_body_presence_loop_marks_motion_for_audio_guard(self) -> None:
+        async def run_once() -> None:
+            director = FakePresenceDirector()
+            moved = asyncio.Event()
+            task = asyncio.create_task(
+                _body_presence_loop(
+                    director,  # type: ignore[arg-type]
+                    get_state=lambda: "thinking",
+                    should_tick=lambda: True,
+                    on_motion=moved.set,
+                    interval_seconds=0.01,
+                )
+            )
+            try:
+                await asyncio.wait_for(moved.wait(), timeout=1.0)
+            finally:
+                task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await task
+
+            self.assertEqual(director.states, ["thinking"])
+
+        asyncio.run(run_once())
 
     def test_word_error_rate(self) -> None:
         self.assertEqual(_word_error_rate("hej med dig", "hej med dig"), 0.0)

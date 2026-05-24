@@ -242,6 +242,43 @@ class BodyDirectorTest(unittest.TestCase):
         self.assertEqual(fake.gestures, [])
         self.assertEqual(fake.leds[-1]["r"], 35)
 
+    def test_presence_mode_do_not_disturb_suppresses_autonomous_motion(self) -> None:
+        fake = FakeDirectorController()
+        director = BodyDirector(fake, BodyCalibration())  # type: ignore[arg-type]
+        director.set_presence_mode("ikke_forstyr")
+
+        self.assertTrue(director.presence_tick("thinking", now=10.0))
+
+        self.assertEqual(fake.gestures, [])
+        self.assertEqual(fake.leds, [])
+
+    def test_agent_watch_mode_tints_thinking_led(self) -> None:
+        fake = FakeDirectorController()
+        director = BodyDirector(fake, BodyCalibration())  # type: ignore[arg-type]
+        director.set_presence_mode("agent_vagt")
+
+        self.assertTrue(director.set_state("thinking"))
+
+        self.assertEqual(fake.leds[-1]["b"], 190)
+
+    def test_stacky_watch_mood_pulses_listening_led(self) -> None:
+        fake = FakeDirectorController()
+        director = BodyDirector(fake, BodyCalibration())  # type: ignore[arg-type]
+        director.set_stacky_mood("vagt")
+
+        self.assertTrue(director.presence_tick("listening", now=10.0))
+
+        self.assertEqual(fake.leds[-1]["mode"], "pulse")
+        self.assertEqual(fake.leds[-1]["r"], 190)
+
+    def test_reply_motion_has_small_aside_motion(self) -> None:
+        fake = FakeDirectorController()
+        director = BodyDirector(fake, BodyCalibration())  # type: ignore[arg-type]
+
+        self.assertTrue(director.reply_started("Hm, Windows vandt næsten."))
+
+        self.assertEqual(fake.gestures, [("look_up", 0.10, 165)])
+
     def test_touch_reaction_uses_small_feedback(self) -> None:
         fake = FakeDirectorController()
         director = BodyDirector(fake, BodyCalibration())  # type: ignore[arg-type]

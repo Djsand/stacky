@@ -43,6 +43,8 @@ class BodyDirector:
         self._last_touch_at = 0.0
         self._last_presence_at = 0.0
         self._presence_index = 0
+        self._presence_mode = "stille_ven"
+        self._stacky_mood = "rolig"
 
     @property
     def last_motion_at(self) -> float:
@@ -68,6 +70,13 @@ class BodyDirector:
         if name == "listening":
             ok = self._motion("center", intensity=0.14, speed=170, cooldown=4.0, now=now) and ok
         return ok
+
+    def set_presence_mode(self, mode: str) -> None:
+        clean = mode.strip().lower().replace("-", "_").replace(" ", "_")
+        self._presence_mode = clean or "stille_ven"
+
+    def set_stacky_mood(self, mood: str) -> None:
+        self._stacky_mood = mood.strip().lower() or "rolig"
 
     def reply_started(self, text: str, *, now: float | None = None) -> bool:
         now = now if now is not None else time.monotonic()
@@ -123,6 +132,8 @@ class BodyDirector:
             return MotionPlan("nod", intensity=0.18, speed=220)
         if "?" in text:
             return MotionPlan("look_up", intensity=0.14, speed=190)
+        if any(token in lowered for token in ("hm", "nå", "naa", "windows", "maskinrummet", "forhænget", "forhaenget")):
+            return MotionPlan("look_up", intensity=0.10, speed=165)
         if len(lowered) > 80 and now - self._last_motion_at > 3.0:
             return MotionPlan("nod", intensity=0.12, speed=180)
         return None
@@ -164,6 +175,11 @@ class BodyDirector:
             return True
         if now - self._last_motion_at < 0.75:
             return True
+        if self._presence_mode == "ikke_forstyr":
+            if state == "listening" and now - self._last_presence_at >= 8.0:
+                self._last_presence_at = now
+                return self._led_for_state("listening")
+            return True
 
         if state == "thinking":
             if now - self._last_presence_at < 1.25:
@@ -185,6 +201,10 @@ class BodyDirector:
 
         if state == "listening" and now - self._last_presence_at >= 4.0:
             self._last_presence_at = now
+            if self._presence_mode == "vaagen_makker":
+                self._presence_index += 1
+                if self._presence_index % 3 == 0:
+                    return self._motion("look_up", intensity=0.08, speed=120, cooldown=0.0, now=now)
             return self._led_for_state("listening")
         return True
 
@@ -241,6 +261,12 @@ class BodyDirector:
             "connected": LedPlan(70, 140, 255, 0.30, duration_ms=400),
             "error": LedPlan(220, 50, 45, 0.45, duration_ms=250, mode="pulse"),
         }
+        if self._presence_mode == "agent_vagt" and name == "thinking":
+            plans["thinking"] = LedPlan(145, 95, 190, 0.34, duration_ms=300)
+        if self._stacky_mood == "vagt" and name in {"listening", "thinking"}:
+            plans[name] = LedPlan(190, 125, 55, 0.32, duration_ms=320, mode="pulse")
+        if self._presence_mode == "ikke_forstyr" and name == "listening":
+            plans["listening"] = LedPlan(25, 45, 70, 0.12, duration_ms=700)
         plan = plans.get(name)
         if plan is None:
             return True

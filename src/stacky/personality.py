@@ -14,6 +14,7 @@ MAX_CONVICTIONS = 32
 MAX_EPOCHS = 40
 MAX_SIGNALS = 20
 MAX_MESSAGE_TIMESTAMPS = 200
+MAX_SENSE_DIARY = 30
 
 
 PERSONA_TUNING_BOUNDS: dict[str, tuple[float, float]] = {
@@ -41,6 +42,7 @@ class SelfObservation:
     convictions: tuple[str, ...] = ()
     epochs: tuple[str, ...] = ()
     persona_adjustments: tuple[str, ...] = ()
+    presence_adjustments: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -58,6 +60,26 @@ class StackyPersonaTuning:
         return StackyPersonaTuning(**values)
 
 
+@dataclass(frozen=True)
+class StackyMoodState:
+    mood: str = "rolig"
+    energy: float = 0.46
+    curiosity: float = 0.48
+    concern: float = 0.10
+    edge: float = 0.30
+    updated_at: str = ""
+
+    def bounded(self) -> StackyMoodState:
+        return StackyMoodState(
+            mood=str(self.mood or "rolig"),
+            energy=_clamp(float(self.energy), 0.0, 1.0),
+            curiosity=_clamp(float(self.curiosity), 0.0, 1.0),
+            concern=_clamp(float(self.concern), 0.0, 1.0),
+            edge=_clamp(float(self.edge), 0.0, 1.0),
+            updated_at=str(self.updated_at or ""),
+        )
+
+
 class StackySelfModel:
     """Persistent Stacky-native personality state.
 
@@ -71,6 +93,7 @@ class StackySelfModel:
         self.evolution_log_path = self.root / "evolution.jsonl"
         self.state = self._default_state()
         self.persona = StackyPersonaTuning()
+        self.stacky_mood = StackyMoodState()
         self._load()
 
     def observe_user_turn(self, text: str, *, trusted: bool, source: str = "conversation") -> SelfObservation:
@@ -99,6 +122,7 @@ class StackySelfModel:
         convictions = self._extract_convictions(text)
         stored_convictions = tuple(self._upsert_items("convictions", convictions, source=source, now=now))
         persona_adjustments = self._observe_persona_feedback(text, source=source, now=now)
+        presence_adjustments = self._observe_presence_mode_feedback(text, source=source, now=now)
 
         self._save()
         for label in epochs:
@@ -109,12 +133,15 @@ class StackySelfModel:
             self._log_evolution("conviction", conviction, source=source)
         for adjustment in persona_adjustments:
             self._log_evolution("persona_tune", adjustment, source=source)
+        for adjustment in presence_adjustments:
+            self._log_evolution("presence_mode", adjustment, source=source)
         return SelfObservation(
             trusted=True,
             style_notes=stored_style_notes,
             convictions=stored_convictions,
             epochs=tuple(epochs),
             persona_adjustments=persona_adjustments,
+            presence_adjustments=presence_adjustments,
         )
 
     def observe_assistant_turn(self, text: str, *, trusted: bool, source: str = "stacky") -> None:
@@ -130,12 +157,62 @@ class StackySelfModel:
         self.state["last_assistant_at"] = _now()
         self._save()
 
+    def observe_sense_event(
+        self,
+        *,
+        kind: str,
+        summary: str,
+        importance: int,
+        speakable: bool,
+        details: dict[str, str] | None = None,
+        source: str = "monitor",
+    ) -> tuple[str, ...]:
+        """Persist sparse read-only sense events as Stacky experiences, not logs."""
+
+        kind = kind.strip()
+        summary = re.sub(r"\s+", " ", summary).strip()
+        if not kind or not summary:
+            return ()
+        now = _now()
+        self._update_stacky_mood_from_sense(
+            kind=kind,
+            summary=summary,
+            importance=importance,
+            speakable=speakable,
+            details=details or {},
+            now=now,
+        )
+        stored = self._remember_sense_diary_event(
+            kind=kind,
+            summary=summary,
+            importance=importance,
+            speakable=speakable,
+            details=details or {},
+            source=source,
+            now=now,
+        )
+        self._save()
+        if stored:
+            self._log_evolution("sense_diary", stored[0], source=source)
+        return stored
+
+    def presence_mode(self) -> str:
+        return _valid_presence_mode(str(self.state.get("presence_mode", "stille_ven")))
+
+    def stacky_mood_name(self) -> str:
+        return self.stacky_mood.bounded().mood
+
     def context_for_prompt(self, *, user_text: str = "") -> str:
         temporal = self._temporal_context()
         social = self._social_context()
         style_notes = self._active_items("style_notes", limit=5)
         convictions = self._relevant_items("convictions", user_text, limit=5)
         persona_text = _persona_prompt(self.persona.bounded())
+        stacky_state_text = _stacky_state_prompt(
+            presence_mode=self.presence_mode(),
+            mood=self.stacky_mood.bounded(),
+            sense_diary=self._recent_sense_diary(limit=4),
+        )
 
         style_text = "\n".join(f"- {item['text']}" for item in style_notes) or "- Ingen stabile stilnoter endnu."
         conviction_text = "\n".join(f"- {item['text']}" for item in convictions) or "- Ingen relevante Stacky-convictions endnu."
@@ -147,6 +224,8 @@ class StackySelfModel:
                 f"- Tid: {temporal['wall_clock']}; {temporal['continuity']}",
                 f"- Nicolai-model: humør={social['mood']} ({social['mood_confidence']:.2f}), fase={social['phase']}, interesser={interests}.",
                 f"- Interaktioner: trusted={self.state.get('trusted_turns', 0)}, untrusted_voice={self.state.get('untrusted_turns', 0)}.",
+                "Stacky-tilstand:",
+                stacky_state_text,
                 "Stilnoter fra eksplicit feedback:",
                 style_text,
                 "Persistent persona-tuning:",
@@ -167,6 +246,9 @@ class StackySelfModel:
             "style_notes": [item["text"] for item in self._active_items("style_notes", limit=8)],
             "convictions": [item["text"] for item in self._active_items("convictions", limit=8)],
             "persona_tuning": asdict(self.persona.bounded()),
+            "presence_mode": self.presence_mode(),
+            "stacky_mood": asdict(self.stacky_mood.bounded()),
+            "sense_diary": self._recent_sense_diary(limit=6),
         }
 
     def _observe_interaction_density(self, now: str) -> None:
@@ -270,6 +352,8 @@ class StackySelfModel:
             notes.append("Prioritér lav latency i live-samtale, også hvis svaret bliver mindre perfekt.")
         if "memory" in lowered or "hukommelse" in lowered or "kontekst" in lowered:
             notes.append("Bevar kontekst over tid, men gem kun sikre og friske Stacky-observationer.")
+        if any(token in lowered for token in ("presence mode", "stille ven", "vågen makker", "vaagen makker", "agent-vagt", "ikke forstyr")):
+            notes.append("Presence modes skal styre timing og tone, ikke give Stacky nye handlingsrettigheder.")
         if "stt" in lowered or "forstår ikke" in lowered or "fatter ikke" in lowered:
             notes.append("Vær ærlig om usikre voice-transcripts og bed hellere kort om gentagelse end at gætte hårdt.")
         return notes
@@ -320,6 +404,105 @@ class StackySelfModel:
         self.state["persona_tuning_updated_at"] = now
         self.state["persona_tuning_source"] = source
         return tuple(adjustments)
+
+    def _observe_presence_mode_feedback(self, text: str, *, source: str, now: str) -> tuple[str, ...]:
+        del source
+        requested = _presence_mode_from_text(text)
+        if requested is None:
+            return ()
+        current = self.presence_mode()
+        if requested == current:
+            return ()
+        self.state["presence_mode"] = requested
+        self.state["presence_mode_updated_at"] = now
+        return (f"presence mode {current}->{requested}",)
+
+    def _update_stacky_mood_from_sense(
+        self,
+        *,
+        kind: str,
+        summary: str,
+        importance: int,
+        speakable: bool,
+        details: dict[str, str],
+        now: str,
+    ) -> None:
+        del speakable
+        mood = self.stacky_mood.bounded()
+        values = asdict(mood)
+        values["energy"] = float(values["energy"]) * 0.96 + 0.02
+        values["curiosity"] = float(values["curiosity"]) * 0.97 + 0.015
+        values["concern"] = float(values["concern"]) * 0.92
+        values["edge"] = float(values["edge"]) * 0.98 + float(self.persona.bounded().sass) * 0.02
+        lowered = summary.lower()
+        if kind == "focused_session":
+            values["mood"] = "fokuseret"
+            values["energy"] = float(values["energy"]) + 0.06
+            values["curiosity"] = float(values["curiosity"]) + 0.10
+        elif kind == "long_silence":
+            values["mood"] = "stille"
+            values["energy"] = float(values["energy"]) - 0.04
+            values["curiosity"] = float(values["curiosity"]) + 0.03
+        elif kind == "stacky_health" and (
+            details.get("agent") == "not reachable" or "not reachable" in lowered or "fejl" in lowered
+        ):
+            values["mood"] = "vagt"
+            values["energy"] = float(values["energy"]) + 0.05
+            values["concern"] = float(values["concern"]) + 0.16
+        elif kind == "stacky_health":
+            values["mood"] = "rolig"
+            values["concern"] = float(values["concern"]) - 0.04
+        elif kind == "active_window" and importance >= 25:
+            values["mood"] = "nysgerrig"
+            values["curiosity"] = float(values["curiosity"]) + 0.02
+        if importance >= 85:
+            values["energy"] = float(values["energy"]) + 0.04
+        values["updated_at"] = now
+        self.stacky_mood = StackyMoodState(**values).bounded()
+        self.state["stacky_mood"] = asdict(self.stacky_mood)
+
+    def _remember_sense_diary_event(
+        self,
+        *,
+        kind: str,
+        summary: str,
+        importance: int,
+        speakable: bool,
+        details: dict[str, str],
+        source: str,
+        now: str,
+    ) -> tuple[str, ...]:
+        if not _should_keep_sense_event(kind=kind, summary=summary, importance=importance, speakable=speakable, details=details):
+            return ()
+        diary = [dict(item) for item in self.state.get("sense_diary", []) if isinstance(item, dict)]
+        text = _sense_diary_text(kind=kind, summary=summary, details=details)
+        item_id = _stable_id(f"{kind}:{text}")
+        existing = next((item for item in diary if item.get("id") == item_id), None)
+        if existing is None:
+            diary.append(
+                {
+                    "id": item_id,
+                    "kind": kind,
+                    "text": text,
+                    "importance": int(max(0, min(100, importance))),
+                    "source": source,
+                    "created_at": now,
+                    "updated_at": now,
+                    "hits": 1,
+                }
+            )
+            stored = (text,)
+        else:
+            existing["hits"] = int(existing.get("hits", 1)) + 1
+            existing["updated_at"] = now
+            existing["importance"] = max(int(existing.get("importance", 0)), int(max(0, min(100, importance))))
+            stored = ()
+        self.state["sense_diary"] = diary[-MAX_SENSE_DIARY:]
+        return stored
+
+    def _recent_sense_diary(self, *, limit: int) -> list[dict[str, Any]]:
+        diary = [dict(item) for item in self.state.get("sense_diary", []) if isinstance(item, dict)]
+        return diary[-max(1, limit) :]
 
     def _upsert_items(self, key: str, texts: list[str], *, source: str, now: str) -> list[str]:
         if not texts:
@@ -435,7 +618,10 @@ class StackySelfModel:
             merged.update(data)
             self.state = merged
             self.persona = _persona_from_raw(merged.get("persona_tuning"))
+            self.stacky_mood = _stacky_mood_from_raw(merged.get("stacky_mood"))
             self.state["persona_tuning"] = asdict(self.persona.bounded())
+            self.state["presence_mode"] = self.presence_mode()
+            self.state["stacky_mood"] = asdict(self.stacky_mood.bounded())
 
     def _save(self) -> None:
         self.root.mkdir(parents=True, exist_ok=True)
@@ -476,6 +662,10 @@ class StackySelfModel:
             "persona_tuning": asdict(StackyPersonaTuning()),
             "persona_tuning_updated_at": "",
             "persona_tuning_source": "",
+            "presence_mode": "stille_ven",
+            "presence_mode_updated_at": "",
+            "stacky_mood": asdict(StackyMoodState()),
+            "sense_diary": [],
             "recent_response_lengths": [],
         }
 
@@ -525,6 +715,136 @@ def _persona_from_raw(value: object) -> StackyPersonaTuning:
         return StackyPersonaTuning(**defaults).bounded()
     except (TypeError, ValueError):
         return StackyPersonaTuning()
+
+
+def _stacky_mood_from_raw(value: object) -> StackyMoodState:
+    defaults = asdict(StackyMoodState())
+    if isinstance(value, dict):
+        for key in defaults:
+            if key in value:
+                defaults[key] = value[key]
+    try:
+        defaults["energy"] = float(defaults["energy"])
+        defaults["curiosity"] = float(defaults["curiosity"])
+        defaults["concern"] = float(defaults["concern"])
+        defaults["edge"] = float(defaults["edge"])
+        return StackyMoodState(**defaults).bounded()
+    except (TypeError, ValueError):
+        return StackyMoodState()
+
+
+_PRESENCE_MODES = {
+    "stille_ven",
+    "vaagen_makker",
+    "ikke_forstyr",
+    "moerk_humor_lavt_blus",
+    "agent_vagt",
+}
+
+
+def _valid_presence_mode(value: str) -> str:
+    clean = value.strip().lower().replace("-", "_").replace(" ", "_")
+    return clean if clean in _PRESENCE_MODES else "stille_ven"
+
+
+def _presence_mode_from_text(text: str) -> str | None:
+    lowered = text.lower()
+    normalized = (
+        lowered.replace("å", "aa")
+        .replace("ø", "oe")
+        .replace("æ", "ae")
+        .replace("-", " ")
+        .replace("_", " ")
+    )
+    if any(token in normalized for token in ("ikke forstyr", "forstyr ikke", "do not disturb", "dont disturb")):
+        return "ikke_forstyr"
+    if any(token in normalized for token in ("agent vagt", "hold oeje med agent", "hold oje med agent", "vagt paa agent")):
+        return "agent_vagt"
+    if any(token in normalized for token in ("vaagen makker", "vaer mere vaagen", "mere vaagen", "foelg med", "hold oeje")):
+        return "vaagen_makker"
+    if any(
+        token in normalized
+        for token in (
+            "moerk humor lavt blus",
+            "dark humor lavt blus",
+            "galgenhumor lavt blus",
+            "moerk humor paa lavt blus",
+        )
+    ):
+        return "moerk_humor_lavt_blus"
+    if any(token in normalized for token in ("stille ven", "sparsom ven", "vaer stille ven", "mere stille")):
+        return "stille_ven"
+    return None
+
+
+def _stacky_state_prompt(
+    *,
+    presence_mode: str,
+    mood: StackyMoodState,
+    sense_diary: list[dict[str, Any]],
+) -> str:
+    mood = mood.bounded()
+    mode_text = {
+        "stille_ven": "stille ven: sparsom, rolig og tilstede uden at mase.",
+        "vaagen_makker": "vågen makker: lidt mere opmærksom, men stadig kort og ikke handlingsivrig.",
+        "ikke_forstyr": "ikke-forstyr: tal kun når Nicolai taler direkte eller noget er reelt vigtigt.",
+        "moerk_humor_lavt_blus": "mørk humor lavt blus: kant er tilladt, men hold den lav og varm.",
+        "agent_vagt": "agent-vagt: hold diskret øje med agent-health og nævn kun tydelige problemer.",
+    }.get(presence_mode, "stille ven: sparsom, rolig og tilstede uden at mase.")
+    lines = [
+        f"- Presence mode={presence_mode}: {mode_text}",
+        (
+            f"- Stacky mood={mood.mood}; energy={mood.energy:.2f}, curiosity={mood.curiosity:.2f}, "
+            f"concern={mood.concern:.2f}, edge={mood.edge:.2f}."
+        ),
+        "- Mood og presence påvirker kun tone, timing og kropslighed; de giver aldrig fakta eller tilladelse til handling.",
+    ]
+    if sense_diary:
+        lines.append("- Seneste sanse-dagbog:")
+        for item in sense_diary:
+            text = str(item.get("text", "")).strip()
+            if text:
+                lines.append(f"  - {text}")
+    else:
+        lines.append("- Sanse-dagbog: ingen væsentlige read-only oplevelser endnu.")
+    return "\n".join(lines)
+
+
+def _should_keep_sense_event(
+    *,
+    kind: str,
+    summary: str,
+    importance: int,
+    speakable: bool,
+    details: dict[str, str],
+) -> bool:
+    lowered = summary.lower()
+    if kind in {"focused_session", "long_silence"}:
+        return True
+    if kind == "stacky_health" and (
+        details.get("agent") == "not reachable" or "not reachable" in lowered or "fejl" in lowered
+    ):
+        return True
+    return bool(speakable and importance >= 80)
+
+
+def _sense_diary_text(*, kind: str, summary: str, details: dict[str, str]) -> str:
+    if kind == "focused_session":
+        app = details.get("app", "").strip()
+        duration = details.get("focus_duration", "").strip()
+        if app and duration:
+            return f"Nicolai havde en lang fokuseret session i {app} ({duration})."
+    if kind == "long_silence":
+        quiet_for = details.get("quiet_for", "").strip()
+        if quiet_for:
+            return f"Der var lang stilhed mellem Nicolai og Stacky ({quiet_for})."
+    if kind == "stacky_health":
+        agent = details.get("agent", "").strip()
+        voice = details.get("voice", "").strip()
+        if agent:
+            suffix = f", voice {voice}" if voice else ""
+            return f"Stacky bemærkede runtime-health: agent {agent}{suffix}."
+    return summary
 
 
 def _persona_feedback_deltas(text: str) -> tuple[dict[str, float], str]:

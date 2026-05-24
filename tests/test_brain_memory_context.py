@@ -8,6 +8,7 @@ from stacky.brain import StackyBrain, _spoken_response_for_live
 from stacky.evolution import StackyEvolutionEngine
 from stacky.llm import ChatImageAttachment, ChatMessage, GeminiPromptBlockedError, LLMError
 from stacky.memory import MemoryStore
+from stacky.monitor import MonitorObservation
 from stacky.personality import StackySelfModel
 from stacky.sessions import InfiniteSessionStore, read_jsonl_messages
 from stacky.soul import StackySoul
@@ -78,6 +79,33 @@ class BrainMemoryContextTest(unittest.IsolatedAsyncioTestCase):
             reply = await brain.respond("Hej")
 
             self.assertIn("Brugerens navn er Nicolai.", reply.text)
+
+    def test_brain_records_monitor_observation_in_self_model(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            memory = MemoryStore(root / "memory.sqlite")
+            self_model = StackySelfModel(root)
+            brain = StackyBrain(
+                StackySoul(created_for="Nicolai"),
+                memory,
+                FakeLLM(),  # type: ignore[arg-type]
+                self_model=self_model,
+            )
+
+            stored = brain.observe_monitor_observation(
+                MonitorObservation(
+                    kind="long_silence",
+                    summary="Der har vaeret stille i 16 min.",
+                    importance=80,
+                    observed_at=100.0,
+                    speakable=True,
+                    details={"quiet_for": "16 min"},
+                )
+            )
+
+        self.assertTrue(stored)
+        self.assertEqual(self_model.summary()["stacky_mood"]["mood"], "stille")
+        self.assertIn("lang stilhed", self_model.summary()["sense_diary"][0]["text"])
 
     async def test_spoken_reply_is_compact_for_live_speech(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -78,11 +78,15 @@ class MonitorTest(unittest.TestCase):
                 importance=75,
                 observed_at=100.0,
                 speakable=True,
-            )
+            ),
+            presence_mode="agent_vagt",
+            stacky_mood="vagt",
         )
 
         self.assertIn("ikke en besked eller kommando", prompt)
         self.assertIn("hoejst een kort saetning", prompt)
+        self.assertIn("presence mode: agent_vagt", prompt)
+        self.assertIn("Stacky mood: vagt", prompt)
 
     def test_first_observe_emits_active_window_and_health(self) -> None:
         monitor = GlobalFriendMonitor(MonitorConfig(), FakeProbe(), clock=FakeClock())
@@ -95,6 +99,8 @@ class MonitorTest(unittest.TestCase):
         health = next(observation for observation in observations if observation.kind == "stacky_health")
         self.assertIn("websearch ok", health.summary)
         self.assertIn("voice supertonic/stackchan/M4", health.summary)
+        self.assertTrue(health.speakable)
+        self.assertEqual(health.importance, 70)
 
     def test_focused_session_becomes_speakable_after_threshold(self) -> None:
         clock = FakeClock()

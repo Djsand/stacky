@@ -147,7 +147,8 @@ class SandcodeTest(unittest.IsolatedAsyncioTestCase):
             }
         )
         self.assertIsNotNone(spoken)
-        self.assertIn("Sandcode bruger", spoken)
+        self.assertIn("Agenten arbejder", spoken)
+        self.assertNotIn("Sandcode bruger", spoken)
 
 
 if __name__ == "__main__":

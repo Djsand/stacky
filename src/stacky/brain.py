@@ -264,6 +264,34 @@ class StackyBrain:
             self._remember_recent_turn(user_text, assistant_text)
         return tuple(remembered)
 
+    def observe_monitor_observation(self, observation: object) -> tuple[str, ...]:
+        if self.self_model is None:
+            return ()
+        kind = str(getattr(observation, "kind", "") or "")
+        summary = str(getattr(observation, "summary", "") or "")
+        importance = int(getattr(observation, "importance", 0) or 0)
+        speakable = bool(getattr(observation, "speakable", False))
+        details_raw = getattr(observation, "details", {}) or {}
+        details = {str(key): str(value) for key, value in dict(details_raw).items()}
+        return self.self_model.observe_sense_event(
+            kind=kind,
+            summary=summary,
+            importance=importance,
+            speakable=speakable,
+            details=details,
+            source="stacky-monitor",
+        )
+
+    def presence_mode(self) -> str:
+        if self.self_model is None:
+            return "stille_ven"
+        return self.self_model.presence_mode()
+
+    def stacky_mood_name(self) -> str:
+        if self.self_model is None:
+            return "rolig"
+        return self.self_model.stacky_mood_name()
+
     def _messages(
         self,
         user_text: str,

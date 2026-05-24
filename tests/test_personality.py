@@ -122,6 +122,52 @@ class StackySelfModelTest(unittest.TestCase):
         self.assertIn("Mørk humor", context)
         self.assertTrue(any("persistent" in note.lower() for note in model.summary()["style_notes"]))
 
+    def test_presence_mode_feedback_persists(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            model = StackySelfModel(root)
+
+            observation = model.observe_user_turn(
+                "Sæt presence mode til agent-vagt og hold øje med agenten.",
+                trusted=True,
+                source="test",
+            )
+            reloaded = StackySelfModel(root)
+
+        self.assertTrue(observation.presence_adjustments)
+        self.assertEqual(reloaded.summary()["presence_mode"], "agent_vagt")
+        self.assertIn("Presence mode=agent_vagt", reloaded.context_for_prompt(user_text="status"))
+
+    def test_sense_event_updates_stacky_mood_and_sparse_diary(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            model = StackySelfModel(root)
+
+            stored = model.observe_sense_event(
+                kind="focused_session",
+                summary="Nicolai har vaeret aktiv i Code.exe i cirka 31 min.",
+                importance=82,
+                speakable=True,
+                details={"app": "Code.exe", "focus_duration": "31 min"},
+                source="test-monitor",
+            )
+            model.observe_sense_event(
+                kind="active_window",
+                summary="Aktivt vindue: Code.exe.",
+                importance=25,
+                speakable=False,
+                details={"app": "Code.exe"},
+                source="test-monitor",
+            )
+            summary = StackySelfModel(root).summary()
+            context = StackySelfModel(root).context_for_prompt(user_text="hvad sker der")
+
+        self.assertTrue(stored)
+        self.assertEqual(summary["stacky_mood"]["mood"], "nysgerrig")
+        self.assertEqual(len(summary["sense_diary"]), 1)
+        self.assertIn("fokuseret session", summary["sense_diary"][0]["text"])
+        self.assertIn("Seneste sanse-dagbog", context)
+
 
 if __name__ == "__main__":
     unittest.main()

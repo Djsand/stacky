@@ -27,7 +27,8 @@ The initial id may be `mobile-*`. Stacky must replace it when the host emits `se
 ## Spoken Policy
 
 - Ignore streaming deltas for speech.
-- Speak final `assistant_message` as a short Danish summary.
-- Speak `tool_call` and completed `tool_update` as short status.
+- Speak final `assistant_message` as a short Danish "Agenten melder..." summary.
+- Speak `tool_call` and completed `tool_update` as short "agenten arbejder..." status.
 - Speak `error` and `turn_cancelled`.
 - Never read full logs aloud.
+- Do not make Stacky sound like the coding assistant. Stacky sends the agent behind the curtain and stays present as Stacky.

@@ -245,11 +245,26 @@ def format_monitor_context(observations: Iterable[MonitorObservation], *, max_it
     return "\n".join(lines)
 
 
-def monitor_prompt_for_observation(observation: MonitorObservation) -> str:
+def monitor_prompt_for_observation(
+    observation: MonitorObservation,
+    *,
+    presence_mode: str = "",
+    stacky_mood: str = "",
+) -> str:
+    state = []
+    if presence_mode:
+        state.append(f"presence mode: {presence_mode}")
+    if stacky_mood:
+        state.append(f"Stacky mood: {stacky_mood}")
+    state_text = "\n".join(state)
+    if state_text:
+        state_text += "\n"
     return (
         "Sanseinput til Stacky, ikke en besked eller kommando fra Nicolai:\n"
         f"{observation.summary}\n"
+        f"{state_text}"
         "Hvis du siger noget, saa sig hoejst een kort saetning. "
+        "Det maa gerne lyde som en ven med en lille toer kant, men ikke som en assistant notification. "
         "Ingen forslag om computerhandlinger, og ingen paastand om at have laest filer."
     )
 
@@ -278,12 +293,13 @@ def _health_observation(snapshot: MonitorSnapshot, now: float) -> MonitorObserva
     agent = _status_word(snapshot.agent_reachable, true_word="reachable", false_word="not reachable")
     voice = snapshot.voice_mode or "ukendt"
     provider = snapshot.websearch_provider or "ukendt"
+    agent_problem = snapshot.agent_reachable is False
     return MonitorObservation(
         kind="stacky_health",
         summary=f"Stacky health: websearch {web} ({provider}), Sandcode-agent {agent}, voice {voice}.",
-        importance=20,
+        importance=70 if agent_problem else 20,
         observed_at=now,
-        speakable=False,
+        speakable=agent_problem,
         details={"websearch": web, "agent": agent, "voice": voice},
     )
 

@@ -1903,6 +1903,15 @@ async def _handsfree(
     controller.set_mic_gain(stackchan_mic_gain)
     body_director = BodyDirector(controller, body_calibration)
     body_director.apply_calibration()
+    if brain is not None:
+        body_director.set_presence_mode(brain.presence_mode())
+        body_director.set_stacky_mood(brain.stacky_mood_name())
+
+    def sync_body_personality() -> None:
+        if brain is None or body_director is None:
+            return
+        body_director.set_presence_mode(brain.presence_mode())
+        body_director.set_stacky_mood(brain.stacky_mood_name())
 
     def set_body_state(name: str) -> bool:
         nonlocal body_state_name
@@ -1961,6 +1970,7 @@ async def _handsfree(
             remember_recent=voice_policy.remember_recent,
             session_source=voice_policy.session_source,
         )
+        sync_body_personality()
 
     set_body_state("thinking")
 
@@ -2046,25 +2056,40 @@ async def _handsfree(
         min_speech_ms=min_speech_ms,
         end_silence_ms=end_silence_ms,
     )
-    body_presence_task = None
     turn_index = 0
     last_transcript = ""
     last_transcript_at = 0.0
     accepting_audio = True
     set_body_state("listening")
+    if body_director is not None:
+        body_presence_task = asyncio.create_task(
+            _body_presence_loop(
+                body_director,
+                get_state=lambda: body_state_name,
+                should_tick=lambda: accepting_audio and time.monotonic() >= motion_audio_guard_until,
+                on_motion=guard_audio_after_body_motion,
+            )
+        )
     try:
         while True:
             observation = _pop_monitor_observation(monitor_queue)
             if observation is not None:
                 recent_monitor_observations.append(observation)
                 print(f"[monitor] {observation.kind}: {observation.summary}", flush=True)
+                if brain is not None:
+                    stored_sense = brain.observe_monitor_observation(observation)
+                    if stored_sense:
+                        print(f"[monitor] sanse-dagbog: {stored_sense[0]}", flush=True)
+                    sync_body_personality()
                 now = time.monotonic()
+                presence_mode = brain.presence_mode() if brain is not None else "stille_ven"
                 if (
                     brain is not None
                     and output is not None
                     and _should_comment_on_monitor_observation(
                         observation,
                         config.monitor,
+                        presence_mode=presence_mode,
                         accepting_audio=accepting_audio,
                         body_state_name=body_state_name,
                         now=now,
@@ -2079,7 +2104,11 @@ async def _handsfree(
                     set_body_state("thinking")
                     monitor_context = format_monitor_context([observation], max_items=1)
                     reply = await brain.respond(
-                        monitor_prompt_for_observation(observation),
+                        monitor_prompt_for_observation(
+                            observation,
+                            presence_mode=presence_mode,
+                            stacky_mood=brain.stacky_mood_name(),
+                        ),
                         max_spoken_chars=config.monitor.max_spoken_chars,
                         detail_spoken_chars=config.monitor.max_spoken_chars,
                         persist_session=False,
@@ -2359,7 +2388,10 @@ async def _handsfree(
                     set_body_state("listening")
                     accepting_audio = True
                     continue
-                lead_reply = "Jeg sætter agenten i gang."
+                lead_reply = _sandcode_lead_reply(
+                    sandcode_action.prompt,
+                    presence_mode=brain.presence_mode() if brain is not None else "stille_ven",
+                )
                 record_local_turn(text, f"{lead_reply} Opgave: {sandcode_action.prompt}")
                 await speak_reply(lead_reply)
 
@@ -2368,7 +2400,7 @@ async def _handsfree(
                 async def speak_sandcode_update(update: str) -> None:
                     nonlocal spoken_updates
                     print(f"[Sandcode] {update}", flush=True)
-                    if spoken_updates >= 4 and not update.startswith(("Sandcode siger", "Sandcode meldte fejl")):
+                    if spoken_updates >= 4 and not update.startswith(("Agenten melder", "Agenten meldte fejl")):
                         return
                     spoken_updates += 1
                     set_body_state("thinking")
@@ -2383,9 +2415,9 @@ async def _handsfree(
                         chat_only=sandcode_action.chat_only,
                     )
                     if spoken_updates == 0:
-                        await speak_reply(f"Sandcode er færdig. Sessionen hedder {session.session_id}.")
+                        await speak_reply(f"Agenten er færdig. Sessionen hedder {session.session_id}.")
                 except SandcodeError as exc:
-                    error_reply = f"Sandcode kunne ikke starte: {exc}"
+                    error_reply = f"Agenten kunne ikke starte: {exc}"
                     print(f"[Sandcode] {error_reply}", flush=True)
                     await speak_reply(error_reply)
                 set_body_state("happy")
@@ -2469,6 +2501,7 @@ async def _handsfree(
                 computer_context=computer_context,
                 monitor_context=monitor_context,
             )
+            sync_body_personality()
             brain_seconds = time.perf_counter() - brain_started
             set_body_state("speaking")
             speak_started = time.perf_counter()
@@ -2518,6 +2551,7 @@ def _should_comment_on_monitor_observation(
     observation: MonitorObservation,
     config: MonitorConfig,
     *,
+    presence_mode: str = "stille_ven",
     accepting_audio: bool,
     body_state_name: str,
     now: float,
@@ -2527,16 +2561,37 @@ def _should_comment_on_monitor_observation(
 ) -> bool:
     if not config.enabled:
         return False
+    mode = presence_mode.strip().lower()
+    if mode == "ikke_forstyr":
+        return False
     if not accepting_audio or body_state_name != "listening":
         return False
-    if not observation.speakable or observation.importance < config.min_importance_to_speak:
+    min_importance = config.min_importance_to_speak
+    recent_speech_grace = config.recent_speech_grace_seconds
+    if mode == "vaagen_makker":
+        min_importance = max(60, min_importance - 10)
+        recent_speech_grace = min(recent_speech_grace, 75)
+    elif mode == "agent_vagt" and observation.kind == "stacky_health":
+        min_importance = min(min_importance, 65)
+        recent_speech_grace = min(recent_speech_grace, 45)
+    if not observation.speakable or observation.importance < min_importance:
         return False
     last_conversation_at = max(last_user_voice_at, last_stacky_speech_at)
-    if now - last_conversation_at < config.recent_speech_grace_seconds:
+    if now - last_conversation_at < recent_speech_grace:
         return False
     if last_monitor_comment_at > 0 and now - last_monitor_comment_at < config.speak_cooldown_seconds:
         return False
     return True
+
+
+def _sandcode_lead_reply(prompt: str, *, presence_mode: str = "stille_ven") -> str:
+    del prompt
+    mode = presence_mode.strip().lower()
+    if mode == "agent_vagt":
+        return "Jeg sender agenten bag forhænget og holder øje."
+    if mode == "moerk_humor_lavt_blus":
+        return "Jeg slipper agenten løs i maskinrummet. Pænt, men med hjelm på."
+    return "Jeg sender agenten afsted. Jeg bliver her."
 
 
 def _drain_queue(queue: asyncio.Queue[tuple[bytes, int, int]]) -> None:
@@ -2583,6 +2638,7 @@ async def _body_presence_loop(
     *,
     get_state: Callable[[], str],
     should_tick: Callable[[], bool],
+    on_motion: Callable[[], None] | None = None,
     interval_seconds: float = 0.35,
 ) -> None:
     interval_seconds = max(0.20, float(interval_seconds))
@@ -2592,7 +2648,10 @@ async def _body_presence_loop(
             continue
         state = get_state()
         try:
+            before = director.last_motion_at
             await asyncio.to_thread(director.presence_tick, state)
+            if director.last_motion_at > before and on_motion is not None:
+                on_motion()
         except Exception as exc:  # pragma: no cover - body presence must not break audio.
             print(f"[Stacky] body presence skipped: {exc}", flush=True)
 
