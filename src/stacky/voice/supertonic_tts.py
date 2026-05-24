@@ -8,7 +8,7 @@ from .speech_adapter import adapt_for_danish_speech
 
 @dataclass(frozen=True)
 class SupertonicVoice:
-    voice_name: str = "F2"
+    voice_name: str = "M4"
     language: str = "da"
     speed: float = 1.10
     total_steps: int = 9

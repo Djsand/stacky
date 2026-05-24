@@ -9,7 +9,7 @@ class SupertonicVoiceTest(unittest.TestCase):
     def test_stacky_preset_is_the_default_danish_voice(self) -> None:
         voice = supertonic_voice_preset("stacky")
 
-        self.assertEqual(voice.voice_name, "F2")
+        self.assertEqual(voice.voice_name, "M4")
         self.assertEqual(voice.language, "da")
         self.assertGreaterEqual(voice.speed, 1.08)
         self.assertLessEqual(voice.speed, 1.12)
@@ -34,6 +34,7 @@ class SupertonicVoiceTest(unittest.TestCase):
     def test_alive_profile_is_default_live_personality_tuning(self) -> None:
         voice = supertonic_voice_preset("alive")
 
+        self.assertEqual(voice.voice_name, "M4")
         self.assertGreaterEqual(voice.speed, 1.06)
         self.assertLessEqual(voice.speed, 1.10)
         self.assertGreaterEqual(voice.silence_duration, 0.065)
