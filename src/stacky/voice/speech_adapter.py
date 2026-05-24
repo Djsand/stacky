@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import re
 
+from ..danish import add_spoken_question_markers
+
 
 _SPACE_RE = re.compile(r"\s+")
 _BULLET_RE = re.compile(r"^\s*[-*]\s+", re.MULTILINE)
@@ -77,6 +79,7 @@ def adapt_for_danish_speech(text: str) -> str:
     spoken = _collapse_duplicate_words(spoken)
     spoken = _shape_rhythm(spoken)
     spoken = _SPACE_RE.sub(" ", spoken)
+    spoken = add_spoken_question_markers(spoken)
     spoken = _soften_punctuation(spoken)
     return spoken.strip()
 

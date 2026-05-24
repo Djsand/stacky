@@ -114,6 +114,22 @@ class BrainMemoryContextTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(spoken, "Okay, jeg venter.")
 
+    def test_spoken_reply_marks_questions_after_live_tail_cleanup(self) -> None:
+        spoken = _spoken_response_for_live(
+            "jeg ligger bare lige i sengen",
+            "Det er helt fair. Skal vi bare tage den med ro?",
+        )
+
+        self.assertEqual(spoken, "Det er helt fair. Skal vi bare tage den med ro spørgsmål")
+
+    def test_spoken_reply_still_strips_generic_question_tail(self) -> None:
+        spoken = _spoken_response_for_live(
+            "jeg tester bare",
+            "Okay, den er jeg med på. Er der noget andet du vil have?",
+        )
+
+        self.assertEqual(spoken, "Okay, den er jeg med på.")
+
     async def test_recent_live_context_is_included_on_next_turn(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             memory = MemoryStore(Path(tmp) / "memory.sqlite")

@@ -4,7 +4,12 @@ import asyncio
 import re
 from dataclasses import dataclass
 
-from .danish import compact_for_speech, live_speech_style_prompt, spoken_danish_system_prompt
+from .danish import (
+    add_spoken_question_markers,
+    compact_for_speech,
+    live_speech_style_prompt,
+    spoken_danish_system_prompt,
+)
 from .evolution import StackyEvolutionEngine
 from .llm import ChatClient, ChatImageAttachment, ChatMessage, GeminiPromptBlockedError, LLMError
 from .memory import Memory, MemoryStore
@@ -502,8 +507,8 @@ def _spoken_response_for_live(user_text: str, response: str, *, max_chars: int =
     spoken = _shape_friendlier_live_text(spoken)
     shaped = _strip_generic_live_tail(spoken)
     if shaped:
-        return shaped
-    return spoken
+        return add_spoken_question_markers(shaped)
+    return add_spoken_question_markers(spoken)
 
 
 _LIVE_OPENING_REPLACEMENTS: tuple[tuple[re.Pattern[str], str], ...] = (

@@ -42,6 +42,10 @@ class StackySoul:
         "Stacky må bruge små naturlige indskud, et kort grin eller en lille tør bemærkning, hvis det passer i samtalen.",
         "Undgå 'det er modtaget', 'jeg er klar' og lange trygge hale-spørgsmål i normal snak.",
     )
+    speech_quirks: tuple[str, ...] = (
+        "Stacky må gerne have små nuttede vendinger, men kun når det føles som en ven i rummet.",
+        'Når Stacky stiller et spørgsmål, slutter spørgsmålet med ordet "spørgsmål".',
+    )
     source_path: Path | None = field(default=None, compare=False)
 
     def to_system_prompt(self) -> str:
@@ -49,6 +53,7 @@ class StackySoul:
         boundaries = "\n".join(f"- {item}" for item in self.boundaries)
         memory = "\n".join(f"- {item}" for item in self.memory_policy)
         voice = "\n".join(f"- {item}" for item in self.voice_policy)
+        quirks = "\n".join(f"- {item}" for item in self.speech_quirks)
         return f"""
 Du er {self.name}, en {self.kind} for {self.created_for}.
 Din relation er: {self.relationship}.
@@ -62,6 +67,9 @@ Hukommelse:
 
 Stemme:
 {voice}
+
+Personlighed og små vaner:
+{quirks}
 """.strip()
 
 
@@ -82,6 +90,7 @@ def load_soul(path: Path) -> StackySoul:
         boundaries=tuple(_as_list(data.get("boundaries")) or StackySoul().boundaries),
         memory_policy=tuple(_as_list(data.get("memory_policy")) or StackySoul().memory_policy),
         voice_policy=tuple(_as_list(data.get("voice_policy")) or StackySoul().voice_policy),
+        speech_quirks=tuple(_as_list(data.get("speech_quirks")) or StackySoul().speech_quirks),
         source_path=path,
     )
 
@@ -157,6 +166,7 @@ def _soul_to_yaml(soul: StackySoul) -> str:
             block("boundaries", soul.boundaries),
             block("memory_policy", soul.memory_policy),
             block("voice_policy", soul.voice_policy),
+            block("speech_quirks", soul.speech_quirks),
             "",
         ]
     )

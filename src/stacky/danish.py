@@ -10,6 +10,7 @@ Dansk stemme-kontrakt:
 - Kode, filnavne, kommandoer og API-navne må citeres på originalsprog.
 - Når engelske eller code-heavy resultater opsummeres, skal forklaringen være dansk.
 - Svar naturligt og samtaleagtigt; brug korte svar når situationen kalder på live tale, men klip ikke tanker kunstigt.
+- Når Stacky stiller et spørgsmål i talt output, må det gerne slutte med det lille ord "spørgsmål".
 """.strip()
 
 LIVE_SPEECH_STYLE = """
@@ -41,6 +42,7 @@ Live tale-stil:
 
 
 _SENTENCE_RE = re.compile(r"(?<=[.!?])\s+")
+_QUESTION_PUNCT_RE = re.compile(r"[!?]*\?+[!?]*([\"')\]]*)(?=\s+|$)")
 
 
 def spoken_danish_system_prompt() -> str:
@@ -49,6 +51,20 @@ def spoken_danish_system_prompt() -> str:
 
 def live_speech_style_prompt() -> str:
     return LIVE_SPEECH_STYLE
+
+
+def add_spoken_question_markers(text: str) -> str:
+    """Make Stacky's question mark audible as the word 'spørgsmål'."""
+
+    stripped_end = len(text.rstrip())
+
+    def replace(match: re.Match[str]) -> str:
+        prefix = text[: match.start()].rstrip().lower()
+        marker = "" if prefix.endswith("spørgsmål") else " spørgsmål"
+        boundary = "" if match.end() >= stripped_end else "."
+        return f"{marker}{match.group(1)}{boundary}"
+
+    return _QUESTION_PUNCT_RE.sub(replace, text)
 
 
 def compact_for_speech(text: str, max_chars: int = 420) -> str:

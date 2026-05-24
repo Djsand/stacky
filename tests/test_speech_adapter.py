@@ -36,6 +36,11 @@ class SpeechAdapterTest(unittest.TestCase):
 
         self.assertEqual(spoken, "Det skal være dansk og roligt.")
 
+    def test_questions_get_stacky_question_marker(self) -> None:
+        spoken = adapt_for_danish_speech("Skal jeg tænde lyset i stuen?")
+
+        self.assertEqual(spoken, "Skal jeg tænde lyset i stuen spørgsmål")
+
     def test_rhythm_punctuation_for_live_speech(self) -> None:
         spoken = adapt_for_danish_speech("Okay det giver mening men jeg venter hvis du tester.")
 

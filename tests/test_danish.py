@@ -3,6 +3,7 @@ from __future__ import annotations
 import unittest
 
 from stacky.danish import (
+    add_spoken_question_markers,
     assert_danish_voice_config,
     compact_for_speech,
     live_speech_style_prompt,
@@ -33,6 +34,21 @@ class DanishContractTest(unittest.TestCase):
         self.assertIn("medudvikler", live_speech_style_prompt())
         self.assertIn("levende hverdagsord", live_speech_style_prompt())
         self.assertIn("uventet reaktion", live_speech_style_prompt())
+
+    def test_question_marks_become_stacky_question_marker(self) -> None:
+        spoken = add_spoken_question_markers("Har du haft en god dag?")
+
+        self.assertEqual(spoken, "Har du haft en god dag spørgsmål")
+
+    def test_question_marker_preserves_sentence_boundary(self) -> None:
+        spoken = add_spoken_question_markers("Skal jeg tænde lyset? Jeg venter.")
+
+        self.assertEqual(spoken, "Skal jeg tænde lyset spørgsmål. Jeg venter.")
+
+    def test_question_marker_is_not_duplicated(self) -> None:
+        spoken = add_spoken_question_markers("Har du haft en god dag spørgsmål?")
+
+        self.assertEqual(spoken, "Har du haft en god dag spørgsmål")
 
     def test_compact_for_speech_limits_long_text(self) -> None:
         text = "Første sætning. " + ("meget lang tekst " * 80)
