@@ -25,7 +25,7 @@ class VoiceConfig:
     language: str = "da-DK"
     stt_provider: str = "local"
     tts_provider: str = "local"
-    tts_engine: str = "piper"
+    tts_engine: str = "supertonic"
     allow_language_switch: bool = False
     barge_in: bool = True
     sample_rate_in: int = 16000
@@ -170,7 +170,7 @@ def load_config(path: str | Path | None = None) -> StackyConfig:
             language=str(voice_raw.get("language", "da-DK")),
             stt_provider=str(voice_raw.get("stt_provider", "local")),
             tts_provider=str(voice_raw.get("tts_provider", "local")),
-            tts_engine=str(voice_raw.get("tts_engine", "piper")),
+            tts_engine=str(voice_raw.get("tts_engine", "supertonic")),
             allow_language_switch=bool(voice_raw.get("allow_language_switch", False)),
             barge_in=bool(voice_raw.get("barge_in", True)),
             sample_rate_in=int(voice_raw.get("sample_rate_in", 16000)),

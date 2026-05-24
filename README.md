@@ -78,7 +78,6 @@ Whisper is no longer the default for hands-free mode because it can hallucinate 
 .\.venv\Scripts\python.exe -m stacky handsfree --listen-only
 .\.venv\Scripts\python.exe -m stacky handsfree --listen-only --debug-audio
 .\.venv\Scripts\python.exe -m stacky handsfree
-.\.venv\Scripts\python.exe -m stacky handsfree --tts-engine supertonic
 .\.venv\Scripts\python.exe -m stacky handsfree --speaker pc --tts-engine supertonic
 .\.venv\Scripts\python.exe -m stacky handsfree --stt-engine whisper --stt-model small
 ```
@@ -89,7 +88,7 @@ Accepted hands-free turns now default to trusted Stacky conversation: they persi
 
 Hands-free replies default to live speech that can still carry a thought: `--reply-chars 260` and `--detail-reply-chars 650`. Stacky should answer simple turns in 1-3 concise sentences, allow 2-5 sentences for complex discussion, avoid automatic follow-up questions, and avoid bringing up bedtime/time unless asked.
 
-The Danish speech adapter also shapes TTS rhythm before synthesis: short markers such as "Okay" and "Fedt" get a sentence pause, and clauses before "men", "hvis", "når", and relevant "så" get clearer pauses. StackChan Supertonic output now uses rhythmic text chunks with real PCM silence between chunks, so punctuation becomes audible timing. The default Supertonic `quick` profile is tuned for less rushed Danish speech: speed `1.08`, chunk length `140`, silence `0.07`.
+The Danish speech adapter also shapes TTS rhythm before synthesis: short markers such as "Okay" and "Fedt" get a sentence pause, and clauses before "men", "hvis", "når", and relevant "så" get clearer pauses. Hands-free mode now defaults to Supertonic's `alive` voice for a less monotone Stacky. Piper remains available as the fast fallback with `--tts-engine piper`. The live Supertonic `alive` profile is tuned for less rushed Danish speech: speed `1.08`, chunk length `140`, silence `0.07`.
 
 The hands-free VAD is tuned for the official Stacky bridge: default `--vad-threshold 280`, `--start-speech-ms 120`, and `--min-speech-ms 220`. It rejects sparse clicks and high-frequency noise before STT; use `--debug-audio` to see `[audio] ... reason='højfrekvent støj'` / `klik/percussiv støj` lines.
 The start detector also ignores high-frequency mic noise as a voice candidate, and post-STT gating rejects clipped sparse turns that hallucinate repeated filler words such as `den her den her`.
@@ -137,7 +136,8 @@ To run Stacky's brain through Gemini instead of the local OpenAI-compatible endp
 $env:STACKY_BRAIN_PROVIDER = "gemini"
 $env:GEMINI_MODEL = "gemini-3.1-flash-lite-preview"
 $env:GEMINI_API_KEY = "<key>"
-.\.venv\Scripts\python.exe -m stacky handsfree --tts-engine supertonic --speaker stackchan
+.\.venv\Scripts\python.exe -m stacky handsfree --speaker stackchan
+.\.venv\Scripts\python.exe -m stacky handsfree --tts-engine piper --speaker stackchan
 ```
 
 Head motion is available after flashing the official Stacky bridge firmware with motion support:

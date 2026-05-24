@@ -124,8 +124,8 @@ def main(argv: list[str] | None = None) -> int:
     handsfree.add_argument(
         "--tts-engine",
         choices=("piper", "supertonic"),
-        default="piper",
-        help="Local TTS engine. Piper is realtime-stable; Supertonic is more natural and local.",
+        default="supertonic",
+        help="Local TTS engine. Supertonic is the livelier default; Piper is the realtime-stable fallback.",
     )
     handsfree.add_argument(
         "--supertonic-profile",
@@ -1945,8 +1945,27 @@ async def _handsfree(
             )
             print("Loading local Danish Piper voice...", flush=True)
         started = time.perf_counter()
-        await output.preload()
-        print(f"Voice ready ({time.perf_counter() - started:.1f}s).", flush=True)
+        try:
+            await output.preload()
+        except Exception as exc:
+            if tts_engine != "supertonic":
+                raise
+            print(f"Supertonic kunne ikke starte ({exc}). Falder tilbage til Piper.", flush=True)
+            output = (
+                create_stackchan_piper_output(
+                    controller,
+                    target_active_rms=stackchan_target_rms,
+                    max_gain=stackchan_max_gain,
+                    volume_level=stackchan_volume,
+                )
+                if speaker == "stackchan"
+                else create_fast_piper_output()
+            )
+            started = time.perf_counter()
+            await output.preload()
+            print(f"Piper fallback ready ({time.perf_counter() - started:.1f}s).", flush=True)
+        else:
+            print(f"Voice ready ({time.perf_counter() - started:.1f}s).", flush=True)
 
     stt = create_danish_stt(stt_engine, stt_model or None)
     stt_name = getattr(stt, "model_id", getattr(stt, "model_size", stt_model or "default"))

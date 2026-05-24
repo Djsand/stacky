@@ -11,8 +11,9 @@ class SupertonicVoiceTest(unittest.TestCase):
 
         self.assertEqual(voice.voice_name, "F2")
         self.assertEqual(voice.language, "da")
-        self.assertGreaterEqual(voice.speed, 1.15)
-        self.assertLessEqual(voice.silence_duration, 0.025)
+        self.assertGreaterEqual(voice.speed, 1.08)
+        self.assertLessEqual(voice.speed, 1.12)
+        self.assertGreaterEqual(voice.silence_duration, 0.045)
 
     def test_preset_allows_explicit_overrides(self) -> None:
         voice = supertonic_voice_preset("calm", voice_name="F1", speed=1.21, total_steps=7)
@@ -25,17 +26,18 @@ class SupertonicVoiceTest(unittest.TestCase):
     def test_quick_profile_keeps_natural_rhythm(self) -> None:
         voice = supertonic_voice_preset("quick")
 
-        self.assertGreaterEqual(voice.speed, 1.18)
-        self.assertLessEqual(voice.speed, 1.21)
-        self.assertLessEqual(voice.silence_duration, 0.015)
-        self.assertGreaterEqual(voice.max_chunk_length, 200)
+        self.assertGreaterEqual(voice.speed, 1.08)
+        self.assertLessEqual(voice.speed, 1.12)
+        self.assertGreaterEqual(voice.silence_duration, 0.045)
+        self.assertLessEqual(voice.max_chunk_length, 160)
 
     def test_alive_profile_is_default_live_personality_tuning(self) -> None:
         voice = supertonic_voice_preset("alive")
 
-        self.assertGreaterEqual(voice.speed, 1.18)
-        self.assertLessEqual(voice.silence_duration, 0.015)
-        self.assertLessEqual(voice.max_chunk_length, 220)
+        self.assertGreaterEqual(voice.speed, 1.06)
+        self.assertLessEqual(voice.speed, 1.10)
+        self.assertGreaterEqual(voice.silence_duration, 0.065)
+        self.assertLessEqual(voice.max_chunk_length, 150)
 
 
 if __name__ == "__main__":

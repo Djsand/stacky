@@ -9,12 +9,12 @@ from stacky.config import load_config
 
 
 class ConfigTest(unittest.TestCase):
-    def test_voice_engine_defaults_to_realtime_piper(self) -> None:
+    def test_voice_engine_defaults_to_livelier_supertonic(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             config_path = Path(tmp) / "stacky.toml"
             config = load_config(config_path)
 
-        self.assertEqual(config.voice.tts_engine, "piper")
+        self.assertEqual(config.voice.tts_engine, "supertonic")
         self.assertTrue(config.websearch.enabled)
         self.assertEqual(config.websearch.provider, "duckduckgo_lite")
         self.assertTrue(config.computer.enabled)
