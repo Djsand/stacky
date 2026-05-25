@@ -26,6 +26,7 @@ from stacky.cli import (
     _run_motion_gesture,
     _sandcode_action_from_brain_tool_plan,
     _sandcode_lead_reply,
+    _sandcode_prompt_for_action,
     _should_speak_sandcode_update,
     _should_comment_on_monitor_observation,
     _should_capture_vision_runtime,
@@ -899,6 +900,7 @@ class HandsfreeHelpersTest(unittest.TestCase):
         self.assertIsNotNone(action)
         assert action is not None
         self.assertEqual(action.prompt, "ret testen")
+        self.assertEqual(action.mode, "work")
 
     def test_sandcode_action_from_brain_tool_plan_defaults_and_cancel(self) -> None:
         default_action = _sandcode_action_from_brain_tool_plan(
@@ -914,6 +916,24 @@ class HandsfreeHelpersTest(unittest.TestCase):
         self.assertIsNotNone(cancel_action)
         assert cancel_action is not None
         self.assertEqual(cancel_action.prompt, "__cancel__")
+        self.assertEqual(cancel_action.mode, "cancel")
+
+    def test_sandcode_prompt_for_action_enforces_mode(self) -> None:
+        read_only_prompt = _sandcode_prompt_for_action(
+            _sandcode_action_from_brain_tool_plan(
+                BrainToolPlan(actions=(BrainToolAction("sandcode", task="scan projektet", mode="read_only"),))
+            )
+        )
+        work_prompt = _sandcode_prompt_for_action(
+            _sandcode_action_from_brain_tool_plan(
+                BrainToolPlan(actions=(BrainToolAction("sandcode", task="ret testen", mode="work"),))
+            )
+        )
+
+        self.assertIn("READ-ONLY MODE", read_only_prompt)
+        self.assertIn("du maa ikke", read_only_prompt)
+        self.assertIn("WORK MODE", work_prompt)
+        self.assertIn("maa laese og aendre filer", work_prompt)
 
     def test_visual_context_only_for_visual_turns(self) -> None:
         self.assertTrue(_wants_visual_context("hvad kan du se lige nu"))

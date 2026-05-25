@@ -2582,6 +2582,7 @@ async def _handsfree(
                     accepting_audio = True
                     continue
                 runtime_state.mark_sandcode_starting(sandcode_action.prompt)
+                sandcode_runtime_prompt = _sandcode_prompt_for_action(sandcode_action)
                 lead_reply = sandcode_lead_reply or _sandcode_lead_reply(
                     sandcode_action.prompt,
                     presence_mode=brain.presence_mode() if brain is not None else "stille_ven",
@@ -2609,7 +2610,7 @@ async def _handsfree(
                     session = await _run_sandcode_with_updates(
                         sandcode_client,
                         cwd,
-                        sandcode_action.prompt,
+                        sandcode_runtime_prompt,
                         on_update=speak_sandcode_update,
                         chat_only=sandcode_action.chat_only,
                     )
@@ -2829,10 +2830,26 @@ def _sandcode_action_from_brain_tool_plan(plan: BrainToolPlan) -> SandcodeAction
         if action.tool != "sandcode":
             continue
         if action.mode == "cancel":
-            return SandcodeAction(prompt="__cancel__")
+            return SandcodeAction(prompt="__cancel__", mode="cancel")
         prompt = action.task.strip() or DEFAULT_SANDCODE_AGENT_PROMPT
-        return SandcodeAction(prompt=prompt, chat_only=action.chat_only)
+        return SandcodeAction(prompt=prompt, chat_only=action.chat_only, mode=action.mode)
     return None
+
+
+def _sandcode_prompt_for_action(action: SandcodeAction) -> str:
+    prompt = action.prompt.strip() or DEFAULT_SANDCODE_AGENT_PROMPT
+    if action.mode == "work":
+        return (
+            "WORK MODE: Du er Stackys Sandcode-agent. Du maa laese og aendre filer naar opgaven kraever det. "
+            "Hold dig til workspace, lav mindst mulig relevant aendring, og rapporter kort hvad du gjorde. "
+            "Koer relevante tests eller sig tydeligt hvorfor du ikke kunne.\n\n"
+            f"Opgave: {prompt}"
+        )
+    return (
+        "READ-ONLY MODE: Du er Stackys Sandcode-agent. Du maa inspicere, laese og analysere, men du maa ikke "
+        "aendre filer, oprette filer, installere dependencies, committe eller pushe. Rapporter kort og konkret.\n\n"
+        f"Opgave: {prompt}"
+    )
 
 
 def _should_speak_sandcode_update(update: str, *, spoken_updates: int) -> bool:

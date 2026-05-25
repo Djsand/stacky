@@ -38,6 +38,7 @@ class SandcodeAction:
     prompt: str
     cwd: Path | None = None
     chat_only: bool = False
+    mode: str = "read_only"
 
 
 DEFAULT_SANDCODE_AGENT_PROMPT = (
@@ -339,7 +340,7 @@ def parse_sandcode_action(text: str) -> SandcodeAction | None:
     if not _looks_like_sandcode_request(normalized):
         return None
     if _wants_cancel_sandcode(normalized):
-        return SandcodeAction(prompt="__cancel__")
+        return SandcodeAction(prompt="__cancel__", mode="cancel")
     if _looks_like_sandcode_test_request(normalized):
         return SandcodeAction(prompt=DEFAULT_SANDCODE_AGENT_PROMPT)
 
@@ -352,7 +353,7 @@ def parse_sandcode_action(text: str) -> SandcodeAction | None:
             return None
     elif _is_activation_only_prompt(prompt):
         prompt = DEFAULT_SANDCODE_AGENT_PROMPT
-    return SandcodeAction(prompt=prompt, chat_only=chat_only)
+    return SandcodeAction(prompt=prompt, chat_only=chat_only, mode=_infer_sandcode_mode(prompt))
 
 
 async def classify_sandcode_action(
@@ -438,13 +439,54 @@ def _parse_sandcode_intent(raw: str) -> SandcodeAction | None:
         return None
     action = str(data.get("sandcode_action") or data.get("action") or "").strip().lower()
     if action in {"cancel", "stop", "afbryd", "annuller"}:
-        return SandcodeAction(prompt="__cancel__")
+        return SandcodeAction(prompt="__cancel__", mode="cancel")
     if action != "start":
         return None
     prompt = _cleanup_prompt(str(data.get("prompt") or ""))
     if not prompt or _is_activation_only_prompt(prompt):
         prompt = DEFAULT_SANDCODE_AGENT_PROMPT
-    return SandcodeAction(prompt=prompt, chat_only=bool(data.get("chat_only")))
+    mode = _normalize_sandcode_mode(str(data.get("mode") or "")) or _infer_sandcode_mode(prompt)
+    return SandcodeAction(prompt=prompt, chat_only=bool(data.get("chat_only")), mode=mode)
+
+
+def _normalize_sandcode_mode(mode: str) -> str:
+    clean = _normalize_for_intent(mode).strip().replace("-", "_")
+    if clean in {"readonly", "read_only", "read only", "status", "scan", "inspect"}:
+        return "read_only"
+    if clean in {"work", "write", "edit", "change", "fix", "implement", "aendre", "endre"}:
+        return "work"
+    if clean in {"cancel", "stop", "afbryd", "annuller"}:
+        return "cancel"
+    return ""
+
+
+def _infer_sandcode_mode(prompt: str) -> str:
+    normalized = _normalize_for_intent(prompt)
+    if any(
+        token in normalized
+        for token in ("read-only", "read only", "readonly", "status", "scan", "kig", "laes", "las", "undersoeg")
+    ):
+        return "read_only"
+    if any(
+        token in normalized
+        for token in (
+            "ret",
+            "rette",
+            "fix",
+            "fikse",
+            "byg",
+            "bygge",
+            "implement",
+            "lav",
+            "opret",
+            "skriv",
+            "aendr",
+            "aendre",
+            "endre",
+        )
+    ):
+        return "work"
+    return "read_only"
 
 
 def _is_activation_only_prompt(prompt: str) -> bool:

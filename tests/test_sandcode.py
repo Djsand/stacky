@@ -149,6 +149,7 @@ class SandcodeTest(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(action)
         assert action is not None
         self.assertEqual(action.prompt, "rette testen")
+        self.assertEqual(action.mode, "work")
 
     def test_parse_sandcode_action_accepts_agent_aliases_without_vague_trigger(self) -> None:
         self.assertIsNone(parse_sandcode_action("agent skills halter stadig"))
@@ -171,6 +172,7 @@ class SandcodeTest(unittest.IsolatedAsyncioTestCase):
                 self.assertIsNotNone(action)
                 assert action is not None
                 self.assertEqual(action.prompt, DEFAULT_SANDCODE_AGENT_PROMPT)
+                self.assertEqual(action.mode, "read_only")
 
     def test_parse_sandcode_action_cleans_agent_task_prefix(self) -> None:
         action = parse_sandcode_action("kan du faa agenten til at kigge projektet igennem")
@@ -219,6 +221,17 @@ class SandcodeTest(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(action)
         assert action is not None
         self.assertEqual(action.prompt, DEFAULT_SANDCODE_AGENT_PROMPT)
+        self.assertEqual(action.mode, "read_only")
+
+    async def test_agentic_router_accepts_work_mode_from_brain(self) -> None:
+        brain = FakeIntentBrain('{"sandcode_action":"start","prompt":"ret testen","mode":"work","chat_only":false}')
+
+        action = await classify_sandcode_action("nej jeg mener agenten du kan saet igang", brain)
+
+        self.assertIsNotNone(action)
+        assert action is not None
+        self.assertEqual(action.prompt, "ret testen")
+        self.assertEqual(action.mode, "work")
 
     async def test_agentic_router_uses_recent_agent_context_for_start_den_followup(self) -> None:
         brain = FakeIntentBrain('{"sandcode_action":"none","prompt":"","chat_only":false}')
