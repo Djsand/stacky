@@ -185,11 +185,22 @@ class SandcodeMobileHostClient:
         on_event: Callable[[dict[str, Any]], None],
         *,
         chat_only: bool = False,
+        on_session_started: Callable[[SandcodeSession], None] | None = None,
     ) -> SandcodeSession:
         session = await self.start_session(cwd, chat_only=chat_only)
+        if on_session_started is not None:
+            on_session_started(session)
         listener = asyncio.create_task(self._listen_until_idle(on_event, session.session_id))
-        await self.send_user_message(session, prompt)
-        await listener
+        try:
+            await self.send_user_message(session, prompt)
+            await listener
+        finally:
+            if not listener.done():
+                listener.cancel()
+                try:
+                    await listener
+                except asyncio.CancelledError:
+                    pass
         return session
 
     async def _listen_until_idle(self, on_event: Callable[[dict[str, Any]], None], session_id: str | None = None) -> None:

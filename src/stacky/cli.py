@@ -1943,6 +1943,7 @@ async def _handsfree(
     body_presence_task = None
     monitor_task = None
     sandcode_job_task: asyncio.Task[None] | None = None
+    sandcode_job_session_id = ""
     pending_runtime_speech: deque[str] = deque(maxlen=4)
     if vision_state is not None:
         print(f"Vision mode ready ({vision_state.detector_status}).", flush=True)
@@ -2134,8 +2135,13 @@ async def _handsfree(
         cwd: Path,
         runtime_prompt: str,
     ) -> None:
-        nonlocal sandcode_job_task
+        nonlocal sandcode_job_session_id, sandcode_job_task
         spoken_updates = 0
+
+        def mark_session_started(session: SandcodeSession) -> None:
+            nonlocal sandcode_job_session_id
+            sandcode_job_session_id = session.session_id
+            runtime_state.mark_sandcode_running(action.prompt, note=f"session {session.session_id} startet")
 
         async def speak_sandcode_update(update: str) -> None:
             nonlocal spoken_updates
@@ -2153,6 +2159,7 @@ async def _handsfree(
                 runtime_prompt,
                 on_update=speak_sandcode_update,
                 chat_only=action.chat_only,
+                on_session_started=mark_session_started,
             )
             runtime_state.mark_sandcode_done(action.prompt, session_id=session.session_id)
             if brain is not None:
@@ -2175,11 +2182,12 @@ async def _handsfree(
                 )
             await speak_runtime_update(error_reply, final_state="listening")
         except asyncio.CancelledError:
-            runtime_state.mark_sandcode_failed(action.prompt, "lokal agent-job blev stoppet")
+            runtime_state.mark_sandcode_cancelled(action.prompt, session_id=sandcode_job_session_id)
             raise
         finally:
             if sandcode_job_task is asyncio.current_task():
                 sandcode_job_task = None
+                sandcode_job_session_id = ""
 
     try:
         while True:
@@ -2650,19 +2658,41 @@ async def _handsfree(
                 set_body_state("thinking")
                 cwd = _resolve_sandcode_cwd(config, "")
                 if sandcode_action.prompt == "__cancel__":
-                    runtime_state.record_action(
-                        kind="sandcode_agent",
-                        status="failed",
-                        summary="Sandcode-agent cancel er ikke understoettet fra voice endnu.",
-                        error="voice cancel unsupported",
-                        can_speak_about=("sandcode_agent", "runtime_action"),
+                    last_action = runtime_state.last_action
+                    active_prompt = (
+                        last_action.detail
+                        if last_action is not None and last_action.kind == "sandcode_agent"
+                        else "Sandcode-agent"
                     )
-                    spoken_reply = "Jeg kan ikke afbryde en kørende Sandcode-session fra voice endnu."
+                    session_id = sandcode_job_session_id
+                    cancel_error = ""
+                    if sandcode_job_task is None or sandcode_job_task.done():
+                        spoken_reply = "Der koerer ikke nogen agent, jeg kan stoppe lige nu."
+                    else:
+                        if session_id:
+                            try:
+                                await sandcode_client.cancel(session_id)
+                            except SandcodeError as exc:
+                                cancel_error = f"Remote cancel fejlede: {exc}"
+                        sandcode_job_task.cancel()
+                        try:
+                            await asyncio.wait_for(sandcode_job_task, timeout=1.0)
+                        except (asyncio.CancelledError, asyncio.TimeoutError):
+                            pass
+                        runtime_state.mark_sandcode_cancelled(active_prompt, session_id=session_id, error=cancel_error)
+                        spoken_reply = (
+                            "Jeg stopper agenten."
+                            if not cancel_error
+                            else "Jeg stopper min lokale agent-lytter; Sandcode-cancel svarede ikke rent."
+                        )
                     record_local_turn(text, spoken_reply)
+                    set_body_state("speaking")
+                    speak_started = time.perf_counter()
                     await speak_reply(spoken_reply)
+                    speak_seconds = time.perf_counter() - speak_started
                     print(
-                        f"[timing] stt={stt_seconds:.2f}s sandcode=0.00s "
-                        f"tts_send={time.perf_counter() - reply_started:.2f}s "
+                        f"[timing] stt={stt_seconds:.2f}s sandcode_cancel={time.perf_counter() - reply_started:.2f}s "
+                        f"tts_send={speak_seconds:.2f}s "
                         f"total={time.perf_counter() - pipeline_started:.2f}s",
                         flush=True,
                     )
@@ -4238,6 +4268,7 @@ async def _run_sandcode_with_updates(
     on_update: Callable[[str], Awaitable[None]],
     chat_only: bool = False,
     heartbeat_seconds: float = 25.0,
+    on_session_started: Callable[[SandcodeSession], None] | None = None,
 ) -> SandcodeSession:
     summarizer = SandcodeDanishSummarizer()
     queue: asyncio.Queue[str | None] = asyncio.Queue()
@@ -4259,7 +4290,13 @@ async def _run_sandcode_with_updates(
 
     async def run() -> SandcodeSession:
         try:
-            return await client.run_session(cwd, prompt, on_event, chat_only=chat_only)
+            return await client.run_session(
+                cwd,
+                prompt,
+                on_event,
+                chat_only=chat_only,
+                on_session_started=on_session_started,
+            )
         finally:
             loop.call_soon_threadsafe(queue.put_nowait, None)
 

@@ -124,6 +124,17 @@ class RuntimeState:
             can_speak_about=("sandcode_agent", "runtime_action"),
         )
 
+    def mark_sandcode_cancelled(self, prompt: str, *, session_id: str = "", error: str = "") -> RuntimeAction:
+        return self.record_action(
+            kind="sandcode_agent",
+            status="cancelled",
+            summary=f"Sandcode-agent stoppet: {_one_line(prompt)}",
+            detail=prompt,
+            error=error,
+            session_id=session_id,
+            can_speak_about=("sandcode_agent", "runtime_action"),
+        )
+
     def context_for_prompt(self, *, now: float | None = None, max_events: int = 5) -> str:
         current = self._clock() if now is None else now
         action = self._last_action
@@ -223,6 +234,9 @@ def _sandcode_status_reply(
     if action.status == "failed":
         error = action.error or "ukendt fejl"
         return f"Agenten fejlede, {age}: {error}"
+    if action.status == "cancelled":
+        error = f" {action.error}" if action.error else ""
+        return f"Agenten er stoppet, {age}.{error}"
     return f"Agentstatus er {action.status}, {age}: {summary}"
 
 

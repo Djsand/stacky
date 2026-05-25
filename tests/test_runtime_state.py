@@ -104,5 +104,16 @@ class RuntimeStateTest(unittest.TestCase):
         self.assertIn("abc123", reply)
 
 
+    def test_status_reply_reports_cancelled_agent(self) -> None:
+        clock = FakeClock()
+        state = RuntimeState(clock=clock)
+        state.mark_sandcode_cancelled("scan projektet", session_id="abc123")
+
+        reply = state.status_reply("agent status")
+
+        self.assertEqual(state.agent_status, "cancelled")
+        self.assertIn("Agenten er stoppet", reply)
+
+
 if __name__ == "__main__":
     unittest.main()
