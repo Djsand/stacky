@@ -384,6 +384,52 @@ class BrainMemoryContextTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(plan.actions[0].mode, "work")
         self.assertIn("runtime tool-broker", plan.actions[0].task)
 
+    async def test_brain_tool_plan_fallback_routes_direct_project_work_without_recent_context(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = MemoryStore(Path(tmp) / "memory.sqlite")
+            brain = StackyBrain(  # type: ignore[arg-type]
+                StackySoul(created_for="Nicolai"),
+                memory,
+                FixedFakeLLM('{"say":"","actions":[]}'),
+            )
+
+            plan = await brain.plan_tools("ret audiofejlene i handsfree runtime")
+
+        self.assertEqual(plan.say, "Jeg sender agenten ind i det.")
+        self.assertEqual(len(plan.actions), 1)
+        self.assertEqual(plan.actions[0].tool, "sandcode")
+        self.assertEqual(plan.actions[0].mode, "work")
+        self.assertIn("ret audiofejlene", plan.actions[0].task)
+
+    async def test_brain_tool_plan_fallback_routes_direct_project_scan_as_read_only(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = MemoryStore(Path(tmp) / "memory.sqlite")
+            brain = StackyBrain(  # type: ignore[arg-type]
+                StackySoul(created_for="Nicolai"),
+                memory,
+                FixedFakeLLM('{"say":"","actions":[]}'),
+            )
+
+            plan = await brain.plan_tools("tjek om websearch testen virker")
+
+        self.assertEqual(len(plan.actions), 1)
+        self.assertEqual(plan.actions[0].tool, "sandcode")
+        self.assertEqual(plan.actions[0].mode, "read_only")
+
+    async def test_brain_tool_plan_fallback_does_not_route_direct_non_project_fix(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = MemoryStore(Path(tmp) / "memory.sqlite")
+            brain = StackyBrain(  # type: ignore[arg-type]
+                StackySoul(created_for="Nicolai"),
+                memory,
+                FixedFakeLLM('{"say":"","actions":[]}'),
+            )
+
+            plan = await brain.plan_tools("ret humoeret lidt")
+
+        self.assertEqual(plan.say, "")
+        self.assertEqual(plan.actions, ())
+
     async def test_brain_tool_plan_fallback_ignores_vague_continue_without_project_context(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             memory = MemoryStore(Path(tmp) / "memory.sqlite")

@@ -730,12 +730,14 @@ def _fallback_brain_tool_plan(
         )
     if _runtime_agent_is_busy(runtime_context):
         return BrainToolPlan()
-    if not _looks_like_implicit_project_action(folded):
+    direct_project_action = _looks_like_direct_project_tool_request(folded)
+    implicit_project_action = _looks_like_implicit_project_action(folded)
+    if not direct_project_action and not implicit_project_action:
         return BrainToolPlan()
-    if not _recent_context_supports_sandcode(recent_context):
+    if implicit_project_action and not direct_project_action and not _recent_context_supports_sandcode(recent_context):
         return BrainToolPlan()
     mode = "read_only" if _looks_like_read_only_tool_request(folded) else "work"
-    task = _implicit_sandcode_task(user_text, recent_context=recent_context)
+    task = _direct_sandcode_task(user_text) if direct_project_action else _implicit_sandcode_task(user_text, recent_context=recent_context)
     return BrainToolPlan(
         say="Jeg sender agenten ind i det.",
         actions=(BrainToolAction(tool="sandcode", task=task, mode=mode, chat_only=False),),
@@ -794,6 +796,62 @@ def _looks_like_implicit_project_action(folded: str) -> bool:
             folded,
         )
     )
+
+
+def _looks_like_direct_project_tool_request(folded: str) -> bool:
+    if not folded:
+        return False
+    action_terms = (
+        "ret",
+        "rette",
+        "fix",
+        "fiks",
+        "fikse",
+        "byg",
+        "bygge",
+        "implementer",
+        "implementere",
+        "lav",
+        "opret",
+        "tilfoej",
+        "tilfoje",
+        "fjern",
+        "test",
+        "teste",
+        "undersoeg",
+        "tjek",
+        "scan",
+    )
+    project_terms = (
+        "kode",
+        "repo",
+        "projekt",
+        "fil",
+        "filer",
+        "test",
+        "pytest",
+        "build",
+        "runtime",
+        "tool broker",
+        "cli",
+        "firmware",
+        "stacky",
+        "stackchan",
+        "handsfree",
+        "sandcode",
+        "agent",
+        "monitor",
+        "memory",
+        "hukommelse",
+        "audio",
+        "lyd",
+        "tts",
+        "stt",
+        "websearch",
+        "voice",
+        "config",
+    )
+    return any(term in folded for term in action_terms) and any(term in folded for term in project_terms)
 
 
 def _looks_like_read_only_tool_request(folded: str) -> bool:
@@ -867,6 +925,11 @@ def _implicit_sandcode_task(user_text: str, *, recent_context: str) -> str:
         recent = recent[-260:].strip()
     user = _one_line(user_text)
     return f"Fortsaet den seneste projektopgave ud fra konteksten. Nicolais korte kommando: {user}. Kontekst: {recent}"
+
+
+def _direct_sandcode_task(user_text: str) -> str:
+    user = _one_line(user_text)
+    return f"Udfoer Nicolais projektopgave: {user}"
 
 
 def _one_line(value: str) -> str:
