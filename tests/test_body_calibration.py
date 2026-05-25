@@ -14,6 +14,7 @@ class BodyCalibrationTest(unittest.TestCase):
 
         self.assertEqual(calibration.center_yaw, 90)
         self.assertEqual(calibration.center_pitch, 260)
+        self.assertEqual(calibration.yaw_range, 160)
 
     def test_save_and_load_roundtrip(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -28,8 +29,14 @@ class BodyCalibrationTest(unittest.TestCase):
     def test_nudge_clamps_to_firmware_limits(self) -> None:
         calibration = BodyCalibration(center_yaw=1270, center_pitch=40).nudge(yaw_delta=50, pitch_delta=-50)
 
-        self.assertEqual(calibration.center_yaw, 1280)
+        self.assertEqual(calibration.center_yaw, 320)
         self.assertEqual(calibration.center_pitch, 30)
+
+    def test_yaw_range_clamps_to_safe_body_span(self) -> None:
+        calibration = BodyCalibration(center_yaw=-10, yaw_range=720).clamp()
+
+        self.assertEqual(calibration.center_yaw, 40)
+        self.assertEqual(calibration.yaw_range, 160)
 
 
 if __name__ == "__main__":

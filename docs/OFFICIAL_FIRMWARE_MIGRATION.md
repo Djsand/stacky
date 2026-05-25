@@ -16,9 +16,9 @@ The goal is not to import any old identity or memory. Stacky remains a fresh loc
 - Official firmware builds on this PC after applying the official XiaoZhi patch manually and building through short drive aliases.
 - Official firmware was flashed to CoreS3 on `COM3`.
 - Boot was serial-logged for 25 seconds without a reboot. Log: `artifacts/official_firmware_boot.log`.
-- Stacky firmware variant `official-0.1.25` has been added as a local patch on top of official firmware.
+- Stacky firmware variant `official-0.1.28` has been added as a local patch on top of official firmware.
 - Repro patch: `patches/official-stackchan/0001-stacky-bridge.patch`
-- Latest body patch version: official StackChan `1.4.1` plus `AppStacky` / bridge `official-0.1.25`.
+- Latest body patch version: official StackChan `1.4.1` plus `AppStacky` / bridge `official-0.1.28`.
 
 ## Local Flash Command
 
@@ -47,7 +47,7 @@ idf.py build
 idf.py -p COM3 flash
 ```
 
-## Stacky App Variant Official-0.1.25
+## Stacky App Variant Official-0.1.28
 
 The first official-firmware customization is now a real app variant. Stacky boots directly into a custom Mooncake app instead of launching the official launcher/setup path. It keeps the existing Python body-controller protocol so the PC runtime does not need a rewrite before we validate hardware stability.
 
@@ -71,8 +71,8 @@ Runtime shape:
 - `StackyBridge` accepts `display.brightness`, reports `displayBrightness`, and responds to `vision.capture` with an explicit not-implemented `vision.frame` event until the real camera bridge is added.
 - `StackyBridge` accepts `body.look_at` and `body.gesture` for head-servo motion. Gestures currently include `center`, `look_left`, `look_right`, `look_up`, `look_down`, `nod`, and `shake`.
 - `StackyBridge` accepts `body.motion_config` for runtime head center/range calibration and reports `centerYaw` / `centerPitch`.
-- `StackyBridge` uses a Stacky-specific default social head center (`yaw=90`, `pitch=260`) instead of raw servo home so up/down motion has visible travel in both directions. Python can override this at runtime from `data/stacky/body_calibration.json`.
-- Boot logo is Stacky-branded: black screen, bitmap ghost generated from `AppIcon-1024.png`, `STACKY` title, and `official-0.1.25` version text instead of the upstream `STACKCHAN` boot label.
+- `StackyBridge` uses a Stacky-specific default social head center (`yaw=90`, `pitch=260`) instead of raw servo home so up/down motion has visible travel in both directions. Python can override this at runtime from `data/stacky/body_calibration.json`. Yaw is clamped to the safe `40..320` span with a default `160` range to avoid wraparound sweeps. Bridge-owned motion disables upstream auto angle sync so transient servo read failures cannot teleport the animation to the hard left limit.
+- Boot logo is Stacky-branded: black screen, bitmap ghost generated from `AppIcon-1024.png`, `STACKY` title, and `official-0.1.28` version text instead of the upstream `STACKCHAN` boot label.
 - Mic streaming now sends all firmware input channels. Python can select `--mic-channel 0`, `--mic-channel 1`, `--mic-channel mix`, or `--mic-channel all` for channel-quality tests.
 - The official launcher/setup/app-center flow is not the Stacky boot path.
 

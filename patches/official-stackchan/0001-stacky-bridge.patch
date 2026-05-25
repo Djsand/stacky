@@ -383,14 +383,14 @@ index e280eeb..d47dd99 100644
  
      if (is_idle) {
 diff --git a/firmware/main/hal/hal.h b/firmware/main/hal/hal.h
-index 5f9efcf..e65ed73 100644
+index 5f9efcf..2eb7809 100644
 --- a/firmware/main/hal/hal.h
 +++ b/firmware/main/hal/hal.h
 @@ -132,6 +132,9 @@ enum class MicTestStatus {
      Failed,
  };
  
-+inline constexpr const char* STACKY_BOOT_VERSION = "official-0.1.25";
++inline constexpr const char* STACKY_BOOT_VERSION = "official-0.1.28";
 +LV_IMAGE_DECLARE(stacky_boot_ghost);
 +
  /**
@@ -2842,10 +2842,10 @@ index 0000000..fb1504b
 +};
 diff --git a/firmware/main/hal/stacky_bridge.cpp b/firmware/main/hal/stacky_bridge.cpp
 new file mode 100644
-index 0000000..92e8f18
+index 0000000..f6587b5
 --- /dev/null
 +++ b/firmware/main/hal/stacky_bridge.cpp
-@@ -0,0 +1,1373 @@
+@@ -0,0 +1,1408 @@
 +#include "stacky_bridge.h"
 +
 +#include "hal.h"
@@ -2916,7 +2916,7 @@ index 0000000..92e8f18
 +namespace {
 +
 +constexpr const char* TAG = "StackyBridge";
-+constexpr const char* STACKY_BRIDGE_VERSION = "official-0.1.25";
++constexpr const char* STACKY_BRIDGE_VERSION = "official-0.1.28";
 +constexpr size_t MIC_FRAME_COUNT = 480;       // 20 ms at 24 kHz
 +constexpr int MIC_WARMUP_DISCARD_FRAMES = 12;
 +constexpr size_t PLAYBACK_CHUNK_SAMPLES = 960;
@@ -2926,9 +2926,11 @@ index 0000000..92e8f18
 +constexpr int STACKY_OUTPUT_VOLUME = 100;
 +constexpr int STACKY_CENTER_YAW = 90;
 +constexpr int STACKY_CENTER_PITCH = 260;
-+constexpr int STACKY_LOOK_YAW_RANGE = 720;
++constexpr int STACKY_LOOK_YAW_RANGE = 160;
 +constexpr int STACKY_LOOK_UP_RANGE = 520;
 +constexpr int STACKY_LOOK_DOWN_RANGE = 220;
++constexpr int STACKY_MIN_YAW = 40;
++constexpr int STACKY_MAX_YAW = 320;
 +constexpr int STACKY_MIN_PITCH = 30;
 +constexpr int STACKY_MAX_PITCH = 870;
 +
@@ -2995,6 +2997,7 @@ index 0000000..92e8f18
 +    void start() override
 +    {
 +        enabled_.store(true);
++        enableBridgeMotionControl();
 +        if (started_.exchange(true)) {
 +            return;
 +        }
@@ -3013,6 +3016,7 @@ index 0000000..92e8f18
 +        playback_active_.store(false);
 +        playback_cancel_requested_.store(true);
 +        showSpeaking(false);
++        releaseBridgeMotionControl();
 +        closeSocket();
 +
 +        auto* codec = Board::GetInstance().GetAudioCodec();
@@ -3054,6 +3058,8 @@ index 0000000..92e8f18
 +    std::atomic<int> look_yaw_range_{STACKY_LOOK_YAW_RANGE};
 +    std::atomic<int> look_up_range_{STACKY_LOOK_UP_RANGE};
 +    std::atomic<int> look_down_range_{STACKY_LOOK_DOWN_RANGE};
++    std::atomic<int> target_yaw_{STACKY_CENTER_YAW};
++    std::atomic<int> target_pitch_{STACKY_CENTER_PITCH};
 +    int head_touch_connection_ = -1;
 +    int speaking_modifier_id_ = -1;
 +    int speaking_mouth_weight_ = 0;
@@ -3785,7 +3791,6 @@ index 0000000..92e8f18
 +
 +    void sendStatus(const char* expression)
 +    {
-+        const auto angles = GetStackChan().motion().getCurrentAngles();
 +        auto* codec = Board::GetInstance().GetAudioCodec();
 +        const int mic_channels = codec ? std::max(codec->input_channels(), 1) : 1;
 +        const int battery_level = std::clamp(static_cast<int>(GetHAL().getBatteryLevel()), 0, 100);
@@ -3808,8 +3813,8 @@ index 0000000..92e8f18
 +            led_g_.load(),
 +            led_b_.load(),
 +            mic_channels,
-+            angles.x,
-+            angles.y,
++            target_yaw_.load(),
++            target_pitch_.load(),
 +            center_yaw_.load(),
 +            center_pitch_.load(),
 +            camera_available ? "true" : "false",
@@ -3930,9 +3935,9 @@ index 0000000..92e8f18
 +
 +    void applyMotionConfig(JsonVariantConst payload)
 +    {
-+        center_yaw_.store(std::clamp(payload["centerYaw"] | center_yaw_.load(), -1280, 1280));
++        center_yaw_.store(std::clamp(payload["centerYaw"] | center_yaw_.load(), STACKY_MIN_YAW, STACKY_MAX_YAW));
 +        center_pitch_.store(std::clamp(payload["centerPitch"] | center_pitch_.load(), STACKY_MIN_PITCH, STACKY_MAX_PITCH));
-+        look_yaw_range_.store(std::clamp(payload["yawRange"] | look_yaw_range_.load(), 0, 1280));
++        look_yaw_range_.store(std::clamp(payload["yawRange"] | look_yaw_range_.load(), 0, STACKY_LOOK_YAW_RANGE));
 +        look_up_range_.store(std::clamp(payload["lookUpRange"] | look_up_range_.load(), 0, STACKY_MAX_PITCH));
 +        look_down_range_.store(std::clamp(payload["lookDownRange"] | look_down_range_.load(), 0, STACKY_MAX_PITCH));
 +    }
@@ -4008,7 +4013,10 @@ index 0000000..92e8f18
 +
 +    void lookAt(float x, float y, int speed)
 +    {
-+        const int yaw = center_yaw_.load() + static_cast<int>(std::clamp(x, -1.0f, 1.0f) * look_yaw_range_.load());
++        const int yaw = std::clamp(
++            center_yaw_.load() + static_cast<int>(std::clamp(x, -1.0f, 1.0f) * look_yaw_range_.load()),
++            STACKY_MIN_YAW,
++            STACKY_MAX_YAW);
 +        const int pitch_offset = y >= 0.0f
 +                                     ? static_cast<int>(std::clamp(y, 0.0f, 1.0f) * look_up_range_.load())
 +                                     : static_cast<int>(std::clamp(y, -1.0f, 0.0f) * look_down_range_.load());
@@ -4018,10 +4026,37 @@ index 0000000..92e8f18
 +
 +    void moveTo(int yaw, int pitch, int speed)
 +    {
++        const int safe_yaw = std::clamp(yaw, STACKY_MIN_YAW, STACKY_MAX_YAW);
++        const int safe_pitch = std::clamp(pitch, STACKY_MIN_PITCH, STACKY_MAX_PITCH);
++        target_yaw_.store(safe_yaw);
++        target_pitch_.store(safe_pitch);
 +        LvglLockGuard lock;
 +        auto& motion = GetStackChan().motion();
++        motion.setAutoAngleSyncEnabled(false);
++        motion.setAutoTorqueReleaseEnabled(false);
 +        motion.setTorqueEnabled(true);
-+        motion.moveWithSpeed(yaw, pitch, std::clamp(speed, 0, 1000));
++        motion.moveWithSpeed(safe_yaw, safe_pitch, std::clamp(speed, 0, 1000));
++    }
++
++    void enableBridgeMotionControl()
++    {
++        target_yaw_.store(center_yaw_.load());
++        target_pitch_.store(center_pitch_.load());
++        LvglLockGuard lock;
++        auto& motion = GetStackChan().motion();
++        motion.setAutoAngleSyncEnabled(false);
++        motion.setAutoTorqueReleaseEnabled(false);
++        motion.setTorqueEnabled(true);
++        motion.moveWithSpeed(target_yaw_.load(), target_pitch_.load(), 160);
++    }
++
++    void releaseBridgeMotionControl()
++    {
++        LvglLockGuard lock;
++        auto& motion = GetStackChan().motion();
++        motion.setAutoTorqueReleaseEnabled(true);
++        motion.setAutoAngleSyncEnabled(true);
++        motion.setTorqueEnabled(false);
 +    }
 +
 +    void applyExpression(const char* name)

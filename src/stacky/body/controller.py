@@ -141,7 +141,7 @@ class StackChanBodyController:
         *,
         center_yaw: int,
         center_pitch: int,
-        yaw_range: int = 720,
+        yaw_range: int = 160,
         look_up_range: int = 520,
         look_down_range: int = 220,
     ) -> bool:

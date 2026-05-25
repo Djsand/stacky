@@ -2537,7 +2537,10 @@ async def _handsfree(
                     presence_mode=brain.presence_mode() if brain is not None else "stille_ven",
                 )
                 record_local_turn(text, f"{lead_reply} Opgave: {sandcode_action.prompt}")
+                set_body_state("speaking")
                 await speak_reply(lead_reply)
+                set_body_state("thinking")
+                await asyncio.sleep(0.08)
 
                 spoken_updates = 0
 
@@ -2547,8 +2550,9 @@ async def _handsfree(
                     if not _should_speak_sandcode_update(update, spoken_updates=spoken_updates):
                         return
                     spoken_updates += 1
-                    set_body_state("thinking")
+                    set_body_state("speaking")
                     await speak_reply(update)
+                    set_body_state("thinking")
 
                 try:
                     session = await _run_sandcode_with_updates(
@@ -2563,6 +2567,7 @@ async def _handsfree(
                         source="sandcode-agent",
                     )
                     if spoken_updates == 0:
+                        set_body_state("speaking")
                         await speak_reply(f"Agenten er færdig. Sessionen hedder {session.session_id}.")
                 except SandcodeError as exc:
                     error_reply = f"Agenten kunne ikke starte: {exc}"
@@ -2571,6 +2576,7 @@ async def _handsfree(
                         f"Sandcode-agenten kunne ikke starte for opgaven: {sandcode_action.prompt}. Fejl: {exc}.",
                         source="sandcode-agent",
                     )
+                    set_body_state("speaking")
                     await speak_reply(error_reply)
                 set_body_state("happy")
                 print(

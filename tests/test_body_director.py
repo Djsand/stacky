@@ -20,7 +20,7 @@ class FakeDirectorController:
         *,
         center_yaw: int,
         center_pitch: int,
-        yaw_range: int = 720,
+        yaw_range: int = 160,
         look_up_range: int = 520,
         look_down_range: int = 220,
     ) -> bool:
@@ -142,9 +142,14 @@ class BodyDirectorTest(unittest.TestCase):
         self.assertTrue(director.track_face(0.5, -0.4, confidence=0.8, now=10.0))
         self.assertTrue(director.reply_started("Skal jeg goere det saadan?", now=12.0))
 
-        self.assertEqual(fake.looks, [(0.31, -0.192, 105)])
+        self.assertEqual(len(fake.looks), 1)
+        self.assertAlmostEqual(fake.looks[0][0], 0.19)
+        self.assertAlmostEqual(fake.looks[0][1], -0.16)
+        self.assertEqual(fake.looks[0][2], 105)
         self.assertEqual(fake.gestures, [("look_up", 0.14, 190)])
-        self.assertEqual(fake.gesture_bases, [(0.31, -0.192)])
+        self.assertEqual(len(fake.gesture_bases), 1)
+        self.assertAlmostEqual(fake.gesture_bases[0][0] or 0.0, 0.19)
+        self.assertAlmostEqual(fake.gesture_bases[0][1] or 0.0, -0.16)
         self.assertEqual(fake.leds[-1]["r"], 130)
 
     def test_reply_started_anchors_agreement_nod_to_recent_face_lock(self) -> None:
@@ -154,9 +159,14 @@ class BodyDirectorTest(unittest.TestCase):
         self.assertTrue(director.track_face(-0.5, 0.2, confidence=0.8, now=10.0))
         self.assertTrue(director.reply_started("Okay, det giver mening.", now=13.0))
 
-        self.assertEqual(fake.looks, [(-0.31, 0.096, 105)])
+        self.assertEqual(len(fake.looks), 1)
+        self.assertAlmostEqual(fake.looks[0][0], -0.19)
+        self.assertAlmostEqual(fake.looks[0][1], 0.08)
+        self.assertEqual(fake.looks[0][2], 105)
         self.assertEqual(fake.gestures, [("nod", 0.18, 220)])
-        self.assertEqual(fake.gesture_bases, [(-0.31, 0.096)])
+        self.assertEqual(len(fake.gesture_bases), 1)
+        self.assertAlmostEqual(fake.gesture_bases[0][0] or 0.0, -0.19)
+        self.assertAlmostEqual(fake.gesture_bases[0][1] or 0.0, 0.08)
         self.assertEqual(fake.leds[-1]["mode"], "solid")
 
     def test_reply_started_uses_motion_after_face_lock_expires(self) -> None:
@@ -184,8 +194,19 @@ class BodyDirectorTest(unittest.TestCase):
         director = BodyDirector(fake, BodyCalibration())  # type: ignore[arg-type]
 
         self.assertTrue(director.track_face(0.5, -0.4, confidence=0.8, now=10.0))
-        self.assertEqual(fake.looks, [(0.31, -0.192, 105)])
+        self.assertEqual(len(fake.looks), 1)
+        self.assertAlmostEqual(fake.looks[0][0], 0.19)
+        self.assertAlmostEqual(fake.looks[0][1], -0.16)
+        self.assertEqual(fake.looks[0][2], 105)
         self.assertEqual(director.last_motion_at, 10.0)
+
+    def test_track_face_clamps_far_edge_to_safe_small_turn(self) -> None:
+        fake = FakeDirectorController()
+        director = BodyDirector(fake, BodyCalibration())  # type: ignore[arg-type]
+
+        self.assertTrue(director.track_face(-2.0, 2.0, confidence=0.8, now=10.0))
+
+        self.assertEqual(fake.looks, [(-0.32, 0.30, 105)])
 
     def test_track_face_ignores_centered_face(self) -> None:
         fake = FakeDirectorController()

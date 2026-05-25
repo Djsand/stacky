@@ -31,6 +31,7 @@ class FakeController:
         self.hold_states: list[bool] = []
         self.volume_levels: list[int] = []
         self.interrupts = 0
+        self.fail_audio_calls = 0
 
     def stop_audio(self) -> bool:
         return True
@@ -45,6 +46,9 @@ class FakeController:
 
     def speak_audio_chunks(self, pcm: bytes, **kwargs: object) -> bool:
         self.audio_calls.append(pcm)
+        if self.fail_audio_calls > 0:
+            self.fail_audio_calls -= 1
+            return False
         return True
 
     def set_volume(self, level: int) -> bool:
@@ -169,6 +173,30 @@ class VoiceOutputTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(len(controller.audio_calls), 1)
         self.assertEqual(controller.hold_states, [True, False])
+
+    def test_stackchan_output_retries_one_failed_audio_send(self) -> None:
+        controller = FakeController()
+        controller.fail_audio_calls = 1
+        output = StackChanSpeechOutput(FakeWavTTS(), controller)  # type: ignore[arg-type]
+        pcm = b"".join(int(900).to_bytes(2, "little", signed=True) for _ in range(120))
+
+        output._send_pcm_to_stackchan(pcm, sample_rate=24_000, channels=1)
+
+        self.assertEqual(len(controller.audio_calls), 2)
+        self.assertEqual(controller.interrupts, 1)
+        self.assertEqual(controller.hold_states, [True, True, False])
+
+    def test_stackchan_output_raises_after_repeated_audio_send_failure(self) -> None:
+        controller = FakeController()
+        controller.fail_audio_calls = 2
+        output = StackChanSpeechOutput(FakeWavTTS(), controller)  # type: ignore[arg-type]
+        pcm = b"".join(int(900).to_bytes(2, "little", signed=True) for _ in range(120))
+
+        with self.assertRaises(RuntimeError):
+            output._send_pcm_to_stackchan(pcm, sample_rate=24_000, channels=1)
+
+        self.assertEqual(len(controller.audio_calls), 2)
+        self.assertEqual(controller.hold_states[-1], False)
 
     async def test_stackchan_wait_absorbs_playback_task_error(self) -> None:
         output = StackChanSpeechOutput(FakeTTS(), FakeController())  # type: ignore[arg-type]

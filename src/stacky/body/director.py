@@ -267,8 +267,8 @@ class BodyDirector:
             return True
         if max(abs(x), abs(y)) < 0.14:
             return True
-        command_x = max(-0.56, min(0.56, float(x) * 0.62))
-        command_y = max(-0.38, min(0.38, float(y) * 0.48))
+        command_x = max(-0.32, min(0.32, float(x) * 0.38))
+        command_y = max(-0.30, min(0.30, float(y) * 0.40))
         self._last_face_track_at = now
         self._last_motion_at = now
         self._face_command_x = command_x

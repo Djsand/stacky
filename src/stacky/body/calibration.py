@@ -9,15 +9,15 @@ from pathlib import Path
 class BodyCalibration:
     center_yaw: int = 90
     center_pitch: int = 260
-    yaw_range: int = 720
+    yaw_range: int = 160
     look_up_range: int = 520
     look_down_range: int = 220
 
     def clamp(self) -> "BodyCalibration":
         return BodyCalibration(
-            center_yaw=_clamp(self.center_yaw, -1280, 1280),
+            center_yaw=_clamp(self.center_yaw, 40, 320),
             center_pitch=_clamp(self.center_pitch, 30, 870),
-            yaw_range=_clamp(self.yaw_range, 0, 1280),
+            yaw_range=_clamp(self.yaw_range, 0, 160),
             look_up_range=_clamp(self.look_up_range, 0, 870),
             look_down_range=_clamp(self.look_down_range, 0, 870),
         )

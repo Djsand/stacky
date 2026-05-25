@@ -148,16 +148,16 @@ def motion_config(
     *,
     center_yaw: int,
     center_pitch: int,
-    yaw_range: int = 720,
+    yaw_range: int = 160,
     look_up_range: int = 520,
     look_down_range: int = 220,
 ) -> BodyCommand:
     return BodyCommand(
         "body.motion_config",
         {
-            "centerYaw": max(-1280, min(1280, int(center_yaw))),
+            "centerYaw": max(40, min(320, int(center_yaw))),
             "centerPitch": max(30, min(870, int(center_pitch))),
-            "yawRange": max(0, min(1280, int(yaw_range))),
+            "yawRange": max(0, min(160, int(yaw_range))),
             "lookUpRange": max(0, min(870, int(look_up_range))),
             "lookDownRange": max(0, min(870, int(look_down_range))),
         },

@@ -80,9 +80,9 @@ class BodyProtocolTest(unittest.TestCase):
         raw = command.to_json()
 
         self.assertIn("body.motion_config", raw)
-        self.assertEqual(command.payload["centerYaw"], 1280)
+        self.assertEqual(command.payload["centerYaw"], 320)
         self.assertEqual(command.payload["centerPitch"], 30)
-        self.assertEqual(command.payload["yawRange"], 1280)
+        self.assertEqual(command.payload["yawRange"], 160)
         self.assertEqual(command.payload["lookUpRange"], 870)
         self.assertEqual(command.payload["lookDownRange"], 0)
 

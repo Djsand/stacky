@@ -257,7 +257,7 @@ class StackChanSpeechOutput:
                 if self._stop_requested.is_set():
                     return 0.0
                 segment_duration = len(segment) / max(1, sample_rate * channels * 2)
-                self.controller.speak_audio_chunks(
+                sent = self.controller.speak_audio_chunks(
                     segment,
                     sample_rate=sample_rate,
                     channels=channels,
@@ -266,6 +266,21 @@ class StackChanSpeechOutput:
                     wait_for_ack=False,
                     playback_timeout_seconds=segment_duration + 6.0,
                 )
+                if not sent and not self._stop_requested.is_set():
+                    self.controller.interrupt_audio()
+                    time.sleep(0.12)
+                    self.controller.hold_audio(True)
+                    sent = self.controller.speak_audio_chunks(
+                        segment,
+                        sample_rate=sample_rate,
+                        channels=channels,
+                        chunk_bytes=16384,
+                        chunk_delay_seconds=0.0,
+                        wait_for_ack=False,
+                        playback_timeout_seconds=segment_duration + 6.0,
+                    )
+                if not sent:
+                    raise RuntimeError("StackChan audio send failed")
                 if self._stop_requested.is_set():
                     return 0.0
                 time.sleep(0.04)
