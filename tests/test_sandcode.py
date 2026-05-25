@@ -177,7 +177,12 @@ class SandcodeTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(codex_action.prompt, "rette testen")
 
     def test_parse_sandcode_action_defaults_empty_start_to_read_only_status(self) -> None:
-        for text in ("start agenten", "saet agenten i gang", "sandcode start"):
+        for text in (
+            "start agenten",
+            "saet agenten i gang",
+            "nej jeg mener agenten du kan saet igang",
+            "sandcode start",
+        ):
             with self.subTest(text=text):
                 action = parse_sandcode_action(text)
                 self.assertIsNotNone(action)
@@ -209,7 +214,7 @@ class SandcodeTest(unittest.IsolatedAsyncioTestCase):
     async def test_agentic_router_routes_natural_agent_start(self) -> None:
         brain = FakeIntentBrain('{"sandcode_action":"start","prompt":"kig projektet igennem read-only","chat_only":false}')
 
-        action = await classify_sandcode_action("nej jeg mener agenten du kan saet igang", brain)
+        action = await classify_sandcode_action("den agent ting du kan bruge til projektet", brain)
 
         self.assertIsNotNone(action)
         assert action is not None
@@ -227,7 +232,7 @@ class SandcodeTest(unittest.IsolatedAsyncioTestCase):
     async def test_agentic_router_defaults_empty_prompt_to_read_only_status(self) -> None:
         brain = FakeIntentBrain('{"sandcode_action":"start","prompt":"","chat_only":false}')
 
-        action = await classify_sandcode_action("nej jeg mener agenten du kan saet igang", brain)
+        action = await classify_sandcode_action("kan vi faa agenten i arbejde med projektet", brain)
 
         self.assertIsNotNone(action)
         assert action is not None
@@ -237,7 +242,7 @@ class SandcodeTest(unittest.IsolatedAsyncioTestCase):
     async def test_agentic_router_accepts_work_mode_from_brain(self) -> None:
         brain = FakeIntentBrain('{"sandcode_action":"start","prompt":"ret testen","mode":"work","chat_only":false}')
 
-        action = await classify_sandcode_action("nej jeg mener agenten du kan saet igang", brain)
+        action = await classify_sandcode_action("kan vi faa agenten i arbejde med testen", brain)
 
         self.assertIsNotNone(action)
         assert action is not None

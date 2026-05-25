@@ -546,7 +546,13 @@ def _looks_like_sandcode_request(normalized: str) -> bool:
     command = r"(?:brug|start|koer|kor|bed|saet|send|lad)"
     if re.search(rf"\b{command}\s+(?:den\s+)?{agent_alias}\b", normalized):
         return True
-    return bool(re.search(rf"\b{agent_alias}\s+(?:skal|maa|ma|kan|til\s+at|om\s+at)\b", normalized))
+    return bool(
+        re.search(rf"\b{agent_alias}\s+(?:skal|maa|ma|kan|til\s+at|om\s+at)\b", normalized)
+        or re.search(
+            rf"\b{agent_alias}\s+(?:du\s+kan\s+)?(?:start|starte|saet|saette|sat|i\s*gang|igang|koer|kor)\b",
+            normalized,
+        )
+    )
 
 
 def _looks_like_sandcode_test_request(normalized: str) -> bool:
