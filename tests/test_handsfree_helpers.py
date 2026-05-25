@@ -21,7 +21,7 @@ from stacky.cli import (
     _parse_motion_command,
     _parse_presence_mode_command,
     _parse_stt_bench_spec,
-    _next_audio_or_runtime_wakeup,
+    _next_audio_or_background_wakeup,
     _pop_runtime_speech_update,
     _queue_runtime_speech_update,
     _parse_volume_command,
@@ -909,17 +909,17 @@ class HandsfreeHelpersTest(unittest.TestCase):
         self.assertEqual(_pop_runtime_speech_update(queue), "Agenten er faerdig.")
         self.assertIsNone(_pop_runtime_speech_update(queue))
 
-    def test_audio_wait_wakes_for_runtime_speech_event(self) -> None:
+    def test_audio_wait_wakes_for_background_event(self) -> None:
         async def run() -> None:
             audio_queue: asyncio.Queue[tuple[bytes, int, int]] = asyncio.Queue()
             event = asyncio.Event()
             event.set()
 
-            self.assertIsNone(await _next_audio_or_runtime_wakeup(audio_queue, event))
+            self.assertIsNone(await _next_audio_or_background_wakeup(audio_queue, event))
             self.assertFalse(event.is_set())
 
             await audio_queue.put((b"pcm", 16000, 1))
-            self.assertEqual(await _next_audio_or_runtime_wakeup(audio_queue, event), (b"pcm", 16000, 1))
+            self.assertEqual(await _next_audio_or_background_wakeup(audio_queue, event), (b"pcm", 16000, 1))
 
         asyncio.run(run())
 

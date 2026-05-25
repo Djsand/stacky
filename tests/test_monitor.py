@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import unittest
 
 from stacky.config import MonitorConfig
@@ -139,6 +140,24 @@ class MonitorTest(unittest.TestCase):
         observations = monitor.observe_once()
 
         self.assertNotIn("long_silence", {observation.kind for observation in observations})
+
+    def test_run_notifies_when_observation_is_enqueued(self) -> None:
+        async def run() -> None:
+            queue: asyncio.Queue[MonitorObservation] = asyncio.Queue(maxsize=4)
+            event = asyncio.Event()
+            monitor = GlobalFriendMonitor(MonitorConfig(interval_seconds=2), FakeProbe(), clock=FakeClock())
+            task = asyncio.create_task(monitor.run(queue, on_observation=event.set))
+            try:
+                await asyncio.wait_for(event.wait(), timeout=1.0)
+                self.assertFalse(queue.empty())
+            finally:
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+
+        asyncio.run(run())
 
 
 if __name__ == "__main__":

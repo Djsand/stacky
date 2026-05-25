@@ -1945,7 +1945,7 @@ async def _handsfree(
     sandcode_job_task: asyncio.Task[None] | None = None
     sandcode_job_session_id = ""
     pending_runtime_speech: deque[str] = deque(maxlen=4)
-    runtime_speech_event = asyncio.Event()
+    background_wakeup_event = asyncio.Event()
     if vision_state is not None:
         print(f"Vision mode ready ({vision_state.detector_status}).", flush=True)
         vision_processor_task = asyncio.create_task(
@@ -1971,7 +1971,9 @@ async def _handsfree(
         )
     if friend_monitor is not None and monitor_queue is not None:
         print("Global friend monitor ready (read-only sparse sanseinput).", flush=True)
-        monitor_task = asyncio.create_task(friend_monitor.run(monitor_queue))
+        monitor_task = asyncio.create_task(
+            friend_monitor.run(monitor_queue, on_observation=background_wakeup_event.set)
+        )
 
     def record_local_turn(user_text: str, assistant_text: str) -> None:
         if brain is None:
@@ -2117,7 +2119,7 @@ async def _handsfree(
         if not accepting_audio or body_state_name != "listening":
             if defer_if_busy:
                 if _queue_runtime_speech_update(pending_runtime_speech, spoken):
-                    runtime_speech_event.set()
+                    background_wakeup_event.set()
             return False
         accepting_audio = False
         _drain_queue(audio_queue)
@@ -2196,7 +2198,7 @@ async def _handsfree(
             if pending_runtime_speech and accepting_audio and body_state_name == "listening":
                 pending_spoken = _pop_runtime_speech_update(pending_runtime_speech)
                 if not pending_runtime_speech:
-                    runtime_speech_event.clear()
+                    background_wakeup_event.clear()
                 if pending_spoken:
                     await speak_runtime_update(
                         pending_spoken,
@@ -2262,7 +2264,7 @@ async def _handsfree(
                     set_body_state("listening")
                     accepting_audio = True
                 continue
-            audio_packet = await _next_audio_or_runtime_wakeup(audio_queue, runtime_speech_event)
+            audio_packet = await _next_audio_or_background_wakeup(audio_queue, background_wakeup_event)
             if audio_packet is None:
                 continue
             pcm, sample_rate, channels = audio_packet
@@ -2890,18 +2892,18 @@ def _pop_monitor_observation(
         return None
 
 
-async def _next_audio_or_runtime_wakeup(
+async def _next_audio_or_background_wakeup(
     audio_queue: asyncio.Queue[tuple[bytes, int, int]],
-    runtime_speech_event: asyncio.Event,
+    background_wakeup_event: asyncio.Event,
 ) -> tuple[bytes, int, int] | None:
-    if runtime_speech_event.is_set():
-        runtime_speech_event.clear()
+    if background_wakeup_event.is_set():
+        background_wakeup_event.clear()
         return None
     audio_task = asyncio.create_task(audio_queue.get())
-    wake_task = asyncio.create_task(runtime_speech_event.wait())
+    wake_task = asyncio.create_task(background_wakeup_event.wait())
     done, _ = await asyncio.wait({audio_task, wake_task}, return_when=asyncio.FIRST_COMPLETED)
     if wake_task in done and audio_task not in done:
-        runtime_speech_event.clear()
+        background_wakeup_event.clear()
         audio_task.cancel()
         try:
             await audio_task
@@ -2909,7 +2911,7 @@ async def _next_audio_or_runtime_wakeup(
             pass
         return None
     if wake_task in done:
-        runtime_speech_event.clear()
+        background_wakeup_event.clear()
     else:
         wake_task.cancel()
         try:

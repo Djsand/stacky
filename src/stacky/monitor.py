@@ -125,7 +125,12 @@ class GlobalFriendMonitor:
     def mark_stacky_speech(self, at: float | None = None) -> None:
         self._last_stacky_speech_at = at if at is not None else self._clock()
 
-    async def run(self, queue: asyncio.Queue[MonitorObservation]) -> None:
+    async def run(
+        self,
+        queue: asyncio.Queue[MonitorObservation],
+        *,
+        on_observation: Callable[[], None] | None = None,
+    ) -> None:
         if not self.config.enabled:
             return
         interval = max(2.0, self.config.interval_seconds)
@@ -133,6 +138,8 @@ class GlobalFriendMonitor:
             observations = await asyncio.to_thread(self.observe_once)
             for observation in observations:
                 _put_latest(queue, observation)
+                if on_observation is not None:
+                    on_observation()
             await asyncio.sleep(interval)
 
     def observe_once(self) -> tuple[MonitorObservation, ...]:
