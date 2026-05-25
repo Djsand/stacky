@@ -314,6 +314,63 @@ class BrainMemoryContextTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(plan.say, "")
         self.assertEqual(plan.actions, ())
 
+    async def test_brain_tool_plan_falls_back_for_contextual_continue(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = MemoryStore(Path(tmp) / "memory.sqlite")
+            brain = StackyBrain(  # type: ignore[arg-type]
+                StackySoul(created_for="Nicolai"),
+                memory,
+                FixedFakeLLM('{"say":"","actions":[]}'),
+            )
+
+            plan = await brain.plan_tools(
+                "fortsæt",
+                recent_context=(
+                    "Nicolai: hvorfor giver du ikke bare hjernen agent tools. "
+                    "Stacky: vi bygger en runtime tool-broker til Sandcode-agenten."
+                ),
+            )
+
+        self.assertEqual(plan.say, "Jeg sender agenten ind i det.")
+        self.assertEqual(len(plan.actions), 1)
+        self.assertEqual(plan.actions[0].tool, "sandcode")
+        self.assertEqual(plan.actions[0].mode, "work")
+        self.assertIn("runtime tool-broker", plan.actions[0].task)
+
+    async def test_brain_tool_plan_fallback_ignores_vague_continue_without_project_context(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = MemoryStore(Path(tmp) / "memory.sqlite")
+            brain = StackyBrain(  # type: ignore[arg-type]
+                StackySoul(created_for="Nicolai"),
+                memory,
+                FixedFakeLLM('{"say":"","actions":[]}'),
+            )
+
+            plan = await brain.plan_tools(
+                "gør det",
+                recent_context="Nicolai: det er en mærkelig dag. Stacky: ja, lidt tør sort humor passer.",
+            )
+
+        self.assertEqual(plan.say, "")
+        self.assertEqual(plan.actions, ())
+
+    async def test_brain_tool_plan_fallback_ignores_vague_agent_talk(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = MemoryStore(Path(tmp) / "memory.sqlite")
+            brain = StackyBrain(  # type: ignore[arg-type]
+                StackySoul(created_for="Nicolai"),
+                memory,
+                FixedFakeLLM('{"say":"","actions":[]}'),
+            )
+
+            plan = await brain.plan_tools(
+                "fortsæt",
+                recent_context="Nicolai: agent skills halter lidt. Stacky: ja, det føles skævt.",
+            )
+
+        self.assertEqual(plan.say, "")
+        self.assertEqual(plan.actions, ())
+
     async def test_no_computer_context_blocks_terminal_claims(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             memory = MemoryStore(Path(tmp) / "memory.sqlite")

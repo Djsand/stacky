@@ -267,8 +267,11 @@ class StackyBrain:
             )
         except Exception as exc:
             print(f"[brain-tools] tool planning failed: {exc}", flush=True)
-            return BrainToolPlan()
-        return _parse_brain_tool_plan(raw)
+            return _fallback_brain_tool_plan(clean, recent_context=recent, runtime_context=runtime_context)
+        plan = _parse_brain_tool_plan(raw)
+        if plan.actions:
+            return plan
+        return _fallback_brain_tool_plan(clean, recent_context=recent, runtime_context=runtime_context)
 
     def record_observed_turn(
         self,
@@ -691,6 +694,139 @@ def _parse_brain_tool_plan(raw: str) -> BrainToolPlan:
     if not actions:
         say = ""
     return BrainToolPlan(say=say, actions=tuple(actions))
+
+
+def _fallback_brain_tool_plan(
+    user_text: str,
+    *,
+    recent_context: str = "",
+    runtime_context: str = "",
+) -> BrainToolPlan:
+    folded = _fold_tool_text(user_text)
+    if not folded:
+        return BrainToolPlan()
+    if _runtime_agent_is_busy(runtime_context):
+        return BrainToolPlan()
+    if not _looks_like_implicit_project_action(folded):
+        return BrainToolPlan()
+    if not _recent_context_supports_sandcode(recent_context):
+        return BrainToolPlan()
+    mode = "read_only" if _looks_like_read_only_tool_request(folded) else "work"
+    task = _implicit_sandcode_task(user_text, recent_context=recent_context)
+    return BrainToolPlan(
+        say="Jeg sender agenten ind i det.",
+        actions=(BrainToolAction(tool="sandcode", task=task, mode=mode, chat_only=False),),
+    )
+
+
+def _fold_tool_text(text: str) -> str:
+    folded = text.lower()
+    replacements = {
+        "æ": "ae",
+        "ø": "o",
+        "å": "a",
+        "ä": "ae",
+        "ö": "o",
+        "ü": "u",
+        "é": "e",
+        "è": "e",
+    }
+    for source, target in replacements.items():
+        folded = folded.replace(source, target)
+    folded = re.sub(r"[^a-z0-9 ]+", " ", folded)
+    return re.sub(r"\s+", " ", folded).strip()
+
+
+def _looks_like_implicit_project_action(folded: str) -> bool:
+    if len(folded.split()) > 8:
+        return False
+    if folded in {
+        "gor det",
+        "goer det",
+        "lav det",
+        "byg det",
+        "ret det",
+        "fiks det",
+        "implementer det",
+        "fortsaet",
+        "fortsaet med det",
+        "fortsaet videre",
+        "proev det",
+        "prov det",
+        "saet igang",
+        "saet den igang",
+        "saet det igang",
+        "start den",
+        "start det",
+        "send den",
+        "send den ind",
+        "koer den",
+        "kor den",
+    }:
+        return True
+    return bool(
+        re.fullmatch(
+            r"(?:gor|goer|lav|byg|ret|fiks|implementer|fortsaet|proev|prov|start|saet|send|koer|kor)"
+            r"(?:\s+(?:det|den|videre|igang|i gang|nu|hele))?",
+            folded,
+        )
+    )
+
+
+def _looks_like_read_only_tool_request(folded: str) -> bool:
+    return any(token in folded for token in ("undersoeg", "tjek", "scan", "status", "se om", "virker"))
+
+
+def _recent_context_supports_sandcode(recent_context: str) -> bool:
+    folded = _fold_tool_text(recent_context)
+    if not folded:
+        return False
+    project_terms = (
+        "sandcode",
+        "kode",
+        "repo",
+        "projekt",
+        "fil",
+        "filer",
+        "test",
+        "pytest",
+        "build",
+        "runtime",
+        "tool broker",
+        "cli",
+        "firmware",
+        "stackchan",
+    )
+    if any(token in folded for token in project_terms):
+        return True
+    return "agent" in folded and any(
+        token in folded
+        for token in (
+            "tool",
+            "runtime",
+            "kode",
+            "projekt",
+            "repo",
+            "fil",
+            "test",
+            "build",
+            "implementer",
+            "ret",
+        )
+    )
+
+
+def _runtime_agent_is_busy(runtime_context: str) -> bool:
+    folded = _fold_tool_text(runtime_context)
+    return "agent status starting" in folded or "agent status running" in folded
+
+
+def _implicit_sandcode_task(user_text: str, *, recent_context: str) -> str:
+    recent = _one_line(recent_context)
+    if len(recent) > 260:
+        recent = recent[-260:].strip()
+    user = _one_line(user_text)
+    return f"Fortsaet den seneste projektopgave ud fra konteksten. Nicolais korte kommando: {user}. Kontekst: {recent}"
 
 
 def _one_line(value: str) -> str:
