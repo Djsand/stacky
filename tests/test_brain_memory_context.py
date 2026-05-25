@@ -323,6 +323,30 @@ class BrainMemoryContextTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(plan.actions[0].task, "implementer runtime tool-broker")
         self.assertEqual(plan.actions[0].mode, "work")
 
+    async def test_brain_tool_plan_prompt_includes_memory_map_context(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            memory = MemoryStore(root / "memory.sqlite")
+            memory_map = MemoryMapStore(root / "data" / "memory_map.json")
+            llm = FakeLLM()
+            brain = StackyBrain(
+                StackySoul(created_for="Nicolai"),
+                memory,
+                llm,  # type: ignore[arg-type]
+                memory_map=memory_map,
+            )
+
+            await brain.plan_tools(
+                "byg det",
+                recent_context="Nicolai: vi arbejder paa Stackys runtime tool broker.",
+            )
+
+        system = llm.messages[0][0].content
+        self.assertIn("Stackys langtidshukommelse og selvmodel", system)
+        self.assertIn("Stackys memory-map", system)
+        self.assertIn("Sandcode-agent", system)
+        self.assertIn("uden triggerord", system)
+
     async def test_brain_tool_plan_drops_unknown_tools_and_say(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             memory = MemoryStore(Path(tmp) / "memory.sqlite")

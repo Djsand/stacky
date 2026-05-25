@@ -237,6 +237,7 @@ class StackyBrain:
         if not clean:
             return BrainToolPlan()
         recent = recent_context.strip() or self._recent_context_text()
+        long_term_context = self._tool_broker_context(clean)
         system = "\n".join(
             [
                 "Du er Stackys tool-broker inde i hjernen, ikke en separat kommando-parser.",
@@ -253,6 +254,9 @@ class StackyBrain:
                 "",
                 "Seneste live-kontekst:",
                 recent[:1200] or "- Ingen.",
+                "",
+                "Stackys langtidshukommelse og selvmodel:",
+                long_term_context[:1600] or "- Ingen.",
                 "",
                 runtime_context[:1200] or "Runtime-sandhedslag: none",
                 "",
@@ -338,6 +342,16 @@ class StackyBrain:
         if remember_recent and user_text and assistant_text:
             self._remember_recent_turn(user_text, assistant_text)
         return tuple(remembered)
+
+    def _tool_broker_context(self, user_text: str) -> str:
+        parts: list[str] = []
+        if self.self_model is not None:
+            parts.append(self.self_model.context_for_prompt(user_text=user_text))
+        if self.evolution is not None:
+            parts.append(self.evolution.context_for_prompt())
+        if self.memory_map is not None:
+            parts.append(self.memory_map.context_for_prompt(user_text=user_text, limit=5))
+        return "\n\n".join(part.strip() for part in parts if part.strip())
 
     def observe_monitor_observation(self, observation: object) -> tuple[str, ...]:
         if self.self_model is None:
