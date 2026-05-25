@@ -2346,6 +2346,25 @@ async def _handsfree(
                 set_body_state("listening")
                 accepting_audio = True
                 continue
+            if _wants_runtime_status_reply(text):
+                reply_started = time.perf_counter()
+                spoken_reply = runtime_state.status_reply(text)
+                record_local_turn(text, spoken_reply)
+                set_body_state("speaking")
+                speak_started = time.perf_counter()
+                await speak_reply(spoken_reply)
+                speak_seconds = time.perf_counter() - speak_started
+                print(
+                    f"[timing] stt={stt_seconds:.2f}s runtime_status={time.perf_counter() - reply_started:.2f}s "
+                    f"tts_send={speak_seconds:.2f}s total={time.perf_counter() - pipeline_started:.2f}s",
+                    flush=True,
+                )
+                _drain_queue(audio_queue)
+                detector.reset()
+                await asyncio.sleep(0.25)
+                set_body_state("listening")
+                accepting_audio = True
+                continue
             if _parse_battery_status_command(text):
                 reply_started = time.perf_counter()
                 ok = controller.request_status()
@@ -3346,6 +3365,67 @@ def _parse_local_realtime_reply(text: str) -> str | None:
     if key in {"vent", "ventlige", "stop", "stoplige", "pause", "holdpause"}:
         return "Jeg venter."
     return None
+
+
+def _wants_runtime_status_reply(text: str) -> bool:
+    key = _motion_text_key(text)
+    if not key:
+        return False
+    if any(token in key for token in ("batteri", "strom", "volumen", "volume", "gitstatus", "presencestatus")):
+        return False
+    if key in {"status", "hvadstatus"}:
+        return False
+
+    agent_hint = any(
+        token in key
+        for token in (
+            "agent",
+            "sandcode",
+            "sandkode",
+            "sancode",
+            "sancodi",
+            "runtime",
+            "computerhandling",
+        )
+    )
+    pronoun_status_hint = any(
+        token in key
+        for token in (
+            "koererden",
+            "korerden",
+            "virkerden",
+            "haengerden",
+            "hangerden",
+            "venterden",
+            "hvadventerden",
+            "hvadvardetdenventer",
+            "hvaderdetdenventer",
+            "erdengang",
+            "erdetigang",
+            "gikdenigang",
+            "startededen",
+            "fikdenstartet",
+        )
+    )
+    status_hint = any(
+        token in key
+        for token in (
+            "status",
+            "koerer",
+            "korer",
+            "virker",
+            "haenger",
+            "hanger",
+            "venter",
+            "livstegn",
+            "faerdig",
+            "fejlede",
+            "igang",
+            "startet",
+            "hvadlaver",
+        )
+    )
+    return status_hint and (agent_hint or pronoun_status_hint)
 
 
 def _parse_presence_mode_command(text: str) -> PresenceModeCommand | None:

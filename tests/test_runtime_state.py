@@ -61,6 +61,48 @@ class RuntimeStateTest(unittest.TestCase):
         self.assertIn("last_error: timeout", context)
         self.assertIn("Sandcode-agent fejlede: scan projektet", context)
 
+    def test_status_reply_reports_running_agent_without_guessing(self) -> None:
+        clock = FakeClock()
+        state = RuntimeState(clock=clock)
+        state.mark_sandcode_running("scan projektet", note="Agenten arbejder med Read.")
+        clock.now += 12
+
+        reply = state.status_reply("kører den")
+
+        self.assertIn("Agenten kører", reply)
+        self.assertIn("Sidste livstegn", reply)
+        self.assertIn("Agenten arbejder med Read", reply)
+
+    def test_status_reply_flags_stale_agent_as_possible_hang(self) -> None:
+        clock = FakeClock()
+        state = RuntimeState(clock=clock)
+        state.mark_sandcode_running("scan projektet", note="Agenten arbejder med Read.")
+        clock.now += 70
+
+        reply = state.status_reply("hænger den stadig")
+
+        self.assertIn("ikke fået nyt livstegn", reply)
+        self.assertIn("Det kan være et hæng", reply)
+
+    def test_status_reply_explains_wait_reason(self) -> None:
+        clock = FakeClock()
+        state = RuntimeState(clock=clock)
+        state.mark_sandcode_starting("scan projektet")
+
+        reply = state.status_reply("hvad er det den venter på")
+
+        self.assertIn("venter på at Sandcode-sessionen kommer i gang", reply)
+
+    def test_status_reply_reports_done_agent_session(self) -> None:
+        clock = FakeClock()
+        state = RuntimeState(clock=clock)
+        state.mark_sandcode_done("scan projektet", session_id="abc123")
+
+        reply = state.status_reply("kører den")
+
+        self.assertIn("Agenten er færdig", reply)
+        self.assertIn("abc123", reply)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -157,6 +157,107 @@ class RuntimeState:
         )
         return "\n".join(lines)
 
+    def status_reply(self, question: str = "", *, now: float | None = None, stale_after_seconds: float = 55.0) -> str:
+        current = self._clock() if now is None else now
+        action = self._last_action
+        if action is None:
+            return "Der kører ikke nogen runtime-handling lige nu."
+
+        age_seconds = max(0, current - action.verified_at)
+        age = _format_age(age_seconds)
+        wants_wait_reason = _looks_like_wait_question(question)
+        wants_hang_check = _looks_like_hang_question(question)
+
+        if action.kind == "sandcode_agent":
+            return _sandcode_status_reply(
+                action,
+                age=age,
+                stale=age_seconds >= stale_after_seconds,
+                wants_wait_reason=wants_wait_reason,
+                wants_hang_check=wants_hang_check,
+            )
+        if action.kind == "web_search":
+            if action.status == "failed":
+                return f"Websearch fejlede sidst, {age}: {action.error or action.summary}"
+            return f"Sidste websearch er kørt, {age}: {action.summary}"
+        if action.kind.startswith("computer:"):
+            if action.status == "failed":
+                return f"Sidste computerhandling fejlede, {age}: {action.error or action.summary}"
+            return f"Sidste computerhandling er færdig, {age}: {action.summary}"
+        if action.status == "failed":
+            return f"Sidste runtime-handling fejlede, {age}: {action.error or action.summary}"
+        return f"Sidste runtime-handling er {action.status}, {age}: {action.summary}"
+
 
 def _one_line(value: str) -> str:
     return " ".join(str(value).split()).strip()
+
+
+def _sandcode_status_reply(
+    action: RuntimeAction,
+    *,
+    age: str,
+    stale: bool,
+    wants_wait_reason: bool,
+    wants_hang_check: bool,
+) -> str:
+    summary = action.summary
+    if action.status == "starting":
+        if wants_wait_reason:
+            return f"Den venter på at Sandcode-sessionen kommer i gang. Sidste sikre status var {age}: {summary}"
+        return f"Agenten er ved at starte. Sidste sikre status var {age}: {summary}"
+    if action.status == "running":
+        if stale:
+            return (
+                f"Jeg har ikke fået nyt livstegn fra agenten i {age}. "
+                f"Det kan være et hæng, eller Sandcode der tygger langsomt: {summary}"
+            )
+        if wants_wait_reason:
+            return f"Den venter på næste livstegn fra Sandcode. Sidste sikre status var {age}: {summary}"
+        if wants_hang_check:
+            return f"Den ser ikke hængt ud ud fra runtime. Sidste livstegn var {age}: {summary}"
+        return f"Agenten kører. Sidste livstegn var {age}: {summary}"
+    if action.status == "done":
+        session = f" Sessionen hedder {action.session_id}." if action.session_id else ""
+        return f"Agenten er færdig.{session} Sidste sikre status var {age}: {summary}"
+    if action.status == "failed":
+        error = action.error or "ukendt fejl"
+        return f"Agenten fejlede, {age}: {error}"
+    return f"Agentstatus er {action.status}, {age}: {summary}"
+
+
+def _format_age(seconds: float) -> str:
+    whole = max(0, int(seconds))
+    if whole < 2:
+        return "lige nu"
+    if whole < 60:
+        return f"for {whole} sek siden"
+    minutes = whole // 60
+    if minutes == 1:
+        return "for 1 min siden"
+    return f"for {minutes} min siden"
+
+
+def _looks_like_wait_question(text: str) -> bool:
+    key = _fold_for_status(text)
+    return "venter" in key or "venterden" in key or "hvadvent" in key
+
+
+def _looks_like_hang_question(text: str) -> bool:
+    key = _fold_for_status(text)
+    return "haenger" in key or "hanger" in key or "hang" in key
+
+
+def _fold_for_status(text: str) -> str:
+    lowered = text.lower()
+    replacements = {
+        "æ": "ae",
+        "ø": "o",
+        "å": "a",
+        "ä": "ae",
+        "ö": "o",
+        "ü": "u",
+    }
+    for source, target in replacements.items():
+        lowered = lowered.replace(source, target)
+    return "".join(ch for ch in lowered if ch.isalnum())

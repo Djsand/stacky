@@ -33,6 +33,7 @@ from stacky.cli import (
     _voice_memory_policy,
     _wants_capability_report,
     _wants_memory_map_recall,
+    _wants_runtime_status_reply,
     _wants_sense_diary_recall,
     _wants_stacky_state_report,
     _wants_visual_context,
@@ -837,6 +838,15 @@ class HandsfreeHelpersTest(unittest.TestCase):
         self.assertEqual(_parse_local_realtime_reply("vent lige"), "Jeg venter.")
         self.assertEqual(_parse_local_realtime_reply("stop lige"), "Jeg venter.")
         self.assertIsNone(_parse_local_realtime_reply("hvad laver du"))
+
+    def test_runtime_status_questions_bypass_brain(self) -> None:
+        self.assertTrue(_wants_runtime_status_reply("kører den som den skal"))
+        self.assertTrue(_wants_runtime_status_reply("hænger den stadig"))
+        self.assertTrue(_wants_runtime_status_reply("hvad er det den venter på"))
+        self.assertTrue(_wants_runtime_status_reply("agent status"))
+        self.assertFalse(_wants_runtime_status_reply("hvad laver du"))
+        self.assertFalse(_wants_runtime_status_reply("git status"))
+        self.assertFalse(_wants_runtime_status_reply("batteri status"))
 
     def test_parse_presence_mode_command(self) -> None:
         self.assertEqual((_parse_presence_mode_command("gå i ikke-forstyr") or None).mode, "ikke_forstyr")
