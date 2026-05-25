@@ -1942,6 +1942,7 @@ async def _handsfree(
     vision_capture_task = None
     body_presence_task = None
     monitor_task = None
+    sandcode_job_task: asyncio.Task[None] | None = None
     if vision_state is not None:
         print(f"Vision mode ready ({vision_state.detector_status}).", flush=True)
         vision_processor_task = asyncio.create_task(
@@ -2050,34 +2051,37 @@ async def _handsfree(
     await stt.preload()
     print(f"STT ready ({time.perf_counter() - started:.1f}s). Speak to StackChan now.", flush=True)
 
+    speech_lock = asyncio.Lock()
+
     async def speak_reply(spoken: str) -> None:
         nonlocal last_stacky_speech_at
         if output is None:
             return
-        speaking_animation_task = (
-            asyncio.create_task(
-                _speaking_body_loop(
-                    body_director,
-                    spoken,
-                    on_motion=guard_audio_after_body_motion,
+        async with speech_lock:
+            speaking_animation_task = (
+                asyncio.create_task(
+                    _speaking_body_loop(
+                        body_director,
+                        spoken,
+                        on_motion=guard_audio_after_body_motion,
+                    )
                 )
+                if body_director is not None
+                else None
             )
-            if body_director is not None
-            else None
-        )
-        try:
-            await output.speak(spoken)
-            await output.wait()
-        finally:
-            if speaking_animation_task is not None:
-                speaking_animation_task.cancel()
-                try:
-                    await speaking_animation_task
-                except asyncio.CancelledError:
-                    pass
-        last_stacky_speech_at = time.monotonic()
-        if friend_monitor is not None:
-            friend_monitor.mark_stacky_speech(last_stacky_speech_at)
+            try:
+                await output.speak(spoken)
+                await output.wait()
+            finally:
+                if speaking_animation_task is not None:
+                    speaking_animation_task.cancel()
+                    try:
+                        await speaking_animation_task
+                    except asyncio.CancelledError:
+                        pass
+            last_stacky_speech_at = time.monotonic()
+            if friend_monitor is not None:
+                friend_monitor.mark_stacky_speech(last_stacky_speech_at)
 
     detector = EnergyTurnDetector(
         threshold=vad_threshold,
@@ -2099,6 +2103,75 @@ async def _handsfree(
                 on_motion=guard_audio_after_body_motion,
             )
         )
+
+    async def speak_runtime_update(spoken: str, *, final_state: str = "listening") -> None:
+        nonlocal accepting_audio
+        if not accepting_audio or body_state_name != "listening":
+            return
+        accepting_audio = False
+        _drain_queue(audio_queue)
+        detector.reset()
+        set_body_state("speaking")
+        await speak_reply(spoken)
+        _drain_queue(audio_queue)
+        detector.reset()
+        await asyncio.sleep(0.15)
+        set_body_state(final_state)
+        accepting_audio = True
+
+    async def run_sandcode_job(
+        action: SandcodeAction,
+        *,
+        cwd: Path,
+        runtime_prompt: str,
+    ) -> None:
+        nonlocal sandcode_job_task
+        spoken_updates = 0
+
+        async def speak_sandcode_update(update: str) -> None:
+            nonlocal spoken_updates
+            print(f"[Sandcode] {update}", flush=True)
+            runtime_state.mark_sandcode_running(action.prompt, note=update)
+            if not _should_speak_sandcode_update(update, spoken_updates=spoken_updates):
+                return
+            spoken_updates += 1
+            await speak_runtime_update(update, final_state="listening")
+
+        try:
+            session = await _run_sandcode_with_updates(
+                sandcode_client,
+                cwd,
+                runtime_prompt,
+                on_update=speak_sandcode_update,
+                chat_only=action.chat_only,
+            )
+            runtime_state.mark_sandcode_done(action.prompt, session_id=session.session_id)
+            if brain is not None:
+                brain.remember_memory_map(
+                    f"Seneste Sandcode-agentkoersel: {action.prompt}. Session: {session.session_id}.",
+                    source="sandcode-agent",
+                )
+            await speak_runtime_update(
+                f"Agenten er faerdig. Sessionen hedder {session.session_id}.",
+                final_state="listening",
+            )
+        except SandcodeError as exc:
+            runtime_state.mark_sandcode_failed(action.prompt, str(exc))
+            error_reply = f"Agenten kunne ikke starte: {exc}"
+            print(f"[Sandcode] {error_reply}", flush=True)
+            if brain is not None:
+                brain.remember_memory_map(
+                    f"Sandcode-agenten kunne ikke starte for opgaven: {action.prompt}. Fejl: {exc}.",
+                    source="sandcode-agent",
+                )
+            await speak_runtime_update(error_reply, final_state="listening")
+        except asyncio.CancelledError:
+            runtime_state.mark_sandcode_failed(action.prompt, "lokal agent-job blev stoppet")
+            raise
+        finally:
+            if sandcode_job_task is asyncio.current_task():
+                sandcode_job_task = None
+
     try:
         while True:
             observation = _pop_monitor_observation(monitor_queue)
@@ -2581,6 +2654,24 @@ async def _handsfree(
                     set_body_state("listening")
                     accepting_audio = True
                     continue
+                if sandcode_job_task is not None and not sandcode_job_task.done():
+                    spoken_reply = f"Agenten koerer allerede. {runtime_state.status_reply(text)}"
+                    record_local_turn(text, spoken_reply)
+                    set_body_state("speaking")
+                    speak_started = time.perf_counter()
+                    await speak_reply(spoken_reply)
+                    speak_seconds = time.perf_counter() - speak_started
+                    print(
+                        f"[timing] stt={stt_seconds:.2f}s sandcode_busy={time.perf_counter() - reply_started:.2f}s "
+                        f"tts_send={speak_seconds:.2f}s total={time.perf_counter() - pipeline_started:.2f}s",
+                        flush=True,
+                    )
+                    _drain_queue(audio_queue)
+                    detector.reset()
+                    await asyncio.sleep(0.25)
+                    set_body_state("listening")
+                    accepting_audio = True
+                    continue
                 runtime_state.mark_sandcode_starting(sandcode_action.prompt)
                 sandcode_runtime_prompt = _sandcode_prompt_for_action(sandcode_action)
                 lead_reply = sandcode_lead_reply or _sandcode_lead_reply(
@@ -2589,58 +2680,24 @@ async def _handsfree(
                 )
                 record_local_turn(text, f"{lead_reply} Opgave: {sandcode_action.prompt}")
                 set_body_state("speaking")
+                speak_started = time.perf_counter()
                 await speak_reply(lead_reply)
-                set_body_state("thinking")
-                await asyncio.sleep(0.08)
-
-                spoken_updates = 0
-
-                async def speak_sandcode_update(update: str) -> None:
-                    nonlocal spoken_updates
-                    print(f"[Sandcode] {update}", flush=True)
-                    runtime_state.mark_sandcode_running(sandcode_action.prompt, note=update)
-                    if not _should_speak_sandcode_update(update, spoken_updates=spoken_updates):
-                        return
-                    spoken_updates += 1
-                    set_body_state("speaking")
-                    await speak_reply(update)
-                    set_body_state("thinking")
-
-                try:
-                    session = await _run_sandcode_with_updates(
-                        sandcode_client,
-                        cwd,
-                        sandcode_runtime_prompt,
-                        on_update=speak_sandcode_update,
-                        chat_only=sandcode_action.chat_only,
+                speak_seconds = time.perf_counter() - speak_started
+                sandcode_job_task = asyncio.create_task(
+                    run_sandcode_job(
+                        sandcode_action,
+                        cwd=cwd,
+                        runtime_prompt=sandcode_runtime_prompt,
                     )
-                    runtime_state.mark_sandcode_done(sandcode_action.prompt, session_id=session.session_id)
-                    brain.remember_memory_map(
-                        f"Seneste Sandcode-agentkørsel: {sandcode_action.prompt}. Session: {session.session_id}.",
-                        source="sandcode-agent",
-                    )
-                    if spoken_updates == 0:
-                        set_body_state("speaking")
-                        await speak_reply(f"Agenten er færdig. Sessionen hedder {session.session_id}.")
-                except SandcodeError as exc:
-                    runtime_state.mark_sandcode_failed(sandcode_action.prompt, str(exc))
-                    error_reply = f"Agenten kunne ikke starte: {exc}"
-                    print(f"[Sandcode] {error_reply}", flush=True)
-                    brain.remember_memory_map(
-                        f"Sandcode-agenten kunne ikke starte for opgaven: {sandcode_action.prompt}. Fejl: {exc}.",
-                        source="sandcode-agent",
-                    )
-                    set_body_state("speaking")
-                    await speak_reply(error_reply)
-                set_body_state("happy")
+                )
+
                 print(
-                    f"[timing] stt={stt_seconds:.2f}s sandcode={time.perf_counter() - reply_started:.2f}s "
-                    f"total={time.perf_counter() - pipeline_started:.2f}s",
+                    f"[timing] stt={stt_seconds:.2f}s sandcode_start={time.perf_counter() - reply_started:.2f}s "
+                    f"tts_send={speak_seconds:.2f}s total={time.perf_counter() - pipeline_started:.2f}s",
                     flush=True,
                 )
                 _drain_queue(audio_queue)
                 detector.reset()
-                await asyncio.sleep(0.25)
                 set_body_state("listening")
                 accepting_audio = True
                 continue
@@ -2754,7 +2811,7 @@ async def _handsfree(
     except (KeyboardInterrupt, asyncio.CancelledError):
         return 0
     finally:
-        for task in (vision_capture_task, vision_processor_task, body_presence_task, monitor_task):
+        for task in (vision_capture_task, vision_processor_task, body_presence_task, monitor_task, sandcode_job_task):
             if task is not None:
                 task.cancel()
                 try:
@@ -4201,6 +4258,12 @@ async def _run_sandcode_with_updates(
             await heartbeat_task
         except asyncio.CancelledError:
             pass
+        if not task.done():
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
 
 
 def _body_server(config_path: str, *, duration: float = 0.0) -> int:
