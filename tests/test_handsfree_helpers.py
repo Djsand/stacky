@@ -21,6 +21,7 @@ from stacky.cli import (
     _parse_motion_command,
     _parse_presence_mode_command,
     _parse_stt_bench_spec,
+    _next_audio_or_runtime_wakeup,
     _pop_runtime_speech_update,
     _queue_runtime_speech_update,
     _parse_volume_command,
@@ -897,8 +898,8 @@ class HandsfreeHelpersTest(unittest.TestCase):
     def test_runtime_speech_queue_dedupes_and_keeps_recent_updates(self) -> None:
         queue: deque[str] = deque(maxlen=3)
 
-        _queue_runtime_speech_update(queue, " Agenten arbejder. ")
-        _queue_runtime_speech_update(queue, "Agenten arbejder.")
+        self.assertTrue(_queue_runtime_speech_update(queue, " Agenten arbejder. "))
+        self.assertFalse(_queue_runtime_speech_update(queue, "Agenten arbejder."))
         _queue_runtime_speech_update(queue, "Agenten tester.")
         _queue_runtime_speech_update(queue, "Agenten skriver rapport.")
         _queue_runtime_speech_update(queue, "Agenten er faerdig.")
@@ -907,6 +908,20 @@ class HandsfreeHelpersTest(unittest.TestCase):
         self.assertEqual(_pop_runtime_speech_update(queue), "Agenten skriver rapport.")
         self.assertEqual(_pop_runtime_speech_update(queue), "Agenten er faerdig.")
         self.assertIsNone(_pop_runtime_speech_update(queue))
+
+    def test_audio_wait_wakes_for_runtime_speech_event(self) -> None:
+        async def run() -> None:
+            audio_queue: asyncio.Queue[tuple[bytes, int, int]] = asyncio.Queue()
+            event = asyncio.Event()
+            event.set()
+
+            self.assertIsNone(await _next_audio_or_runtime_wakeup(audio_queue, event))
+            self.assertFalse(event.is_set())
+
+            await audio_queue.put((b"pcm", 16000, 1))
+            self.assertEqual(await _next_audio_or_runtime_wakeup(audio_queue, event), (b"pcm", 16000, 1))
+
+        asyncio.run(run())
 
     def test_sandcode_action_from_brain_tool_plan(self) -> None:
         plan = BrainToolPlan(

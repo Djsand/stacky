@@ -1945,6 +1945,7 @@ async def _handsfree(
     sandcode_job_task: asyncio.Task[None] | None = None
     sandcode_job_session_id = ""
     pending_runtime_speech: deque[str] = deque(maxlen=4)
+    runtime_speech_event = asyncio.Event()
     if vision_state is not None:
         print(f"Vision mode ready ({vision_state.detector_status}).", flush=True)
         vision_processor_task = asyncio.create_task(
@@ -2115,7 +2116,8 @@ async def _handsfree(
         nonlocal accepting_audio
         if not accepting_audio or body_state_name != "listening":
             if defer_if_busy:
-                _queue_runtime_speech_update(pending_runtime_speech, spoken)
+                if _queue_runtime_speech_update(pending_runtime_speech, spoken):
+                    runtime_speech_event.set()
             return False
         accepting_audio = False
         _drain_queue(audio_queue)
@@ -2193,6 +2195,8 @@ async def _handsfree(
         while True:
             if pending_runtime_speech and accepting_audio and body_state_name == "listening":
                 pending_spoken = _pop_runtime_speech_update(pending_runtime_speech)
+                if not pending_runtime_speech:
+                    runtime_speech_event.clear()
                 if pending_spoken:
                     await speak_runtime_update(
                         pending_spoken,
@@ -2258,7 +2262,10 @@ async def _handsfree(
                     set_body_state("listening")
                     accepting_audio = True
                 continue
-            pcm, sample_rate, channels = await audio_queue.get()
+            audio_packet = await _next_audio_or_runtime_wakeup(audio_queue, runtime_speech_event)
+            if audio_packet is None:
+                continue
+            pcm, sample_rate, channels = audio_packet
             if time.monotonic() < motion_audio_guard_until:
                 detector.reset()
                 continue
@@ -2883,13 +2890,43 @@ def _pop_monitor_observation(
         return None
 
 
-def _queue_runtime_speech_update(queue: deque[str], spoken: str) -> None:
+async def _next_audio_or_runtime_wakeup(
+    audio_queue: asyncio.Queue[tuple[bytes, int, int]],
+    runtime_speech_event: asyncio.Event,
+) -> tuple[bytes, int, int] | None:
+    if runtime_speech_event.is_set():
+        runtime_speech_event.clear()
+        return None
+    audio_task = asyncio.create_task(audio_queue.get())
+    wake_task = asyncio.create_task(runtime_speech_event.wait())
+    done, _ = await asyncio.wait({audio_task, wake_task}, return_when=asyncio.FIRST_COMPLETED)
+    if wake_task in done and audio_task not in done:
+        runtime_speech_event.clear()
+        audio_task.cancel()
+        try:
+            await audio_task
+        except asyncio.CancelledError:
+            pass
+        return None
+    if wake_task in done:
+        runtime_speech_event.clear()
+    else:
+        wake_task.cancel()
+        try:
+            await wake_task
+        except asyncio.CancelledError:
+            pass
+    return audio_task.result()
+
+
+def _queue_runtime_speech_update(queue: deque[str], spoken: str) -> bool:
     clean = " ".join(spoken.split()).strip()
     if not clean:
-        return
+        return False
     if queue and queue[-1] == clean:
-        return
+        return False
     queue.append(clean)
+    return True
 
 
 def _pop_runtime_speech_update(queue: deque[str]) -> str | None:
