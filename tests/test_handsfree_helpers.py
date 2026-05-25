@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import unittest
+from collections import deque
 from contextlib import suppress
 
 from stacky.brain import BrainToolAction, BrainToolPlan
@@ -20,6 +21,8 @@ from stacky.cli import (
     _parse_motion_command,
     _parse_presence_mode_command,
     _parse_stt_bench_spec,
+    _pop_runtime_speech_update,
+    _queue_runtime_speech_update,
     _parse_volume_command,
     _resolve_capture_speech_styles,
     _resolve_stt_bench_specs,
@@ -888,6 +891,20 @@ class HandsfreeHelpersTest(unittest.TestCase):
         self.assertTrue(_should_speak_sandcode_update("Agenten arbejder stadig efter 30 sekunder.", spoken_updates=7))
         self.assertFalse(_should_speak_sandcode_update("Agenten arbejder med Read.", spoken_updates=5))
         self.assertTrue(_should_speak_sandcode_update("Agenten melder: færdig.", spoken_updates=99))
+
+    def test_runtime_speech_queue_dedupes_and_keeps_recent_updates(self) -> None:
+        queue: deque[str] = deque(maxlen=3)
+
+        _queue_runtime_speech_update(queue, " Agenten arbejder. ")
+        _queue_runtime_speech_update(queue, "Agenten arbejder.")
+        _queue_runtime_speech_update(queue, "Agenten tester.")
+        _queue_runtime_speech_update(queue, "Agenten skriver rapport.")
+        _queue_runtime_speech_update(queue, "Agenten er faerdig.")
+
+        self.assertEqual(_pop_runtime_speech_update(queue), "Agenten tester.")
+        self.assertEqual(_pop_runtime_speech_update(queue), "Agenten skriver rapport.")
+        self.assertEqual(_pop_runtime_speech_update(queue), "Agenten er faerdig.")
+        self.assertIsNone(_pop_runtime_speech_update(queue))
 
     def test_sandcode_action_from_brain_tool_plan(self) -> None:
         plan = BrainToolPlan(

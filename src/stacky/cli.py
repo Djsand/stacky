@@ -1943,6 +1943,7 @@ async def _handsfree(
     body_presence_task = None
     monitor_task = None
     sandcode_job_task: asyncio.Task[None] | None = None
+    pending_runtime_speech: deque[str] = deque(maxlen=4)
     if vision_state is not None:
         print(f"Vision mode ready ({vision_state.detector_status}).", flush=True)
         vision_processor_task = asyncio.create_task(
@@ -2104,10 +2105,17 @@ async def _handsfree(
             )
         )
 
-    async def speak_runtime_update(spoken: str, *, final_state: str = "listening") -> None:
+    async def speak_runtime_update(
+        spoken: str,
+        *,
+        final_state: str = "listening",
+        defer_if_busy: bool = True,
+    ) -> bool:
         nonlocal accepting_audio
         if not accepting_audio or body_state_name != "listening":
-            return
+            if defer_if_busy:
+                _queue_runtime_speech_update(pending_runtime_speech, spoken)
+            return False
         accepting_audio = False
         _drain_queue(audio_queue)
         detector.reset()
@@ -2118,6 +2126,7 @@ async def _handsfree(
         await asyncio.sleep(0.15)
         set_body_state(final_state)
         accepting_audio = True
+        return True
 
     async def run_sandcode_job(
         action: SandcodeAction,
@@ -2174,6 +2183,15 @@ async def _handsfree(
 
     try:
         while True:
+            if pending_runtime_speech and accepting_audio and body_state_name == "listening":
+                pending_spoken = _pop_runtime_speech_update(pending_runtime_speech)
+                if pending_spoken:
+                    await speak_runtime_update(
+                        pending_spoken,
+                        final_state="listening",
+                        defer_if_busy=False,
+                    )
+                    continue
             observation = _pop_monitor_observation(monitor_queue)
             if observation is not None:
                 recent_monitor_observations.append(observation)
@@ -2832,6 +2850,22 @@ def _pop_monitor_observation(
     try:
         return monitor_queue.get_nowait()
     except asyncio.QueueEmpty:
+        return None
+
+
+def _queue_runtime_speech_update(queue: deque[str], spoken: str) -> None:
+    clean = " ".join(spoken.split()).strip()
+    if not clean:
+        return
+    if queue and queue[-1] == clean:
+        return
+    queue.append(clean)
+
+
+def _pop_runtime_speech_update(queue: deque[str]) -> str | None:
+    try:
+        return queue.popleft()
+    except IndexError:
         return None
 
 
