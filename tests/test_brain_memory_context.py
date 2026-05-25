@@ -283,6 +283,20 @@ class BrainMemoryContextTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Jeg fik ikke kørt en computerhandling", reply.text)
         self.assertEqual(reply.spoken_text, reply.text)
 
+    async def test_unverified_sandcode_agent_claim_is_guarded(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = MemoryStore(Path(tmp) / "memory.sqlite")
+            brain = StackyBrain(  # type: ignore[arg-type]
+                StackySoul(created_for="Nicolai"),
+                memory,
+                FixedFakeLLM("Jeg har sat Sandcode-agenten i gang med at læse filstrukturen nu."),
+            )
+
+            reply = await brain.respond("nej jeg mener agenten")
+
+        self.assertIn("Jeg fik ikke startet Sandcode-agenten", reply.text)
+        self.assertIn("runtime-handling", reply.text)
+
     async def test_read_only_computer_context_does_not_allow_free_action_claim(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             memory = MemoryStore(Path(tmp) / "memory.sqlite")

@@ -53,7 +53,7 @@ from .sandcode import (
     SandcodeError,
     SandcodeMobileHostClient,
     SandcodeSession,
-    parse_sandcode_action,
+    classify_sandcode_action,
 )
 from .sessions import InfiniteSessionStore
 from .soul import load_soul, write_default_soul
@@ -2511,7 +2511,7 @@ async def _handsfree(
                 set_body_state("listening")
                 accepting_audio = True
                 continue
-            sandcode_action = parse_sandcode_action(text)
+            sandcode_action = await classify_sandcode_action(text, brain.lmstudio)
             if sandcode_action is not None:
                 reply_started = time.perf_counter()
                 set_body_state("thinking")

@@ -101,7 +101,7 @@ class BodyDirector:
         """Small animatronic-style speech beats while audio is actively playing."""
 
         now = now if now is not None else time.monotonic()
-        interval = 0.55 if self._presence_mode != "ikke_forstyr" else 0.90
+        interval = 1.15 if self._presence_mode != "ikke_forstyr" else 1.80
         if now - self._last_speaking_tick_at < interval:
             return True
         self._last_speaking_tick_at = now
@@ -109,18 +109,20 @@ class BodyDirector:
         ok = self._speaking_led(self._speaking_index)
         if now - self._last_motion_at < 0.32:
             return ok
-        if self._presence_mode == "ikke_forstyr" and self._speaking_index % 3 != 0:
+        if self._presence_mode == "ikke_forstyr" and self._speaking_index % 4 != 0:
+            return ok
+        if self._speaking_index % 4 != 0:
             return ok
         lowered = text.lower()
-        if "?" in text and self._speaking_index % 2 == 0:
+        if "?" in text:
             motion = MotionPlan("look_up", intensity=0.09, speed=145)
-        elif any(token in lowered for token in ("ikke", "fejl", "av", "hm", "nå", "naa")) and self._speaking_index % 3 == 0:
+        elif any(token in lowered for token in ("ikke", "fejl", "av", "hm", "nå", "naa")):
             motion = MotionPlan("shake", intensity=0.06, speed=130)
         else:
-            pattern = self._speaking_index % 4
+            pattern = self._speaking_index % 8
             if pattern == 0:
                 motion = MotionPlan("nod", intensity=0.08, speed=135)
-            elif pattern == 2:
+            elif pattern == 4:
                 motion = MotionPlan("look_up", intensity=0.07, speed=125)
             else:
                 return ok

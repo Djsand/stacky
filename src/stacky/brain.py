@@ -698,12 +698,17 @@ _WEB_ACTION_CLAIM_RE = re.compile(
 )
 _COMPUTER_ACTION_CLAIM_RE = re.compile(
     r"\bjeg\s+(?:k[øo]rer|koerer|k[øo]rte|koerte|opretter|skriver|retter|"
-    r"[æa]ndrer|aendrer|l[æa]ser|laeser|tjekker|starter|bruger|[åa]bner|aabner)\b",
+    r"[æa]ndrer|aendrer|l[æa]ser|laeser|tjekker|starter|bruger|sat|[åa]bner|aabner)\b",
     re.IGNORECASE,
 )
 _COMPUTER_DOMAIN_RE = re.compile(
     r"\b(?:terminal|kommando|powershell|bash|shell|dir|ls|git|grep|rg|ripgrep|"
-    r"fil|filer|mappe|workspace|repo|repository|sandcode|computer|skrivebord)\b",
+    r"fil|filer|mappe|workspace|repo|repository|sandcode|agent|kodeagent|codex|computer|skrivebord)\b",
+    re.IGNORECASE,
+)
+_SANDCODE_ACTION_CLAIM_RE = re.compile(
+    r"\bjeg\s+(?:har\s+)?(?:sat|startet|starter|sendt|brugt|bedt)\s+"
+    r"(?:sandcode[-\s]*)?(?:agenten?|kodeagenten?|codex(?:\s*agent)?)\b",
     re.IGNORECASE,
 )
 _ASSISTANT_IDENTITY_SENTENCE_RE = re.compile(
@@ -745,6 +750,12 @@ def _guard_unverified_runtime_claims(text: str, *, web_context: str, computer_co
         return (
             "Jeg fik ikke søgt på nettet i den her tur. "
             "Sig websearch tydeligt, så bruger jeg friske resultater."
+        )
+
+    if _SANDCODE_ACTION_CLAIM_RE.search(clean) and "Computer-action-resultat:" not in computer_context:
+        return (
+            "Jeg fik ikke startet Sandcode-agenten i den her tur. "
+            "Det skal komme som en rigtig runtime-handling, ikke bare en sætning fra hjernen."
         )
 
     if _looks_like_unverified_computer_action_claim(clean, computer_context=computer_context):

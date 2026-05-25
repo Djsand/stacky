@@ -7,7 +7,15 @@ from unittest.mock import patch
 
 from stacky.cli import _run_sandcode_with_updates
 from stacky.config import SandcodeConfig
-from stacky.sandcode import SandcodeDanishSummarizer, SandcodeMobileHostClient, SandcodeSession, parse_sandcode_action
+from stacky.llm import ChatMessage
+from stacky.sandcode import (
+    DEFAULT_SANDCODE_AGENT_PROMPT,
+    SandcodeDanishSummarizer,
+    SandcodeMobileHostClient,
+    SandcodeSession,
+    classify_sandcode_action,
+    parse_sandcode_action,
+)
 
 
 class FakeSandcodeClient(SandcodeMobileHostClient):
@@ -59,6 +67,16 @@ class SlowFakeSandcodeClient(FakeSandcodeClient):
             effort=self.config.effort,
             chat_only=chat_only,
         )
+
+
+class FakeIntentBrain:
+    def __init__(self, response: str) -> None:
+        self.response = response
+        self.messages: list[list[ChatMessage]] = []
+
+    async def chat(self, messages: list[ChatMessage], *, temperature: float = 0.4, max_tokens: int | None = None) -> str:
+        self.messages.append(messages)
+        return self.response
 
 
 class SandcodeTest(unittest.IsolatedAsyncioTestCase):
@@ -134,6 +152,7 @@ class SandcodeTest(unittest.IsolatedAsyncioTestCase):
 
     def test_parse_sandcode_action_accepts_agent_aliases_without_vague_trigger(self) -> None:
         self.assertIsNone(parse_sandcode_action("agent skills halter stadig"))
+        self.assertIsNone(parse_sandcode_action("hvad med sandcode som ide"))
 
         action = parse_sandcode_action("brug agenten til at fikse web search")
         self.assertIsNotNone(action)
@@ -145,12 +164,54 @@ class SandcodeTest(unittest.IsolatedAsyncioTestCase):
         assert codex_action is not None
         self.assertEqual(codex_action.prompt, "rette testen")
 
+    def test_parse_sandcode_action_defaults_empty_start_to_read_only_status(self) -> None:
+        for text in ("start agenten", "saet agenten i gang", "sandcode start"):
+            with self.subTest(text=text):
+                action = parse_sandcode_action(text)
+                self.assertIsNotNone(action)
+                assert action is not None
+                self.assertEqual(action.prompt, DEFAULT_SANDCODE_AGENT_PROMPT)
+
+    def test_parse_sandcode_action_cleans_agent_task_prefix(self) -> None:
+        action = parse_sandcode_action("kan du faa agenten til at kigge projektet igennem")
+
+        self.assertIsNotNone(action)
+        assert action is not None
+        self.assertEqual(action.prompt, "kigge projektet igennem")
+
     def test_parse_sandcode_action_accepts_agent_cancel_alias(self) -> None:
         action = parse_sandcode_action("stop agenten")
 
         self.assertIsNotNone(action)
         assert action is not None
         self.assertEqual(action.prompt, "__cancel__")
+
+    async def test_agentic_router_routes_natural_agent_start(self) -> None:
+        brain = FakeIntentBrain('{"sandcode_action":"start","prompt":"kig projektet igennem read-only","chat_only":false}')
+
+        action = await classify_sandcode_action("nej jeg mener agenten du kan saet igang", brain)
+
+        self.assertIsNotNone(action)
+        assert action is not None
+        self.assertEqual(action.prompt, "kig projektet igennem read-only")
+        self.assertTrue(brain.messages)
+
+    async def test_agentic_router_ignores_plain_agent_talk(self) -> None:
+        brain = FakeIntentBrain('{"sandcode_action":"start","prompt":"forkert","chat_only":false}')
+
+        action = await classify_sandcode_action("hvordan ser du ud med agenten", brain)
+
+        self.assertIsNone(action)
+        self.assertFalse(brain.messages)
+
+    async def test_agentic_router_defaults_empty_prompt_to_read_only_status(self) -> None:
+        brain = FakeIntentBrain('{"sandcode_action":"start","prompt":"","chat_only":false}')
+
+        action = await classify_sandcode_action("nej jeg mener agenten du kan saet igang", brain)
+
+        self.assertIsNotNone(action)
+        assert action is not None
+        self.assertEqual(action.prompt, DEFAULT_SANDCODE_AGENT_PROMPT)
 
     async def test_summarizer_speaks_danish_status(self) -> None:
         summarizer = SandcodeDanishSummarizer()

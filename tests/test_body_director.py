@@ -305,7 +305,9 @@ class BodyDirectorTest(unittest.TestCase):
         director = BodyDirector(fake, BodyCalibration())  # type: ignore[arg-type]
 
         self.assertTrue(director.speaking_tick("Jeg forklarer det lige.", now=10.0))
-        self.assertTrue(director.speaking_tick("Jeg forklarer det lige.", now=10.6))
+        self.assertTrue(director.speaking_tick("Jeg forklarer det lige.", now=11.2))
+        self.assertTrue(director.speaking_tick("Jeg forklarer det lige.", now=12.4))
+        self.assertTrue(director.speaking_tick("Jeg forklarer det lige.", now=13.6))
 
         self.assertEqual(fake.leds[-1]["mode"], "pulse")
         self.assertEqual(fake.gestures, [("look_up", 0.07, 125)])

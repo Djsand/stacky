@@ -261,22 +261,27 @@ class StackChanSpeechOutput:
                     segment,
                     sample_rate=sample_rate,
                     channels=channels,
-                    chunk_bytes=16384,
+                    chunk_bytes=8192,
                     chunk_delay_seconds=0.0,
-                    wait_for_ack=False,
+                    wait_for_ack=True,
+                    ack_timeout_seconds=3.0,
                     playback_timeout_seconds=segment_duration + 6.0,
                 )
                 if not sent and not self._stop_requested.is_set():
                     self.controller.interrupt_audio()
+                    wait_connected = getattr(self.controller, "wait_connected", None)
+                    if callable(wait_connected) and not getattr(self.controller, "connected", True):
+                        wait_connected(3.0)
                     time.sleep(0.12)
                     self.controller.hold_audio(True)
                     sent = self.controller.speak_audio_chunks(
                         segment,
                         sample_rate=sample_rate,
                         channels=channels,
-                        chunk_bytes=16384,
+                        chunk_bytes=8192,
                         chunk_delay_seconds=0.0,
-                        wait_for_ack=False,
+                        wait_for_ack=True,
+                        ack_timeout_seconds=3.0,
                         playback_timeout_seconds=segment_duration + 6.0,
                     )
                 if not sent:

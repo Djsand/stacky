@@ -28,8 +28,11 @@ class FakeTTS:
 class FakeController:
     def __init__(self) -> None:
         self.audio_calls: list[bytes] = []
+        self.audio_kwargs: list[dict[str, object]] = []
         self.hold_states: list[bool] = []
         self.volume_levels: list[int] = []
+        self.wait_connected_calls: list[float] = []
+        self.connected = True
         self.interrupts = 0
         self.fail_audio_calls = 0
 
@@ -46,13 +49,21 @@ class FakeController:
 
     def speak_audio_chunks(self, pcm: bytes, **kwargs: object) -> bool:
         self.audio_calls.append(pcm)
+        self.audio_kwargs.append(kwargs)
         if self.fail_audio_calls > 0:
             self.fail_audio_calls -= 1
+            self.connected = False
             return False
+        self.connected = True
         return True
 
     def set_volume(self, level: int) -> bool:
         self.volume_levels.append(level)
+        return True
+
+    def wait_connected(self, timeout_seconds: float) -> bool:
+        self.wait_connected_calls.append(timeout_seconds)
+        self.connected = True
         return True
 
 
@@ -172,6 +183,9 @@ class VoiceOutputTest(unittest.IsolatedAsyncioTestCase):
             await output.wait()
 
         self.assertEqual(len(controller.audio_calls), 1)
+        self.assertEqual(controller.audio_kwargs[0]["chunk_bytes"], 8192)
+        self.assertTrue(controller.audio_kwargs[0]["wait_for_ack"])
+        self.assertEqual(controller.audio_kwargs[0]["ack_timeout_seconds"], 3.0)
         self.assertEqual(controller.hold_states, [True, False])
 
     def test_stackchan_output_retries_one_failed_audio_send(self) -> None:
@@ -184,6 +198,9 @@ class VoiceOutputTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(len(controller.audio_calls), 2)
         self.assertEqual(controller.interrupts, 1)
+        self.assertEqual(controller.wait_connected_calls, [3.0])
+        self.assertTrue(controller.audio_kwargs[0]["wait_for_ack"])
+        self.assertTrue(controller.audio_kwargs[1]["wait_for_ack"])
         self.assertEqual(controller.hold_states, [True, True, False])
 
     def test_stackchan_output_raises_after_repeated_audio_send_failure(self) -> None:

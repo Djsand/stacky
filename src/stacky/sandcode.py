@@ -15,6 +15,7 @@ from typing import Any, AsyncIterator, Callable
 
 from .config import SandcodeConfig
 from .danish import compact_for_speech
+from .llm import ChatClient, ChatMessage
 
 
 class SandcodeError(RuntimeError):
@@ -37,6 +38,12 @@ class SandcodeAction:
     prompt: str
     cwd: Path | None = None
     chat_only: bool = False
+
+
+DEFAULT_SANDCODE_AGENT_PROMPT = (
+    "Lav en kort read-only status paa projektet. Find de vigtigste relevante filer "
+    "og rapporter hvad der virker vigtigt lige nu. Aendr ikke filer."
+)
 
 
 class SandcodeMobileHostClient:
@@ -337,8 +344,50 @@ def parse_sandcode_action(text: str) -> SandcodeAction | None:
     chat_only = any(phrase in normalized for phrase in ("chat only", "kun chat", "uden tools", "uden vaerktoejer"))
     prompt = _extract_sandcode_prompt(text)
     if not prompt:
-        return None
+        if _looks_like_agent_activation_without_task(normalized):
+            prompt = DEFAULT_SANDCODE_AGENT_PROMPT
+        else:
+            return None
+    elif _is_activation_only_prompt(prompt):
+        prompt = DEFAULT_SANDCODE_AGENT_PROMPT
     return SandcodeAction(prompt=prompt, chat_only=chat_only)
+
+
+async def classify_sandcode_action(text: str, brain: ChatClient | None) -> SandcodeAction | None:
+    """Route natural agent requests before the free-form brain replies.
+
+    The regex parser is a safety net for clear commands. The LLM router is the
+    primary path for Danish phrasing like "agenten du kan saette i gang" where
+    Stacky should choose a capability instead of pretending in plain text.
+    """
+
+    action = parse_sandcode_action(text)
+    if action is not None:
+        return action
+    if brain is None or not _looks_like_possible_agent_need(text):
+        return None
+
+    prompt = (
+        "Du er Stackys lokale ability-router, ikke samtalehjernen. "
+        "Afgor om Nicolais danske besked beder Stacky om at bruge Sandcode/Codex-agenten "
+        "som en rigtig runtime-handling foer svaret. "
+        "Svar KUN JSON: {\"sandcode_action\":\"start|cancel|none\", \"prompt\":\"kort opgave\", \"chat_only\":false}. "
+        "Brug start naar han beder agenten om at kigge, scanne, rette, arbejde eller blive sat i gang. "
+        "Hvis han bare vil have agenten sat i gang uden konkret opgave, brug en read-only projektstatus som prompt. "
+        "Brug none for almindelig snak om agenter, identitet, fejlbeskrivelser som 'agent skills halter', "
+        "eller spoergsmaal om hvad agenten er.\n\n"
+        f"Besked: {text[:500]}"
+    )
+    try:
+        result = await brain.chat(
+            [ChatMessage("system", prompt), ChatMessage("user", text)],
+            temperature=0.0,
+            max_tokens=160,
+        )
+    except Exception as exc:
+        print(f"[sandcode] ability-router failed: {exc}", flush=True)
+        return None
+    return _parse_sandcode_intent(result)
 
 
 def _extract_sandcode_prompt(text: str) -> str:
@@ -363,13 +412,69 @@ def _extract_sandcode_prompt(text: str) -> str:
 
 def _cleanup_prompt(prompt: str) -> str:
     prompt = re.sub(r"(?i)\b(kun chat|chat only|uden tools|uden v[æa]rkt[øo]jer)\b", "", prompt)
+    prompt = re.sub(r"(?i)^\s*(?:til\s+at|om\s+at|med\s+at|skal|kan|m[åa])\s+", "", prompt)
     prompt = re.sub(r"\s+", " ", prompt).strip(" .,:;-")
     return prompt
 
 
+def _parse_sandcode_intent(raw: str) -> SandcodeAction | None:
+    start = raw.find("{")
+    end = raw.rfind("}")
+    if start < 0 or end < start:
+        return None
+    try:
+        data = json.loads(raw[start : end + 1])
+    except json.JSONDecodeError:
+        return None
+    action = str(data.get("sandcode_action") or data.get("action") or "").strip().lower()
+    if action in {"cancel", "stop", "afbryd", "annuller"}:
+        return SandcodeAction(prompt="__cancel__")
+    if action != "start":
+        return None
+    prompt = _cleanup_prompt(str(data.get("prompt") or ""))
+    if not prompt or _is_activation_only_prompt(prompt):
+        prompt = DEFAULT_SANDCODE_AGENT_PROMPT
+    return SandcodeAction(prompt=prompt, chat_only=bool(data.get("chat_only")))
+
+
+def _is_activation_only_prompt(prompt: str) -> bool:
+    folded = " ".join(_normalize_for_intent(prompt).split()).strip(" .,:;-")
+    if not folded:
+        return True
+    folded = re.sub(r"\b(?:du kan|kan du|lige|bare|nu|tak|please|venligst|for mig|saa|sa)\b", " ", folded)
+    folded = " ".join(folded.split())
+    return folded in {
+        "den",
+        "det",
+        "i gang",
+        "igang",
+        "start",
+        "starte",
+        "start den",
+        "starte den",
+        "saet i gang",
+        "saet igang",
+        "saette i gang",
+        "saette igang",
+        "sat i gang",
+        "sat igang",
+        "koer",
+        "kor",
+        "koere",
+        "kore",
+        "koer den",
+        "kor den",
+    }
+
+
 def _looks_like_sandcode_request(normalized: str) -> bool:
     if "sandcode" in normalized:
-        return True
+        command = r"(?:brug|start|koer|kor|bed|saet|send|lad)"
+        if _wants_cancel_sandcode(normalized):
+            return True
+        if re.search(rf"\b{command}\s+sandcode\b", normalized):
+            return True
+        return bool(re.search(r"\bsandcode\s+(?:skal|maa|ma|kan|til\s+at|om\s+at|start|starte|i\s*gang|igang)\b", normalized))
     agent_alias = r"(?:kodeagenten?|kodningsagenten?|codex(?:\s*agent)?|agenten?|agent)"
     if re.search(rf"\b(?:stop|afbryd|annuller)\s+(?:den\s+)?{agent_alias}\b", normalized):
         return True
@@ -377,6 +482,61 @@ def _looks_like_sandcode_request(normalized: str) -> bool:
     if re.search(rf"\b{command}\s+(?:den\s+)?{agent_alias}\b", normalized):
         return True
     return bool(re.search(rf"\b{agent_alias}\s+(?:skal|maa|ma|kan|til\s+at|om\s+at)\b", normalized))
+
+
+def _looks_like_agent_activation_without_task(normalized: str) -> bool:
+    agent_alias = r"(?:sandcode|kodeagenten?|kodningsagenten?|codex(?:\s*agent)?|agenten?|agent)"
+    command = r"(?:brug|start|koer|kor|bed|saet|send|lad)"
+    return bool(
+        re.search(rf"\b{command}\s+(?:den\s+)?{agent_alias}\s*$", normalized)
+        or re.search(rf"\b{agent_alias}\s+(?:start|starte|i\s*gang|igang|koer|kor)\s*$", normalized)
+    )
+
+
+def _looks_like_possible_agent_need(text: str) -> bool:
+    words = set(_fold_agent_words(text))
+    if not words:
+        return False
+    agent_words = {
+        "agent",
+        "agenten",
+        "kodeagent",
+        "kodeagenten",
+        "kodningsagent",
+        "kodningsagenten",
+        "codex",
+        "sandcode",
+    }
+    action_words = {
+        "brug",
+        "bruge",
+        "start",
+        "starte",
+        "saet",
+        "saette",
+        "sat",
+        "gang",
+        "igang",
+        "koer",
+        "kor",
+        "koere",
+        "kore",
+        "kig",
+        "kigge",
+        "scan",
+        "scanne",
+        "laes",
+        "las",
+        "laese",
+        "lase",
+        "ret",
+        "rette",
+        "fix",
+        "fikse",
+        "arbejd",
+        "arbejde",
+    }
+    return bool(words & agent_words and words & action_words)
 
 
 def _wants_cancel_sandcode(normalized: str) -> bool:
@@ -403,3 +563,8 @@ def _normalize_for_intent(text: str) -> str:
         .replace("\u00e6", "ae")
     )
     return normalized.replace("sand code", "sandcode").replace("sand kode", "sandcode")
+
+
+def _fold_agent_words(text: str) -> list[str]:
+    folded = _normalize_for_intent(text)
+    return re.sub(r"[^0-9a-z]+", " ", folded).split()
