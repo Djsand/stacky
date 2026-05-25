@@ -2511,7 +2511,11 @@ async def _handsfree(
                 set_body_state("listening")
                 accepting_audio = True
                 continue
-            sandcode_action = await classify_sandcode_action(text, brain.lmstudio)
+            sandcode_action = await classify_sandcode_action(
+                text,
+                brain.lmstudio,
+                recent_context=brain.recent_context_text(),
+            )
             if sandcode_action is not None:
                 reply_started = time.perf_counter()
                 set_body_state("thinking")
@@ -3227,6 +3231,13 @@ def _is_repetitive_filler_noise_turn(result: STTResult, transcript: str, signal_
     content_words = [word for word in words if word not in filler_words and word not in weak_connectors]
     if content_words:
         return False
+    key = _transcript_key(transcript)
+    if key in {"jajegden", "jajegdet", "jajegkan", "jajegkanden", "jegden", "jegdet"}:
+        return (
+            signal_quality.peak >= 12000
+            or signal_quality.crest_factor >= 18.0
+            or signal_quality.max_speech_band_run_ms <= 420
+        )
     noise_word_ratio = sum(1 for word in words if word in filler_words or word in weak_connectors) / len(words)
     repeated_count = max(words.count(word) for word in set(words))
     if (

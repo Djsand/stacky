@@ -299,6 +299,9 @@ class StackyBrain:
             return "rolig"
         return self.self_model.stacky_mood_name()
 
+    def recent_context_text(self) -> str:
+        return self._recent_context_text()
+
     def set_presence_mode(self, mode: str, *, source: str = "voice-command") -> str:
         if self.self_model is None:
             return "stille_ven"
@@ -707,8 +710,11 @@ _COMPUTER_DOMAIN_RE = re.compile(
     re.IGNORECASE,
 )
 _SANDCODE_ACTION_CLAIM_RE = re.compile(
-    r"\bjeg\s+(?:har\s+)?(?:sat|startet|starter|sendt|brugt|bedt)\s+"
-    r"(?:sandcode[-\s]*)?(?:agenten?|kodeagenten?|codex(?:\s*agent)?)\b",
+    r"\bjeg\s+(?:har\s+)?(?:(?:fors[øo]ger|proever|pr[øo]ver)\s+at\s+)?"
+    r"(?:sat|startet|starter|sendt|brugt|bedt|aktiverer|aktivere|initialiserer)\s+"
+    r"(?:sandcode[-\s]*)?(?:agenten?|kodeagenten?|codex(?:\s*agent)?)\b|"
+    r"\b(?:sandcode[-\s]*)?(?:agenten?|kodeagenten?|codex(?:\s*agent)?)\s+"
+    r"(?:er\s+)?(?:initialiseret|klar|startet|aktiv|i\s+gang|igang)\b",
     re.IGNORECASE,
 )
 _ASSISTANT_IDENTITY_SENTENCE_RE = re.compile(
@@ -754,8 +760,8 @@ def _guard_unverified_runtime_claims(text: str, *, web_context: str, computer_co
 
     if _SANDCODE_ACTION_CLAIM_RE.search(clean) and "Computer-action-resultat:" not in computer_context:
         return (
-            "Jeg fik ikke startet Sandcode-agenten i den her tur. "
-            "Det skal komme som en rigtig runtime-handling, ikke bare en sætning fra hjernen."
+            "Jeg startede ikke agenten dér. "
+            "Jeg fangede kun en løs talemodel-gætning, og jeg må ikke lade hjernen opfinde en knap den ikke trykkede på."
         )
 
     if _looks_like_unverified_computer_action_claim(clean, computer_context=computer_context):
@@ -766,7 +772,7 @@ def _guard_unverified_runtime_claims(text: str, *, web_context: str, computer_co
             )
         return (
             "Jeg fik ikke kørt en computerhandling i den her tur. "
-            "Sig terminal eller Sandcode tydeligt, så tager jeg den som en rigtig handling."
+            "Jeg fangede kun en løs talemodel-gætning, og jeg må ikke lade som om jeg trykkede på noget."
         )
 
     return clean

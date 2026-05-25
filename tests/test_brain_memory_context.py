@@ -289,13 +289,13 @@ class BrainMemoryContextTest(unittest.IsolatedAsyncioTestCase):
             brain = StackyBrain(  # type: ignore[arg-type]
                 StackySoul(created_for="Nicolai"),
                 memory,
-                FixedFakeLLM("Jeg har sat Sandcode-agenten i gang med at læse filstrukturen nu."),
+                FixedFakeLLM("Jeg forsøger at aktivere Sandcode-agenten nu. Sandcode-agent initialiseret med læseadgang."),
             )
 
             reply = await brain.respond("nej jeg mener agenten")
 
-        self.assertIn("Jeg fik ikke startet Sandcode-agenten", reply.text)
-        self.assertIn("runtime-handling", reply.text)
+        self.assertIn("Jeg startede ikke agenten", reply.text)
+        self.assertIn("opfinde en knap", reply.text)
 
     async def test_read_only_computer_context_does_not_allow_free_action_claim(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

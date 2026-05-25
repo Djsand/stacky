@@ -179,6 +179,13 @@ class SandcodeTest(unittest.IsolatedAsyncioTestCase):
         assert action is not None
         self.assertEqual(action.prompt, "kigge projektet igennem")
 
+    def test_parse_sandcode_action_handles_stt_sancodi_mishearing(self) -> None:
+        action = parse_sandcode_action("jeg bare at se om sancodigennem den virker")
+
+        self.assertIsNotNone(action)
+        assert action is not None
+        self.assertEqual(action.prompt, DEFAULT_SANDCODE_AGENT_PROMPT)
+
     def test_parse_sandcode_action_accepts_agent_cancel_alias(self) -> None:
         action = parse_sandcode_action("stop agenten")
 
@@ -212,6 +219,32 @@ class SandcodeTest(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(action)
         assert action is not None
         self.assertEqual(action.prompt, DEFAULT_SANDCODE_AGENT_PROMPT)
+
+    async def test_agentic_router_uses_recent_agent_context_for_start_den_followup(self) -> None:
+        brain = FakeIntentBrain('{"sandcode_action":"none","prompt":"","chat_only":false}')
+
+        action = await classify_sandcode_action(
+            "som proever at starte den",
+            brain,
+            recent_context="Stacky: Jeg startede ikke Sandcode-agenten der.",
+        )
+
+        self.assertIsNotNone(action)
+        assert action is not None
+        self.assertEqual(action.prompt, DEFAULT_SANDCODE_AGENT_PROMPT)
+        self.assertFalse(brain.messages)
+
+    async def test_agentic_router_does_not_route_plain_followup_from_agent_context(self) -> None:
+        brain = FakeIntentBrain('{"sandcode_action":"start","prompt":"forkert","chat_only":false}')
+
+        action = await classify_sandcode_action(
+            "bestemmer du",
+            brain,
+            recent_context="Stacky: Jeg startede ikke Sandcode-agenten der.",
+        )
+
+        self.assertIsNone(action)
+        self.assertFalse(brain.messages)
 
     async def test_summarizer_speaks_danish_status(self) -> None:
         summarizer = SandcodeDanishSummarizer()

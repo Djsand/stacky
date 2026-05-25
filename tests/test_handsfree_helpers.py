@@ -405,6 +405,35 @@ class HandsfreeHelpersTest(unittest.TestCase):
         self.assertFalse(accepted)
         self.assertEqual(reason, "kort højfrekvent STT-fragment")
 
+    def test_rejects_noisy_ja_jeg_den_fragment(self) -> None:
+        result = STTResult(
+            text="ja jeg den",
+            audio=AudioStats(duration_seconds=1.80, rms=1813, peak=30000, sample_rate=24000, channels=1),
+            avg_logprob=-0.45,
+            no_speech_prob=0.0,
+            compression_ratio=0.0,
+        )
+        quality = TurnSignalQuality(
+            duration_seconds=1.80,
+            median_rms=296,
+            p80_rms=1600,
+            p95_rms=4910,
+            peak=30000,
+            active_ratio=0.28,
+            active_ms=500,
+            max_active_run_ms=220,
+            crest_factor=28.9,
+            active_threshold=576,
+            zero_crossing_rate=0.36,
+            speech_band_ms=500,
+            max_speech_band_run_ms=220,
+        )
+
+        accepted, reason = _accept_stt_result(result, signal_quality=quality)
+
+        self.assertFalse(accepted)
+        self.assertEqual(reason, "repetitivt filler-støjfragment")
+
     def test_rejects_short_contextless_single_word_fragment(self) -> None:
         result = STTResult(
             text="gen",

@@ -340,6 +340,8 @@ def parse_sandcode_action(text: str) -> SandcodeAction | None:
         return None
     if _wants_cancel_sandcode(normalized):
         return SandcodeAction(prompt="__cancel__")
+    if _looks_like_sandcode_test_request(normalized):
+        return SandcodeAction(prompt=DEFAULT_SANDCODE_AGENT_PROMPT)
 
     chat_only = any(phrase in normalized for phrase in ("chat only", "kun chat", "uden tools", "uden vaerktoejer"))
     prompt = _extract_sandcode_prompt(text)
@@ -353,7 +355,12 @@ def parse_sandcode_action(text: str) -> SandcodeAction | None:
     return SandcodeAction(prompt=prompt, chat_only=chat_only)
 
 
-async def classify_sandcode_action(text: str, brain: ChatClient | None) -> SandcodeAction | None:
+async def classify_sandcode_action(
+    text: str,
+    brain: ChatClient | None,
+    *,
+    recent_context: str = "",
+) -> SandcodeAction | None:
     """Route natural agent requests before the free-form brain replies.
 
     The regex parser is a safety net for clear commands. The LLM router is the
@@ -364,9 +371,12 @@ async def classify_sandcode_action(text: str, brain: ChatClient | None) -> Sandc
     action = parse_sandcode_action(text)
     if action is not None:
         return action
+    if _looks_like_agent_followup_activation(text, recent_context):
+        return SandcodeAction(prompt=DEFAULT_SANDCODE_AGENT_PROMPT)
     if brain is None or not _looks_like_possible_agent_need(text):
         return None
 
+    context_note = f"\n\nSeneste live-kontekst:\n{recent_context[:900]}" if recent_context.strip() else ""
     prompt = (
         "Du er Stackys lokale ability-router, ikke samtalehjernen. "
         "Afgor om Nicolais danske besked beder Stacky om at bruge Sandcode/Codex-agenten "
@@ -376,7 +386,7 @@ async def classify_sandcode_action(text: str, brain: ChatClient | None) -> Sandc
         "Hvis han bare vil have agenten sat i gang uden konkret opgave, brug en read-only projektstatus som prompt. "
         "Brug none for almindelig snak om agenter, identitet, fejlbeskrivelser som 'agent skills halter', "
         "eller spoergsmaal om hvad agenten er.\n\n"
-        f"Besked: {text[:500]}"
+        f"Besked: {text[:500]}{context_note}"
     )
     try:
         result = await brain.chat(
@@ -472,6 +482,8 @@ def _looks_like_sandcode_request(normalized: str) -> bool:
         command = r"(?:brug|start|koer|kor|bed|saet|send|lad)"
         if _wants_cancel_sandcode(normalized):
             return True
+        if _looks_like_sandcode_test_request(normalized):
+            return True
         if re.search(rf"\b{command}\s+sandcode\b", normalized):
             return True
         return bool(re.search(r"\bsandcode\s+(?:skal|maa|ma|kan|til\s+at|om\s+at|start|starte|i\s*gang|igang)\b", normalized))
@@ -482,6 +494,30 @@ def _looks_like_sandcode_request(normalized: str) -> bool:
     if re.search(rf"\b{command}\s+(?:den\s+)?{agent_alias}\b", normalized):
         return True
     return bool(re.search(rf"\b{agent_alias}\s+(?:skal|maa|ma|kan|til\s+at|om\s+at)\b", normalized))
+
+
+def _looks_like_sandcode_test_request(normalized: str) -> bool:
+    if "sandcode" not in normalized:
+        return False
+    return bool(
+        re.search(r"\b(?:test|tester|teste|proev|proever|prov|prover)\b.*\bsandcode\b", normalized)
+        or re.search(r"\bsandcode\b.*\b(?:test|tester|teste|virker|igennem|gennem)\b", normalized)
+        or re.search(r"\bse\s+om\s+sandcode\b", normalized)
+    )
+
+
+def _looks_like_agent_followup_activation(text: str, recent_context: str) -> bool:
+    if not recent_context.strip():
+        return False
+    context_words = set(_fold_agent_words(recent_context))
+    if not (context_words & {"sandcode", "agent", "agenten", "kodeagent", "kodeagenten", "codex"}):
+        return False
+    normalized = _normalize_for_intent(text)
+    return bool(
+        re.search(r"\b(?:start|starte|koer|kor|saet|send|aktiver|aktivere)\s+(?:den|det)\b", normalized)
+        or re.search(r"\b(?:proever|prøver|forsoger|forsøger)\s+at\s+(?:start|starte|aktivere)\s+(?:den|det)\b", normalized)
+        or re.search(r"\b(?:den|det)\s+(?:skal\s+)?(?:start|starte|i\s*gang|igang|koere|kore)\b", normalized)
+    )
 
 
 def _looks_like_agent_activation_without_task(normalized: str) -> bool:
@@ -562,7 +598,10 @@ def _normalize_for_intent(text: str) -> str:
         .replace("\u00e5", "aa")
         .replace("\u00e6", "ae")
     )
-    return normalized.replace("sand code", "sandcode").replace("sand kode", "sandcode")
+    normalized = normalized.replace("sand code", "sandcode").replace("sand kode", "sandcode")
+    normalized = re.sub(r"\bsancodi(?=[a-z])", "sandcode ", normalized)
+    normalized = re.sub(r"\bsan(?:d)?cod(?:e|i)?\b", "sandcode", normalized)
+    return normalized
 
 
 def _fold_agent_words(text: str) -> list[str]:
