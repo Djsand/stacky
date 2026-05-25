@@ -2141,6 +2141,7 @@ async def _handsfree(
     ) -> None:
         nonlocal sandcode_job_session_id, sandcode_job_task
         spoken_updates = 0
+        last_sandcode_update = ""
 
         def mark_session_started(session: SandcodeSession) -> None:
             nonlocal sandcode_job_session_id
@@ -2148,8 +2149,9 @@ async def _handsfree(
             runtime_state.mark_sandcode_running(action.prompt, note=f"session {session.session_id} startet")
 
         async def speak_sandcode_update(update: str) -> None:
-            nonlocal spoken_updates
+            nonlocal spoken_updates, last_sandcode_update
             print(f"[Sandcode] {update}", flush=True)
+            last_sandcode_update = " ".join(update.split()).strip()
             runtime_state.mark_sandcode_running(action.prompt, note=update)
             if not _should_speak_sandcode_update(update, spoken_updates=spoken_updates):
                 return
@@ -2165,14 +2167,15 @@ async def _handsfree(
                 chat_only=action.chat_only,
                 on_session_started=mark_session_started,
             )
-            runtime_state.mark_sandcode_done(action.prompt, session_id=session.session_id)
+            runtime_state.mark_sandcode_done(action.prompt, session_id=session.session_id, note=last_sandcode_update)
             if brain is not None:
                 brain.remember_memory_map(
-                    f"Seneste Sandcode-agentkoersel: {action.prompt}. Session: {session.session_id}.",
+                    f"Seneste Sandcode-agentkoersel: {action.prompt}. Sidste melding: {last_sandcode_update or 'ingen'}. Session: {session.session_id}.",
                     source="sandcode-agent",
                 )
+            done_detail = f" Sidste melding: {last_sandcode_update}" if last_sandcode_update else ""
             await speak_runtime_update(
-                f"Agenten er faerdig. Sessionen hedder {session.session_id}.",
+                f"Agenten er faerdig.{done_detail} Sessionen hedder {session.session_id}.",
                 final_state="listening",
             )
         except SandcodeError as exc:

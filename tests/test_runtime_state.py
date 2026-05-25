@@ -40,12 +40,13 @@ class RuntimeStateTest(unittest.TestCase):
         clock = FakeClock()
         state = RuntimeState(clock=clock)
 
-        state.mark_sandcode_done("scan projektet", session_id="abc123")
+        state.mark_sandcode_done("scan projektet", session_id="abc123", note="Agenten melder: README er vigtig.")
         context = state.context_for_prompt()
 
         self.assertEqual(state.agent_status, "done")
         self.assertIn("agent_status: done", context)
         self.assertIn("Sandcode-agent faerdig: scan projektet", context)
+        self.assertIn("sidste melding: Agenten melder: README er vigtig.", context)
         self.assertIn("session abc123", context)
 
     def test_sandcode_failed_records_error(self) -> None:
@@ -96,11 +97,12 @@ class RuntimeStateTest(unittest.TestCase):
     def test_status_reply_reports_done_agent_session(self) -> None:
         clock = FakeClock()
         state = RuntimeState(clock=clock)
-        state.mark_sandcode_done("scan projektet", session_id="abc123")
+        state.mark_sandcode_done("scan projektet", session_id="abc123", note="Agenten melder: README er vigtig.")
 
         reply = state.status_reply("kører den")
 
         self.assertIn("Agenten er færdig", reply)
+        self.assertIn("README er vigtig", reply)
         self.assertIn("abc123", reply)
 
 

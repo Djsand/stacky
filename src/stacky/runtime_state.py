@@ -104,11 +104,12 @@ class RuntimeState:
             can_speak_about=("sandcode_agent", "runtime_action"),
         )
 
-    def mark_sandcode_done(self, prompt: str, *, session_id: str = "") -> RuntimeAction:
+    def mark_sandcode_done(self, prompt: str, *, session_id: str = "", note: str = "") -> RuntimeAction:
+        suffix = f" - sidste melding: {_one_line(note)}" if note.strip() else ""
         return self.record_action(
             kind="sandcode_agent",
             status="done",
-            summary=f"Sandcode-agent faerdig: {_one_line(prompt)}",
+            summary=f"Sandcode-agent faerdig: {_one_line(prompt)}{suffix}",
             detail=prompt,
             session_id=session_id,
             can_speak_about=("sandcode_agent", "runtime_action"),
