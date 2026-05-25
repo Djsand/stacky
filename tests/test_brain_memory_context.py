@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from stacky.brain import StackyBrain, _spoken_response_for_live
+from stacky.brain import StackyBrain, _computer_context_rule, _spoken_response_for_live
 from stacky.evolution import StackyEvolutionEngine
 from stacky.llm import ChatImageAttachment, ChatMessage, GeminiPromptBlockedError, LLMError
 from stacky.memory import MemoryStore
@@ -65,6 +65,29 @@ class BlockingThenSafeFakeLLM:
 
 
 class BrainMemoryContextTest(unittest.IsolatedAsyncioTestCase):
+    def test_capability_reply_describes_agent_intention_without_trigger_words(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = MemoryStore(Path(tmp) / "memory.sqlite")
+            brain = StackyBrain(StackySoul(created_for="Nicolai"), memory, FakeLLM())  # type: ignore[arg-type]
+
+            reply = brain.capability_reply()
+
+        self.assertIn("din intention er tydelig", reply)
+        self.assertIn("byg det", reply)
+        self.assertIn("fortsæt", reply)
+        self.assertIn("give status og stoppe agenten", reply)
+        self.assertNotIn("tydelig kommando", reply)
+        self.assertNotIn("klar ordre", reply)
+
+    def test_read_only_computer_rule_requires_runtime_action_not_trigger_word(self) -> None:
+        rule = _computer_context_rule("Computer-kontekst (lokal read-only):\n- active_window: test")
+
+        self.assertIn("runtime faktisk har startet handlingen", rule)
+        self.assertIn("tydelig handlingsintention", rule)
+        self.assertIn("ikke et bestemt triggerord", rule)
+        self.assertNotIn("eksplicit Sandcode", rule)
+        self.assertNotIn("terminal-handling", rule)
+
     async def test_pinned_identity_fact_is_included_even_when_query_does_not_match(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             memory = MemoryStore(Path(tmp) / "memory.sqlite")

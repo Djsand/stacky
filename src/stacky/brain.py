@@ -407,8 +407,10 @@ class StackyBrain:
     def capability_reply(self) -> str:
         return (
             "Jeg kan snakke med dig, bruge kamera og computer som sanser når runtime sender dem, "
-            "søge web når du beder om friske fakta, starte Sandcode-agenten på en tydelig kommando, "
-            "og skrive vigtige tråde i min egen memory-map. Jeg ændrer ikke filer eller starter agent uden klar ordre."
+            "søge web når du beder om friske fakta, og sende Sandcode-agenten ind i projektarbejde "
+            "når din intention er tydelig - også ved korte ting som 'byg det' eller 'fortsæt', "
+            "hvis konteksten bærer den. Jeg kan give status og stoppe agenten mens den kører. "
+            "Vag agentsnak starter ikke filændringer."
         )
 
     def _messages(
@@ -609,7 +611,9 @@ def _computer_context_rule(computer_context: str) -> str:
         "Du maa ikke sige 'jeg koerer', 'jeg opretter', 'jeg retter', 'jeg tjekker nu' eller lignende, "
         "medmindre en separat action-handler allerede har udfoert handlingen og givet dig resultatet. "
         "Hvis opgaven kraever kodeaendringer, filskrivning, Sandcode-agent eller terminalkommandoer, "
-        "saa sig at det skal startes som en eksplicit Sandcode- eller terminal-handling.\n"
+        "saa maa du kun tale som om det koerer, naar runtime faktisk har startet handlingen. "
+        "Hvis runtime ikke har startet noget, sig kort at der ikke blev koert en handling i denne tur. "
+        "Kravet er tydelig handlingsintention, ikke et bestemt triggerord.\n"
         + clean
     )
 
