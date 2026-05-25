@@ -383,14 +383,14 @@ index e280eeb..d47dd99 100644
  
      if (is_idle) {
 diff --git a/firmware/main/hal/hal.h b/firmware/main/hal/hal.h
-index 5f9efcf..b5acfd1 100644
+index 5f9efcf..e65ed73 100644
 --- a/firmware/main/hal/hal.h
 +++ b/firmware/main/hal/hal.h
 @@ -132,6 +132,9 @@ enum class MicTestStatus {
      Failed,
  };
  
-+inline constexpr const char* STACKY_BOOT_VERSION = "official-0.1.24";
++inline constexpr const char* STACKY_BOOT_VERSION = "official-0.1.25";
 +LV_IMAGE_DECLARE(stacky_boot_ghost);
 +
  /**
@@ -2842,10 +2842,10 @@ index 0000000..fb1504b
 +};
 diff --git a/firmware/main/hal/stacky_bridge.cpp b/firmware/main/hal/stacky_bridge.cpp
 new file mode 100644
-index 0000000..951f244
+index 0000000..92e8f18
 --- /dev/null
 +++ b/firmware/main/hal/stacky_bridge.cpp
-@@ -0,0 +1,1211 @@
+@@ -0,0 +1,1373 @@
 +#include "stacky_bridge.h"
 +
 +#include "hal.h"
@@ -2879,6 +2879,7 @@ index 0000000..951f244
 +#include <cstdlib>
 +#include <cstring>
 +#include <memory>
++#include <new>
 +#include <string>
 +#include <vector>
 +
@@ -2915,7 +2916,7 @@ index 0000000..951f244
 +namespace {
 +
 +constexpr const char* TAG = "StackyBridge";
-+constexpr const char* STACKY_BRIDGE_VERSION = "official-0.1.24";
++constexpr const char* STACKY_BRIDGE_VERSION = "official-0.1.25";
 +constexpr size_t MIC_FRAME_COUNT = 480;       // 20 ms at 24 kHz
 +constexpr int MIC_WARMUP_DISCARD_FRAMES = 12;
 +constexpr size_t PLAYBACK_CHUNK_SAMPLES = 960;
@@ -3010,6 +3011,7 @@ index 0000000..951f244
 +        connected_.store(false);
 +        audio_hold_.store(true);
 +        playback_active_.store(false);
++        playback_cancel_requested_.store(true);
 +        showSpeaking(false);
 +        closeSocket();
 +
@@ -3032,6 +3034,7 @@ index 0000000..951f244
 +    std::atomic<bool> connected_{false};
 +    std::atomic<bool> audio_hold_{false};
 +    std::atomic<bool> playback_active_{false};
++    std::atomic<bool> playback_cancel_requested_{false};
 +    SemaphoreHandle_t send_mutex_  = nullptr;
 +    SemaphoreHandle_t audio_mutex_ = nullptr;
 +    std::unique_ptr<StackChanWifiStation> wifi_;
@@ -3054,6 +3057,14 @@ index 0000000..951f244
 +    int head_touch_connection_ = -1;
 +    int speaking_modifier_id_ = -1;
 +    int speaking_mouth_weight_ = 0;
++    TaskHandle_t playback_task_ = nullptr;
++
++    struct PlaybackRequest {
++        StackyBridgeImpl* bridge;
++        std::vector<int16_t>* samples;
++        int sample_rate;
++        int channels;
++    };
 +
 +    static void mainTaskThunk(void* arg)
 +    {
@@ -3063,6 +3074,26 @@ index 0000000..951f244
 +    static void micTaskThunk(void* arg)
 +    {
 +        static_cast<StackyBridgeImpl*>(arg)->micTask();
++    }
++
++    static void playbackTaskThunk(void* arg)
++    {
++        auto* request = static_cast<PlaybackRequest*>(arg);
++        if (!request || !request->bridge || !request->samples) {
++            delete request;
++            vTaskDelete(nullptr);
++            return;
++        }
++
++        StackyBridgeImpl* bridge = request->bridge;
++        std::unique_ptr<std::vector<int16_t>> samples(request->samples);
++        const int sample_rate = request->sample_rate;
++        const int channels = request->channels;
++        delete request;
++
++        bridge->playSamples(*samples, sample_rate, channels);
++        bridge->playback_task_ = nullptr;
++        vTaskDelete(nullptr);
 +    }
 +
 +    void mainTask()
@@ -3094,6 +3125,7 @@ index 0000000..951f244
 +            connected_.store(false);
 +            audio_hold_.store(false);
 +            playback_active_.store(false);
++            playback_cancel_requested_.store(true);
 +            closeSocket();
 +            vTaskDelay(pdMS_TO_TICKS(1200));
 +        }
@@ -3252,15 +3284,18 @@ index 0000000..951f244
 +            return;
 +        }
 +        if (std::strcmp(type, "audio.end") == 0) {
-+            playBufferedAudio();
++            startBufferedAudioPlayback();
 +            return;
 +        }
 +        if (std::strcmp(type, "audio.stop") == 0) {
 +            playback_samples_.clear();
-+            playback_active_.store(false);
++            const bool was_playing = playback_active_.exchange(false);
++            playback_cancel_requested_.store(true);
 +            audio_hold_.store(false);
 +            showSpeaking(false);
-+            sendPlayDone();
++            if (!was_playing) {
++                sendPlayDone();
++            }
 +            return;
 +        }
 +        if (std::strcmp(type, "audio.tone") == 0) {
@@ -3360,10 +3395,10 @@ index 0000000..951f244
 +                                 static_cast<double>(AUDIO_OUTPUT_SAMPLE_RATE);
 +            playback_samples_[i] = static_cast<int16_t>(std::sin(phase) * 32767.0 * gain);
 +        }
-+        playBufferedAudio();
++        startBufferedAudioPlayback();
 +    }
 +
-+    void playBufferedAudio()
++    void startBufferedAudioPlayback()
 +    {
 +        if (playback_samples_.empty()) {
 +            showSpeaking(false);
@@ -3377,14 +3412,22 @@ index 0000000..951f244
 +            sendPlayDone();
 +            return;
 +        }
++        if (playback_active_.load()) {
++            ESP_LOGW(TAG, "playback already active; dropping new audio buffer");
++            playback_samples_.clear();
++            sendPlayDone();
++            return;
++        }
 +
 +        playback_active_.store(true);
 +        audio_hold_.store(true);
++        playback_cancel_requested_.store(false);
 +
-+        auto& board = Board::GetInstance();
-+        auto* codec = board.GetAudioCodec();
-+        if (!codec) {
-+            ESP_LOGE(TAG, "audio codec unavailable for playback");
++        auto* samples = new (std::nothrow) std::vector<int16_t>();
++        auto* request = new (std::nothrow) PlaybackRequest();
++        if (!samples || !request) {
++            delete samples;
++            delete request;
 +            playback_samples_.clear();
 +            playback_active_.store(false);
 +            audio_hold_.store(false);
@@ -3392,8 +3435,49 @@ index 0000000..951f244
 +            sendPlayDone();
 +            return;
 +        }
++        samples->swap(playback_samples_);
++        request->bridge = this;
++        request->samples = samples;
++        request->sample_rate = playback_sample_rate_;
++        request->channels = playback_channels_;
 +
-+        ESP_LOGI(TAG, "playing %u samples", static_cast<unsigned>(playback_samples_.size()));
++        BaseType_t created = xTaskCreatePinnedToCore(
++            &StackyBridgeImpl::playbackTaskThunk,
++            "stacky_playback",
++            8192,
++            request,
++            5,
++            &playback_task_,
++            1);
++        if (created != pdPASS) {
++            ESP_LOGE(TAG, "failed to start playback task");
++            delete samples;
++            delete request;
++            playback_task_ = nullptr;
++            playback_active_.store(false);
++            audio_hold_.store(false);
++            showSpeaking(false);
++            sendPlayDone();
++        }
++    }
++
++    void playSamples(const std::vector<int16_t>& samples, int sample_rate, int channels)
++    {
++        (void)sample_rate;
++        (void)channels;
++        auto& board = Board::GetInstance();
++        auto* codec = board.GetAudioCodec();
++        if (!codec) {
++            ESP_LOGE(TAG, "audio codec unavailable for playback");
++            playback_active_.store(false);
++            playback_cancel_requested_.store(false);
++            audio_hold_.store(false);
++            showSpeaking(false);
++            sendPlayDone();
++            return;
++        }
++
++        ESP_LOGI(TAG, "playing %u samples", static_cast<unsigned>(samples.size()));
 +        xSemaphoreTake(audio_mutex_, portMAX_DELAY);
 +        if (codec->input_enabled()) {
 +            codec->EnableInput(false);
@@ -3402,9 +3486,11 @@ index 0000000..951f244
 +        codec->SetOutputVolume(output_volume_.load());
 +        showSpeaking(true);
 +        std::vector<int16_t> chunk;
-+        for (size_t offset = 0; offset < playback_samples_.size() && connected_.load(); offset += PLAYBACK_CHUNK_SAMPLES) {
-+            const size_t count = std::min(PLAYBACK_CHUNK_SAMPLES, playback_samples_.size() - offset);
-+            chunk.assign(playback_samples_.begin() + offset, playback_samples_.begin() + offset + count);
++        for (size_t offset = 0;
++             offset < samples.size() && connected_.load() && playback_active_.load() && !playback_cancel_requested_.load();
++             offset += PLAYBACK_CHUNK_SAMPLES) {
++            const size_t count = std::min(PLAYBACK_CHUNK_SAMPLES, samples.size() - offset);
++            chunk.assign(samples.begin() + offset, samples.begin() + offset + count);
 +            driveMouthFromAudioChunk(chunk);
 +            codec->OutputData(chunk);
 +        }
@@ -3412,8 +3498,8 @@ index 0000000..951f244
 +        codec->EnableOutput(false);
 +        xSemaphoreGive(audio_mutex_);
 +
-+        playback_samples_.clear();
 +        playback_active_.store(false);
++        playback_cancel_requested_.store(false);
 +        audio_hold_.store(false);
 +        sendPlayDone();
 +    }

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import threading
 import unittest
 
 from stacky.body.controller import BodyPresence, StackChanBodyController
@@ -193,6 +194,44 @@ class BodyControllerRawAudioTest(unittest.TestCase):
 
         self.assertEqual(sent[0].type, "audio.stop")
         self.assertGreater(controller._audio_done_generation, before)  # type: ignore[attr-defined]
+
+    def test_raw_audio_header_and_body_are_sent_atomically(self) -> None:
+        class BlockingSocket:
+            def __init__(self) -> None:
+                self.sent: list[bytes] = []
+                self.first_send_started = threading.Event()
+                self.release_first_send = threading.Event()
+                self.lock = threading.Lock()
+
+            def sendall(self, data: bytes) -> None:
+                with self.lock:
+                    self.sent.append(data)
+                    is_first = len(self.sent) == 1
+                if is_first:
+                    self.first_send_started.set()
+                    self.release_first_send.wait(timeout=1.0)
+
+        fake_socket = BlockingSocket()
+        controller = StackChanBodyController()
+        controller._client = fake_socket  # type: ignore[attr-defined]
+
+        audio_thread = threading.Thread(
+            target=lambda: controller._send_audio_raw_chunk(b"\x01\x02\x03\x04", seq=7),  # type: ignore[attr-defined]
+        )
+        audio_thread.start()
+        self.assertTrue(fake_socket.first_send_started.wait(timeout=1.0))
+
+        body_thread = threading.Thread(target=lambda: controller.set_leds(r=1, g=2, b=3))
+        body_thread.start()
+        fake_socket.release_first_send.set()
+        audio_thread.join(timeout=1.0)
+        body_thread.join(timeout=1.0)
+
+        self.assertFalse(audio_thread.is_alive())
+        self.assertFalse(body_thread.is_alive())
+        self.assertIn(b'"type":"audio.raw"', fake_socket.sent[0])
+        self.assertEqual(fake_socket.sent[1], b"\x01\x02\x03\x04")
+        self.assertIn(b'"type":"body.leds"', fake_socket.sent[2])
 
     def test_controller_sends_vision_capture_command(self) -> None:
         sent = []

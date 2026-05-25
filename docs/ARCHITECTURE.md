@@ -25,7 +25,7 @@ The body protocol is newline-delimited JSON over TCP in v1:
 
 Audio is represented as base64 PCM frames first. That is not the final fastest transport, but it is easy to inspect while the custom CoreS3 firmware comes online.
 
-`BodyDirector` adds restrained personality: small semantic reply motions, sparse autonomous presence ticks, and LEDs shaped by presence mode and Stacky's current mood. These signals never imply permission to act.
+`BodyDirector` adds restrained personality: small semantic reply motions, sparse autonomous presence ticks, and LEDs shaped by presence mode and Stacky's current mood. The StackChan bridge keeps playback asynchronous so these body signals can run while audio is playing. These signals never imply permission to act.
 
 ## Sandcode
 

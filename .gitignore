@@ -16,6 +16,7 @@ data/stacky/*.sqlite
 data/stacky/*.sqlite-*
 data/stacky/*.sqlite.backup-*
 data/stacky/body_calibration.json
+data/stacky/memory_map.json
 data/stacky/personality/
 data/stacky/sessions/
 firmware/stacky_cores3/include/wifi_secrets.h

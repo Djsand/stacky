@@ -49,6 +49,7 @@ class StackChanBodyController:
         self._stop = threading.Event()
         self._connected = threading.Event()
         self._lock = threading.Lock()
+        self._send_lock = threading.Lock()
         self._thread: threading.Thread | None = None
         self._server: socket.socket | None = None
         self._client: socket.socket | None = None
@@ -276,7 +277,8 @@ class StackChanBodyController:
         if client is None:
             return False
         try:
-            client.sendall(payload)
+            with self._send_lock:
+                client.sendall(payload)
             return True
         except OSError:
             self._drop_client()
@@ -300,8 +302,9 @@ class StackChanBodyController:
         if client is None:
             return False
         try:
-            client.sendall(header)
-            client.sendall(chunk)
+            with self._send_lock:
+                client.sendall(header)
+                client.sendall(chunk)
             return True
         except OSError:
             self._drop_client()
