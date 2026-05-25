@@ -48,6 +48,7 @@ from .monitor import (
     monitor_prompt_for_observation,
 )
 from .personality import StackySelfModel
+from .runtime_state import RuntimeState
 from .sandcode import (
     SandcodeDanishSummarizer,
     SandcodeError,
@@ -1733,6 +1734,7 @@ async def _handsfree(
         else None
     )
     sandcode_client = SandcodeMobileHostClient(config.sandcode) if not listen_only else None
+    runtime_state = RuntimeState()
     monitor_enabled = (config.monitor.enabled if monitor is None else monitor) and not listen_only
     monitor_queue: asyncio.Queue[MonitorObservation] | None = (
         asyncio.Queue(maxsize=8) if monitor_enabled else None
@@ -2142,6 +2144,7 @@ async def _handsfree(
                         session_source="stacky-monitor",
                         observe_turn=False,
                         monitor_context=monitor_context,
+                        runtime_context=runtime_state.context_for_prompt(),
                     )
                     set_body_state("speaking")
                     if body_director is not None:
@@ -2521,6 +2524,13 @@ async def _handsfree(
                 set_body_state("thinking")
                 cwd = _resolve_sandcode_cwd(config, "")
                 if sandcode_action.prompt == "__cancel__":
+                    runtime_state.record_action(
+                        kind="sandcode_agent",
+                        status="failed",
+                        summary="Sandcode-agent cancel er ikke understoettet fra voice endnu.",
+                        error="voice cancel unsupported",
+                        can_speak_about=("sandcode_agent", "runtime_action"),
+                    )
                     spoken_reply = "Jeg kan ikke afbryde en kørende Sandcode-session fra voice endnu."
                     record_local_turn(text, spoken_reply)
                     await speak_reply(spoken_reply)
@@ -2536,6 +2546,7 @@ async def _handsfree(
                     set_body_state("listening")
                     accepting_audio = True
                     continue
+                runtime_state.mark_sandcode_starting(sandcode_action.prompt)
                 lead_reply = _sandcode_lead_reply(
                     sandcode_action.prompt,
                     presence_mode=brain.presence_mode() if brain is not None else "stille_ven",
@@ -2551,6 +2562,7 @@ async def _handsfree(
                 async def speak_sandcode_update(update: str) -> None:
                     nonlocal spoken_updates
                     print(f"[Sandcode] {update}", flush=True)
+                    runtime_state.mark_sandcode_running(sandcode_action.prompt, note=update)
                     if not _should_speak_sandcode_update(update, spoken_updates=spoken_updates):
                         return
                     spoken_updates += 1
@@ -2566,6 +2578,7 @@ async def _handsfree(
                         on_update=speak_sandcode_update,
                         chat_only=sandcode_action.chat_only,
                     )
+                    runtime_state.mark_sandcode_done(sandcode_action.prompt, session_id=session.session_id)
                     brain.remember_memory_map(
                         f"Seneste Sandcode-agentkørsel: {sandcode_action.prompt}. Session: {session.session_id}.",
                         source="sandcode-agent",
@@ -2574,6 +2587,7 @@ async def _handsfree(
                         set_body_state("speaking")
                         await speak_reply(f"Agenten er færdig. Sessionen hedder {session.session_id}.")
                 except SandcodeError as exc:
+                    runtime_state.mark_sandcode_failed(sandcode_action.prompt, str(exc))
                     error_reply = f"Agenten kunne ikke starte: {exc}"
                     print(f"[Sandcode] {error_reply}", flush=True)
                     brain.remember_memory_map(
@@ -2597,6 +2611,16 @@ async def _handsfree(
             early_web_context = ""
             if web_context_provider is not None:
                 early_web_context = await web_context_provider(text)
+                if early_web_context:
+                    web_first_line = early_web_context.splitlines()[0]
+                    web_failed = "fejlede" in web_first_line.lower()
+                    runtime_state.record_action(
+                        kind="web_search",
+                        status="failed" if web_failed else "done",
+                        summary=web_first_line[:240],
+                        error=web_first_line[:240] if web_failed else "",
+                        can_speak_about=("web_search", "runtime_action"),
+                    )
             computer_action = None
             if not early_web_context:
                 computer_action = (
@@ -2609,6 +2633,14 @@ async def _handsfree(
                 set_body_state("thinking")
                 result = await asyncio.to_thread(computer_actions.run, computer_action)
                 print(f"[computer] {computer_action.kind} ok={result.ok} detail={result.detail}", flush=True)
+                runtime_state.record_action(
+                    kind=f"computer:{computer_action.kind}",
+                    status="done" if result.ok else "failed",
+                    summary=result.spoken,
+                    detail=result.detail,
+                    error="" if result.ok else result.detail,
+                    can_speak_about=("computer_action", "runtime_action"),
+                )
                 spoken_reply = result.spoken
                 record_local_turn(text, spoken_reply)
                 set_body_state("happy" if result.ok else "thinking")
@@ -2662,6 +2694,7 @@ async def _handsfree(
                 web_context=web_context,
                 computer_context=computer_context,
                 monitor_context=monitor_context,
+                runtime_context=runtime_state.context_for_prompt(),
             )
             sync_body_personality()
             brain_seconds = time.perf_counter() - brain_started

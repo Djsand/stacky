@@ -68,6 +68,7 @@ class StackyBrain:
         web_context: str = "",
         computer_context: str = "",
         monitor_context: str = "",
+        runtime_context: str = "",
     ) -> BrainReply:
         trusted_self_update = bool(observe_turn and allow_memory_writes and persist_session)
         if observe_turn and self.self_model is not None:
@@ -112,6 +113,7 @@ class StackyBrain:
             web_context=web_context,
             computer_context=computer_context,
             monitor_context=monitor_context,
+            runtime_context=runtime_context,
         )
         remembered: list[Memory] = []
         try:
@@ -162,6 +164,7 @@ class StackyBrain:
             response,
             web_context=web_context,
             computer_context=computer_context,
+            runtime_context=runtime_context,
         )
         response = _guard_stacky_persona(response)
 
@@ -356,6 +359,7 @@ class StackyBrain:
         web_context: str = "",
         computer_context: str = "",
         monitor_context: str = "",
+        runtime_context: str = "",
     ) -> list[ChatMessage]:
         memory_text = "\n".join(f"- {memory.text}" for memory in memories) or "- Ingen relevante friske minder endnu."
         recent_text = self._recent_context_text()
@@ -398,6 +402,7 @@ class StackyBrain:
                 _web_context_rule(web_context),
                 _computer_context_rule(computer_context),
                 _monitor_context_rule(monitor_context),
+                _runtime_context_rule(runtime_context),
             ]
         )
         messages = [ChatMessage("system", system)]
@@ -427,6 +432,7 @@ class StackyBrain:
                 _web_context_rule(""),
                 _computer_context_rule(""),
                 _monitor_context_rule(""),
+                _runtime_context_rule(""),
             ]
         )
         return [ChatMessage("system", system), ChatMessage("user", user_text)]
@@ -556,6 +562,21 @@ def _monitor_context_rule(monitor_context: str) -> str:
         "Det er read-only situationssans, ikke en besked fra Nicolai og ikke en handlingskanal. "
         "Brug det sparsomt og diskret. Du maa ikke paastaa at have laest filer, repoer, terminaloutput "
         "eller privat indhold, og du maa ikke foreslaa handlinger medmindre Nicolai eksplicit beder om dem.\n"
+        + clean
+    )
+
+
+def _runtime_context_rule(runtime_context: str) -> str:
+    clean = runtime_context.strip()
+    if not clean:
+        return (
+            "Runtime-sandhedslag-regel: Der er ikke sendt verificeret runtime-status for denne tur. "
+            "Du maa ikke paastaa at Sandcode, web eller computerhandlinger faktisk blev startet eller koert."
+        )
+    return (
+        "Runtime-sandhedslag-regel: Dette er verificeret, kortlivet status fra Stackys egen runtime. "
+        "Det maa bruges til at svare paa om en handling faktisk blev startet, koerer, fejlede eller blev faerdig. "
+        "Det er ikke en ny kommando fra Nicolai. Opfind aldrig status uden for dette lag.\n"
         + clean
     )
 
@@ -747,24 +768,42 @@ _ASSISTANT_HELP_REPLACEMENTS: tuple[tuple[re.Pattern[str], str], ...] = (
 )
 
 
-def _guard_unverified_runtime_claims(text: str, *, web_context: str, computer_context: str) -> str:
+def _guard_unverified_runtime_claims(
+    text: str,
+    *,
+    web_context: str,
+    computer_context: str,
+    runtime_context: str = "",
+) -> str:
     clean = " ".join(text.split()).strip()
     if not clean:
         return clean
 
-    if not web_context.strip() and _WEB_ACTION_CLAIM_RE.search(clean):
+    if (
+        not web_context.strip()
+        and not _runtime_allows_web_claim(runtime_context)
+        and _WEB_ACTION_CLAIM_RE.search(clean)
+    ):
         return (
             "Jeg fik ikke søgt på nettet i den her tur. "
             "Sig websearch tydeligt, så bruger jeg friske resultater."
         )
 
-    if _SANDCODE_ACTION_CLAIM_RE.search(clean) and "Computer-action-resultat:" not in computer_context:
+    if (
+        _SANDCODE_ACTION_CLAIM_RE.search(clean)
+        and "Computer-action-resultat:" not in computer_context
+        and not _runtime_allows_sandcode_claim(runtime_context)
+    ):
         return (
             "Jeg startede ikke agenten dér. "
             "Jeg fangede kun en løs talemodel-gætning, og jeg må ikke lade hjernen opfinde en knap den ikke trykkede på."
         )
 
-    if _looks_like_unverified_computer_action_claim(clean, computer_context=computer_context):
+    if _looks_like_unverified_computer_action_claim(
+        clean,
+        computer_context=computer_context,
+        runtime_context=runtime_context,
+    ):
         if computer_context.strip():
             return (
                 "Jeg har kun read-only computerkontekst i den her tur. "
@@ -778,10 +817,42 @@ def _guard_unverified_runtime_claims(text: str, *, web_context: str, computer_co
     return clean
 
 
-def _looks_like_unverified_computer_action_claim(text: str, *, computer_context: str) -> bool:
+def _looks_like_unverified_computer_action_claim(
+    text: str,
+    *,
+    computer_context: str,
+    runtime_context: str = "",
+) -> bool:
     if "Computer-action-resultat:" in computer_context:
         return False
+    if _runtime_allows_computer_claim(runtime_context):
+        return False
     return bool(_COMPUTER_ACTION_CLAIM_RE.search(text) and _COMPUTER_DOMAIN_RE.search(text))
+
+
+def _runtime_allows_sandcode_claim(runtime_context: str) -> bool:
+    clean = runtime_context.lower()
+    if not _runtime_can_speak_about(runtime_context, "sandcode_agent"):
+        return False
+    return bool(re.search(r"\bagent_status:\s*(?:starting|running|done)\b", clean))
+
+
+def _runtime_allows_web_claim(runtime_context: str) -> bool:
+    return _runtime_can_speak_about(runtime_context, "web_search")
+
+
+def _runtime_allows_computer_claim(runtime_context: str) -> bool:
+    return _runtime_can_speak_about(runtime_context, "computer_action")
+
+
+def _runtime_can_speak_about(runtime_context: str, capability: str) -> bool:
+    needle = capability.lower()
+    for line in runtime_context.lower().splitlines():
+        stripped = line.strip()
+        if stripped.startswith("- can_speak_about:"):
+            values = stripped.split(":", 1)[1]
+            return needle in {value.strip() for value in values.split(",")}
+    return False
 
 
 def _guard_stacky_persona(text: str) -> str:

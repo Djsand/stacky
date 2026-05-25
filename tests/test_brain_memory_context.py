@@ -257,6 +257,27 @@ class BrainMemoryContextTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("ikke en handlingskanal", system)
         self.assertIn("Aktivt vindue: Code", system)
 
+    async def test_runtime_context_is_included_as_verified_truth_layer(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = MemoryStore(Path(tmp) / "memory.sqlite")
+            llm = FakeLLM()
+            brain = StackyBrain(StackySoul(created_for="Nicolai"), memory, llm)  # type: ignore[arg-type]
+
+            await brain.respond(
+                "koerer agenten",
+                runtime_context=(
+                    "Runtime-sandhedslag (kortlivet, verificeret af Stackys runtime):\n"
+                    "- agent_status: running\n"
+                    "- can_speak_about: sandcode_agent, runtime_action"
+                ),
+            )
+
+        system = llm.messages[0][0].content
+        self.assertIn("Runtime-sandhedslag-regel", system)
+        self.assertIn("agent_status: running", system)
+        self.assertIn("can_speak_about: sandcode_agent", system)
+        self.assertIn("Opfind aldrig status uden for dette lag", system)
+
     async def test_no_computer_context_blocks_terminal_claims(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             memory = MemoryStore(Path(tmp) / "memory.sqlite")
@@ -296,6 +317,27 @@ class BrainMemoryContextTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertIn("Jeg startede ikke agenten", reply.text)
         self.assertIn("opfinde en knap", reply.text)
+
+    async def test_verified_runtime_sandcode_agent_claim_is_allowed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = MemoryStore(Path(tmp) / "memory.sqlite")
+            brain = StackyBrain(  # type: ignore[arg-type]
+                StackySoul(created_for="Nicolai"),
+                memory,
+                FixedFakeLLM("Sandcode-agenten er klar nu."),
+            )
+
+            reply = await brain.respond(
+                "koerer agenten",
+                runtime_context=(
+                    "Runtime-sandhedslag (kortlivet, verificeret af Stackys runtime):\n"
+                    "- agent_status: running\n"
+                    "- can_speak_about: sandcode_agent, runtime_action"
+                ),
+            )
+
+        self.assertEqual(reply.text, "Sandcode-agenten er klar nu.")
+        self.assertNotIn("Jeg startede ikke agenten", reply.text)
 
     async def test_read_only_computer_context_does_not_allow_free_action_claim(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
