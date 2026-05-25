@@ -371,6 +371,39 @@ class BrainMemoryContextTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(plan.say, "")
         self.assertEqual(plan.actions, ())
 
+    async def test_brain_tool_plan_fallback_cancels_running_agent_without_trigger_word(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = MemoryStore(Path(tmp) / "memory.sqlite")
+            brain = StackyBrain(  # type: ignore[arg-type]
+                StackySoul(created_for="Nicolai"),
+                memory,
+                FixedFakeLLM('{"say":"","actions":[]}'),
+            )
+
+            plan = await brain.plan_tools(
+                "stop den",
+                runtime_context="Runtime-sandhedslag:\n- agent_status: running\n- last_action: Sandcode-agent koerer",
+            )
+
+        self.assertEqual(plan.say, "Jeg stopper den.")
+        self.assertEqual(len(plan.actions), 1)
+        self.assertEqual(plan.actions[0].tool, "sandcode")
+        self.assertEqual(plan.actions[0].mode, "cancel")
+
+    async def test_brain_tool_plan_fallback_does_not_cancel_without_running_agent(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = MemoryStore(Path(tmp) / "memory.sqlite")
+            brain = StackyBrain(  # type: ignore[arg-type]
+                StackySoul(created_for="Nicolai"),
+                memory,
+                FixedFakeLLM('{"say":"","actions":[]}'),
+            )
+
+            plan = await brain.plan_tools("stop den")
+
+        self.assertEqual(plan.say, "")
+        self.assertEqual(plan.actions, ())
+
     async def test_no_computer_context_blocks_terminal_claims(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             memory = MemoryStore(Path(tmp) / "memory.sqlite")

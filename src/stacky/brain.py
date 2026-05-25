@@ -705,6 +705,11 @@ def _fallback_brain_tool_plan(
     folded = _fold_tool_text(user_text)
     if not folded:
         return BrainToolPlan()
+    if _runtime_agent_is_busy(runtime_context) and _looks_like_implicit_cancel_tool_request(folded):
+        return BrainToolPlan(
+            say="Jeg stopper den.",
+            actions=(BrainToolAction(tool="sandcode", mode="cancel", chat_only=False),),
+        )
     if _runtime_agent_is_busy(runtime_context):
         return BrainToolPlan()
     if not _looks_like_implicit_project_action(folded):
@@ -775,6 +780,23 @@ def _looks_like_implicit_project_action(folded: str) -> bool:
 
 def _looks_like_read_only_tool_request(folded: str) -> bool:
     return any(token in folded for token in ("undersoeg", "tjek", "scan", "status", "se om", "virker"))
+
+
+def _looks_like_implicit_cancel_tool_request(folded: str) -> bool:
+    if len(folded.split()) > 6:
+        return False
+    return folded in {
+        "stop den",
+        "stop det",
+        "stop lige",
+        "stop den lige",
+        "afbryd den",
+        "afbryd det",
+        "annuller den",
+        "annuller det",
+        "luk den",
+        "luk det",
+    } or bool(re.fullmatch(r"(?:stop|afbryd|annuller|luk)\s+(?:den|det|lige|den lige|det lige)", folded))
 
 
 def _recent_context_supports_sandcode(recent_context: str) -> bool:
