@@ -300,6 +300,26 @@ class SandcodeDanishSummarizer:
             return compact_for_speech(f"Agenten meldte fejl: {event.get('message')}", max_chars=260)
         return None
 
+    def summarize_heartbeat(self, *, elapsed_seconds: float, last_update: str = "") -> str:
+        elapsed = _format_elapsed(elapsed_seconds)
+        clean_update = compact_for_speech(last_update.strip(), max_chars=120) if last_update.strip() else ""
+        if clean_update:
+            return compact_for_speech(
+                f"Agenten arbejder stadig efter {elapsed}. Sidste livstegn: {clean_update}",
+                max_chars=220,
+            )
+        return f"Agenten arbejder stadig efter {elapsed}; jeg har ikke fået nye detaljer endnu."
+
+
+def _format_elapsed(seconds: float) -> str:
+    total = max(0, int(seconds))
+    minutes, secs = divmod(total, 60)
+    if minutes <= 0:
+        return f"{secs} sekunder"
+    if secs <= 0:
+        return f"{minutes} min"
+    return f"{minutes} min {secs} sek"
+
 
 def parse_sandcode_action(text: str) -> SandcodeAction | None:
     """Parse explicit Danish Sandcode requests.

@@ -279,6 +279,26 @@ class BodyDirectorTest(unittest.TestCase):
 
         self.assertEqual(fake.gestures, [("look_up", 0.10, 165)])
 
+    def test_speaking_tick_pulses_leds_and_adds_small_motion(self) -> None:
+        fake = FakeDirectorController()
+        director = BodyDirector(fake, BodyCalibration())  # type: ignore[arg-type]
+
+        self.assertTrue(director.speaking_tick("Jeg forklarer det lige.", now=10.0))
+        self.assertTrue(director.speaking_tick("Jeg forklarer det lige.", now=10.6))
+
+        self.assertEqual(fake.leds[-1]["mode"], "pulse")
+        self.assertEqual(fake.gestures, [("look_up", 0.07, 125)])
+
+    def test_speaking_tick_respects_do_not_disturb_mode(self) -> None:
+        fake = FakeDirectorController()
+        director = BodyDirector(fake, BodyCalibration())  # type: ignore[arg-type]
+        director.set_presence_mode("ikke_forstyr")
+
+        self.assertTrue(director.speaking_tick("Kort status.", now=10.0))
+
+        self.assertEqual(fake.leds[-1]["brightness"], 0.20)
+        self.assertEqual(fake.gestures, [])
+
     def test_touch_reaction_uses_small_feedback(self) -> None:
         fake = FakeDirectorController()
         director = BodyDirector(fake, BodyCalibration())  # type: ignore[arg-type]

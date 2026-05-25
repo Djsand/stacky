@@ -8,6 +8,7 @@ from stacky.brain import StackyBrain, _spoken_response_for_live
 from stacky.evolution import StackyEvolutionEngine
 from stacky.llm import ChatImageAttachment, ChatMessage, GeminiPromptBlockedError, LLMError
 from stacky.memory import MemoryStore
+from stacky.memory_map import MemoryMapStore
 from stacky.monitor import MonitorObservation
 from stacky.personality import StackySelfModel
 from stacky.sessions import InfiniteSessionStore, read_jsonl_messages
@@ -401,6 +402,44 @@ class BrainMemoryContextTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Stackys selvmodel", system)
         self.assertIn("generiske", system)
         self.assertEqual(self_model.summary()["trusted_turns"], 1)
+
+    async def test_memory_map_context_reminds_brain_about_sandcode_agent(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            memory = MemoryStore(root / "memory.sqlite")
+            memory_map = MemoryMapStore(root / "data" / "memory_map.json")
+            llm = FakeLLM()
+            brain = StackyBrain(
+                StackySoul(created_for="Nicolai"),
+                memory,
+                llm,  # type: ignore[arg-type]
+                memory_map=memory_map,
+            )
+
+            await brain.respond("kan du bruge agenten")
+
+        system = llm.messages[0][0].content
+        self.assertIn("Stackys memory-map", system)
+        self.assertIn("Sandcode-agent", system)
+        self.assertIn("eksplicit kommando", system)
+
+    def test_brain_can_write_memory_map_directly(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            memory = MemoryStore(root / "memory.sqlite")
+            memory_map = MemoryMapStore(root / "data" / "memory_map.json")
+            brain = StackyBrain(
+                StackySoul(created_for="Nicolai"),
+                memory,
+                LongFakeLLM(),  # type: ignore[arg-type]
+                memory_map=memory_map,
+            )
+
+            spoken = brain.remember_memory_map("agenten skal give proaktive statusbeskeder")
+            reply = brain.memory_map_reply("agent status")
+
+        self.assertIn("røde tråd", spoken)
+        self.assertIn("proaktive statusbeskeder", reply)
 
     async def test_evolution_context_is_included_and_updated_for_trusted_turns(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

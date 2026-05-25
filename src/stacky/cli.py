@@ -39,6 +39,7 @@ from .evolution import StackyEvolutionEngine
 from .llm import create_chat_client
 from .llm import ChatImageAttachment
 from .memory import MemoryStore
+from .memory_map import MemoryMapStore
 from .monitor import (
     DefaultMonitorProbe,
     GlobalFriendMonitor,
@@ -1129,6 +1130,7 @@ def _create_brain(config) -> StackyBrain:
     memory = MemoryStore(config.memory_path)
     self_model = StackySelfModel(config.data_dir)
     evolution = StackyEvolutionEngine(config.data_dir)
+    memory_map = MemoryMapStore(config.data_dir / "memory_map.json")
     return StackyBrain(
         soul,
         memory,
@@ -1136,6 +1138,7 @@ def _create_brain(config) -> StackyBrain:
         InfiniteSessionStore(config.data_dir),
         self_model,
         evolution,
+        memory_map,
     )
 
 
@@ -1229,9 +1232,12 @@ def _self_status(config_path: str) -> int:
     config = load_config(config_path)
     self_model = StackySelfModel(config.data_dir)
     evolution = StackyEvolutionEngine(config.data_dir)
+    memory_map = MemoryMapStore(config.data_dir / "memory_map.json")
     summary = self_model.summary()
     evolution_summary = evolution.summary()
+    memory_map_summary = memory_map.summary()
     print(f"Stacky self-model: {summary['path']}")
+    print(f"Stacky memory-map: {memory_map_summary['path']} ({memory_map_summary['count']} entries)")
     print(f"Trusted turns: {summary['trusted_turns']}")
     print(f"Untrusted voice turns: {summary['untrusted_turns']}")
     print(f"Tid: {summary['temporal']['wall_clock']} ({summary['temporal']['continuity']})")
@@ -2044,8 +2050,27 @@ async def _handsfree(
         nonlocal last_stacky_speech_at
         if output is None:
             return
-        await output.speak(spoken)
-        await output.wait()
+        speaking_animation_task = (
+            asyncio.create_task(
+                _speaking_body_loop(
+                    body_director,
+                    spoken,
+                    on_motion=guard_audio_after_body_motion,
+                )
+            )
+            if body_director is not None
+            else None
+        )
+        try:
+            await output.speak(spoken)
+            await output.wait()
+        finally:
+            if speaking_animation_task is not None:
+                speaking_animation_task.cancel()
+                try:
+                    await speaking_animation_task
+                except asyncio.CancelledError:
+                    pass
         last_stacky_speech_at = time.monotonic()
         if friend_monitor is not None:
             friend_monitor.mark_stacky_speech(last_stacky_speech_at)
@@ -2196,6 +2221,125 @@ async def _handsfree(
                 accepting_audio = True
                 continue
             if brain is None or output is None:
+                set_body_state("listening")
+                accepting_audio = True
+                continue
+            presence_command = _parse_presence_mode_command(text)
+            if presence_command is not None:
+                reply_started = time.perf_counter()
+                mode = brain.set_presence_mode(presence_command.mode, source="stackchan-voice-command")
+                sync_body_personality()
+                print(f"[Stacky] presence_mode={mode}", flush=True)
+                set_body_state("happy")
+                speak_started = time.perf_counter()
+                record_local_turn(text, presence_command.spoken)
+                await speak_reply(presence_command.spoken)
+                speak_seconds = time.perf_counter() - speak_started
+                print(
+                    f"[timing] stt={stt_seconds:.2f}s presence={time.perf_counter() - reply_started:.2f}s "
+                    f"tts_send={speak_seconds:.2f}s total={time.perf_counter() - pipeline_started:.2f}s",
+                    flush=True,
+                )
+                _drain_queue(audio_queue)
+                detector.reset()
+                await asyncio.sleep(0.25)
+                set_body_state("listening")
+                accepting_audio = True
+                continue
+            memory_write = _parse_memory_map_write_command(text)
+            if memory_write is not None:
+                reply_started = time.perf_counter()
+                spoken_reply = brain.remember_memory_map(memory_write, source="stackchan-voice-command")
+                record_local_turn(text, spoken_reply)
+                set_body_state("happy")
+                speak_started = time.perf_counter()
+                await speak_reply(spoken_reply)
+                speak_seconds = time.perf_counter() - speak_started
+                print(
+                    f"[timing] stt={stt_seconds:.2f}s memory_map={time.perf_counter() - reply_started:.2f}s "
+                    f"tts_send={speak_seconds:.2f}s total={time.perf_counter() - pipeline_started:.2f}s",
+                    flush=True,
+                )
+                _drain_queue(audio_queue)
+                detector.reset()
+                await asyncio.sleep(0.25)
+                set_body_state("listening")
+                accepting_audio = True
+                continue
+            if _wants_capability_report(text):
+                reply_started = time.perf_counter()
+                spoken_reply = brain.capability_reply()
+                record_local_turn(text, spoken_reply)
+                set_body_state("speaking")
+                speak_started = time.perf_counter()
+                await speak_reply(spoken_reply)
+                speak_seconds = time.perf_counter() - speak_started
+                print(
+                    f"[timing] stt={stt_seconds:.2f}s capability={time.perf_counter() - reply_started:.2f}s "
+                    f"tts_send={speak_seconds:.2f}s total={time.perf_counter() - pipeline_started:.2f}s",
+                    flush=True,
+                )
+                _drain_queue(audio_queue)
+                detector.reset()
+                await asyncio.sleep(0.25)
+                set_body_state("listening")
+                accepting_audio = True
+                continue
+            if _wants_memory_map_recall(text):
+                reply_started = time.perf_counter()
+                spoken_reply = brain.memory_map_reply(text)
+                record_local_turn(text, spoken_reply)
+                set_body_state("speaking")
+                speak_started = time.perf_counter()
+                await speak_reply(spoken_reply)
+                speak_seconds = time.perf_counter() - speak_started
+                print(
+                    f"[timing] stt={stt_seconds:.2f}s memory_map={time.perf_counter() - reply_started:.2f}s "
+                    f"tts_send={speak_seconds:.2f}s total={time.perf_counter() - pipeline_started:.2f}s",
+                    flush=True,
+                )
+                _drain_queue(audio_queue)
+                detector.reset()
+                await asyncio.sleep(0.25)
+                set_body_state("listening")
+                accepting_audio = True
+                continue
+            if _wants_sense_diary_recall(text):
+                reply_started = time.perf_counter()
+                set_body_state("thinking")
+                spoken_reply = brain.sense_diary_reply()
+                record_local_turn(text, spoken_reply)
+                set_body_state("speaking")
+                speak_started = time.perf_counter()
+                await speak_reply(spoken_reply)
+                speak_seconds = time.perf_counter() - speak_started
+                print(
+                    f"[timing] stt={stt_seconds:.2f}s sense_diary={time.perf_counter() - reply_started:.2f}s "
+                    f"tts_send={speak_seconds:.2f}s total={time.perf_counter() - pipeline_started:.2f}s",
+                    flush=True,
+                )
+                _drain_queue(audio_queue)
+                detector.reset()
+                await asyncio.sleep(0.25)
+                set_body_state("listening")
+                accepting_audio = True
+                continue
+            if _wants_stacky_state_report(text):
+                reply_started = time.perf_counter()
+                spoken_reply = brain.stacky_state_reply()
+                record_local_turn(text, spoken_reply)
+                set_body_state("speaking")
+                speak_started = time.perf_counter()
+                await speak_reply(spoken_reply)
+                speak_seconds = time.perf_counter() - speak_started
+                print(
+                    f"[timing] stt={stt_seconds:.2f}s stacky_state={time.perf_counter() - reply_started:.2f}s "
+                    f"tts_send={speak_seconds:.2f}s total={time.perf_counter() - pipeline_started:.2f}s",
+                    flush=True,
+                )
+                _drain_queue(audio_queue)
+                detector.reset()
+                await asyncio.sleep(0.25)
                 set_body_state("listening")
                 accepting_audio = True
                 continue
@@ -2400,7 +2544,7 @@ async def _handsfree(
                 async def speak_sandcode_update(update: str) -> None:
                     nonlocal spoken_updates
                     print(f"[Sandcode] {update}", flush=True)
-                    if spoken_updates >= 4 and not update.startswith(("Agenten melder", "Agenten meldte fejl")):
+                    if not _should_speak_sandcode_update(update, spoken_updates=spoken_updates):
                         return
                     spoken_updates += 1
                     set_body_state("thinking")
@@ -2414,11 +2558,19 @@ async def _handsfree(
                         on_update=speak_sandcode_update,
                         chat_only=sandcode_action.chat_only,
                     )
+                    brain.remember_memory_map(
+                        f"Seneste Sandcode-agentkørsel: {sandcode_action.prompt}. Session: {session.session_id}.",
+                        source="sandcode-agent",
+                    )
                     if spoken_updates == 0:
                         await speak_reply(f"Agenten er færdig. Sessionen hedder {session.session_id}.")
                 except SandcodeError as exc:
                     error_reply = f"Agenten kunne ikke starte: {exc}"
                     print(f"[Sandcode] {error_reply}", flush=True)
+                    brain.remember_memory_map(
+                        f"Sandcode-agenten kunne ikke starte for opgaven: {sandcode_action.prompt}. Fejl: {exc}.",
+                        source="sandcode-agent",
+                    )
                     await speak_reply(error_reply)
                 set_body_state("happy")
                 print(
@@ -2594,6 +2746,17 @@ def _sandcode_lead_reply(prompt: str, *, presence_mode: str = "stille_ven") -> s
     return "Jeg sender agenten afsted. Jeg bliver her."
 
 
+def _should_speak_sandcode_update(update: str, *, spoken_updates: int) -> bool:
+    clean = update.strip()
+    if not clean:
+        return False
+    if clean.startswith(("Agenten melder", "Agenten meldte fejl", "Agenten er færdig", "Jeg har afbrudt")):
+        return True
+    if clean.startswith("Agenten arbejder stadig"):
+        return spoken_updates < 10
+    return spoken_updates < 5
+
+
 def _drain_queue(queue: asyncio.Queue[tuple[bytes, int, int]]) -> None:
     while True:
         try:
@@ -2608,6 +2771,26 @@ async def _delayed_reply_motion(director: BodyDirector, text: str, *, delay_seco
         await asyncio.to_thread(director.reply_started, text)
     except Exception as exc:  # pragma: no cover - body motion must never break speech.
         print(f"[Stacky] body motion skipped: {exc}", flush=True)
+
+
+async def _speaking_body_loop(
+    director: BodyDirector,
+    text: str,
+    *,
+    on_motion: Callable[[], None] | None = None,
+    interval_seconds: float = 0.18,
+) -> None:
+    interval_seconds = max(0.12, float(interval_seconds))
+    while True:
+        await asyncio.sleep(interval_seconds)
+        try:
+            before = director.last_motion_at
+            await asyncio.to_thread(director.speaking_tick, text)
+            if director.last_motion_at > before and on_motion is not None:
+                on_motion()
+        except Exception as exc:  # pragma: no cover - speech animation must not break audio.
+            print(f"[Stacky] speaking animation skipped: {exc}", flush=True)
+            return
 
 
 def _should_track_face_runtime(
@@ -3115,6 +3298,149 @@ def _parse_local_realtime_reply(text: str) -> str | None:
     return None
 
 
+def _parse_presence_mode_command(text: str) -> PresenceModeCommand | None:
+    key = _motion_text_key(text)
+    if not key:
+        return None
+    if any(token in key for token in ("ikkeforstyr", "forstyrikke", "donotdisturb", "dontdisturb")):
+        return PresenceModeCommand("ikke_forstyr", "Okay. Jeg går i ikke-forstyr og holder mig næsten helt stille.")
+    if "agentvagt" in key or ("hold" in key and "agent" in key and ("oeje" in key or "oje" in key or "vagt" in key)):
+        return PresenceModeCommand("agent_vagt", "Okay. Agent-vagt er på; jeg holder øje uden at råbe brandalarm for en hoste.")
+    if any(
+        token in key
+        for token in (
+            "vagenmakker",
+            "vaagenmakker",
+            "merevagen",
+            "merevaagen",
+            "vaarvagenmakker",
+            "vaervagenmakker",
+            "vaervaagenmakker",
+        )
+    ):
+        return PresenceModeCommand("vaagen_makker", "Okay. Vågen makker: mere opmærksom, stadig uden kontorstolenergi.")
+    if (
+        ("morkhumor" in key or "moerkhumor" in key or "darkhumor" in key or "galgenhumor" in key)
+        and ("lavtblus" in key or "lavblus" in key or "paalavtblus" in key or "palavtblus" in key)
+    ):
+        return PresenceModeCommand("moerk_humor_lavt_blus", "Okay. Mørk humor på lavt blus, ikke kirkegård med konfetti.")
+    if any(token in key for token in ("stilleven", "sparsomven", "merestille", "vaerstille", "varstille")):
+        return PresenceModeCommand("stille_ven", "Okay. Stille ven igen; jeg er her, bare uden trommesolo.")
+    return None
+
+
+def _parse_memory_map_write_command(text: str) -> str | None:
+    clean = re.sub(r"\s+", " ", text).strip(" .,:;-")
+    if not clean:
+        return None
+    lowered = clean.lower()
+    if lowered.startswith(("husk mig", "mind mig")):
+        return None
+    patterns = (
+        r"(?i)^\s*husk\s+(?:at\s+)?(.+)$",
+        r"(?i)^\s*gem\s+(?:i\s+(?:din\s+)?(?:memory[- ]map|hukommelse|røde tråd|rode traad)\s+)?(?:at\s+)?(.+)$",
+        r"(?i)^\s*skriv\s+(?:i\s+(?:din\s+)?(?:memory[- ]map|hukommelse|røde tråd|rode traad)\s+)(?:at\s+)?(.+)$",
+    )
+    for pattern in patterns:
+        match = re.match(pattern, clean)
+        if not match:
+            continue
+        note = re.sub(r"\s+", " ", match.group(1)).strip(" .,:;-")
+        if len(note) >= 6:
+            return note
+    return None
+
+
+def _wants_capability_report(text: str) -> bool:
+    key = _motion_text_key(text)
+    if not key:
+        return False
+    return any(
+        token in key
+        for token in (
+            "hvadkandulave",
+            "hvadkandugore",
+            "hvadkandugøre",
+            "hvilkefunktionerhardu",
+            "kan dubrugeagenten",
+            "kandubrugeagenten",
+            "harduagentfunktionen",
+            "hardusandcode",
+            "kandustartesandcode",
+            "kandustarteagenten",
+        )
+    )
+
+
+def _wants_memory_map_recall(text: str) -> bool:
+    key = _motion_text_key(text)
+    if not key:
+        return False
+    return any(
+        token in key
+        for token in (
+            "hvadhuskerdu",
+            "hvadkanduhuske",
+            "hvaderdenrodetrad",
+            "hvaderdenrodetråd",
+            "hvaderdinrodetrad",
+            "hvaderdinrodetråd",
+            "vismemorymap",
+            "visdinmemorymap",
+            "memorymap",
+            "hukommelsesindex",
+            "hukommelseindex",
+        )
+    )
+
+
+def _wants_sense_diary_recall(text: str) -> bool:
+    key = _motion_text_key(text)
+    if not key:
+        return False
+    return any(
+        token in key
+        for token in (
+            "hvadlagdumaerketil",
+            "hvadlagtdumaerketil",
+            "hvadlagdumerketil",
+            "hvadlagtdumerketil",
+            "hvadhardulagtmaerketil",
+            "hvadhardulagtmerketil",
+            "hvadhardulagtmarketil",
+            "hvadbardulagtmaerketil",
+            "hvadbardulagtmerketil",
+            "sensedagbog",
+            "sansedagbog",
+            "hvadbardubemaerket",
+            "hvadbardubemerket",
+            "hvadhardubemaerket",
+            "hvadhardubemerket",
+        )
+    )
+
+
+def _wants_stacky_state_report(text: str) -> bool:
+    key = _motion_text_key(text)
+    if not key:
+        return False
+    return any(
+        token in key
+        for token in (
+            "hvordanfoelesdet",
+            "hvordanfolesdet",
+            "hvordanhardudet",
+            "hvilkenmode",
+            "hvilkentilstand",
+            "hvilkenpresence",
+            "presence status",
+            "presencestatus",
+            "hvadmodeerd",
+            "hvadmodeerdu",
+        )
+    )
+
+
 def _wants_visual_context(text: str) -> bool:
     lowered = text.lower()
     key = _transcript_key(text)
@@ -3241,6 +3567,12 @@ class BrightnessCommand:
     level: int
     direction: int = 0
     spoken: str = "Okay, jeg justerer skærmens lysstyrke."
+
+
+@dataclass(frozen=True)
+class PresenceModeCommand:
+    mode: str
+    spoken: str
 
 
 def _run_motion_gesture(actor: BodyDirector | StackChanBodyController | None, gesture_name: str, *, speed: int = 550) -> bool:
@@ -3640,15 +3972,25 @@ async def _run_sandcode_with_updates(
     *,
     on_update: Callable[[str], Awaitable[None]],
     chat_only: bool = False,
+    heartbeat_seconds: float = 25.0,
 ) -> SandcodeSession:
     summarizer = SandcodeDanishSummarizer()
     queue: asyncio.Queue[str | None] = asyncio.Queue()
     loop = asyncio.get_running_loop()
+    started_at = loop.time()
+    last_update_at = started_at
+    last_update = ""
+
+    def enqueue_update(spoken: str) -> None:
+        nonlocal last_update_at, last_update
+        last_update_at = loop.time()
+        last_update = spoken
+        loop.call_soon_threadsafe(queue.put_nowait, spoken)
 
     def on_event(event: dict[str, object]) -> None:
         spoken = summarizer.summarize_event(event)
         if spoken:
-            loop.call_soon_threadsafe(queue.put_nowait, spoken)
+            enqueue_update(spoken)
 
     async def run() -> SandcodeSession:
         try:
@@ -3656,13 +3998,35 @@ async def _run_sandcode_with_updates(
         finally:
             loop.call_soon_threadsafe(queue.put_nowait, None)
 
+    async def heartbeat() -> None:
+        interval = max(0.01, float(heartbeat_seconds))
+        while True:
+            await asyncio.sleep(interval)
+            if task.done():
+                return
+            if loop.time() - last_update_at >= interval:
+                enqueue_update(
+                    summarizer.summarize_heartbeat(
+                        elapsed_seconds=loop.time() - started_at,
+                        last_update=last_update,
+                    )
+                )
+
     task = asyncio.create_task(run())
-    while True:
-        update = await queue.get()
-        if update is None:
-            break
-        await on_update(update)
-    return await task
+    heartbeat_task = asyncio.create_task(heartbeat())
+    try:
+        while True:
+            update = await queue.get()
+            if update is None:
+                break
+            await on_update(update)
+        return await task
+    finally:
+        heartbeat_task.cancel()
+        try:
+            await heartbeat_task
+        except asyncio.CancelledError:
+            pass
 
 
 def _body_server(config_path: str, *, duration: float = 0.0) -> int:

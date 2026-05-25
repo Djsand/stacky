@@ -15,18 +15,26 @@ from stacky.cli import (
     _parse_battery_status_command,
     _parse_display_brightness_command,
     _parse_local_realtime_reply,
+    _parse_memory_map_write_command,
     _parse_motion_command,
+    _parse_presence_mode_command,
     _parse_stt_bench_spec,
     _parse_volume_command,
     _resolve_capture_speech_styles,
     _resolve_stt_bench_specs,
     _run_motion_gesture,
     _sandcode_lead_reply,
+    _should_speak_sandcode_update,
     _should_comment_on_monitor_observation,
     _should_capture_vision_runtime,
     _should_track_face_runtime,
+    _speaking_body_loop,
     _transcript_key,
     _voice_memory_policy,
+    _wants_capability_report,
+    _wants_memory_map_recall,
+    _wants_sense_diary_recall,
+    _wants_stacky_state_report,
     _wants_visual_context,
     _word_error_rate,
 )
@@ -53,6 +61,17 @@ class FakePresenceDirector:
 
     def presence_tick(self, state: str) -> bool:
         self.states.append(state)
+        self.last_motion_at += 1.0
+        return True
+
+
+class FakeSpeakingDirector:
+    def __init__(self) -> None:
+        self.last_motion_at = 0.0
+        self.texts: list[str] = []
+
+    def speaking_tick(self, text: str) -> bool:
+        self.texts.append(text)
         self.last_motion_at += 1.0
         return True
 
@@ -790,6 +809,44 @@ class HandsfreeHelpersTest(unittest.TestCase):
         self.assertEqual(_parse_local_realtime_reply("stop lige"), "Jeg venter.")
         self.assertIsNone(_parse_local_realtime_reply("hvad laver du"))
 
+    def test_parse_presence_mode_command(self) -> None:
+        self.assertEqual((_parse_presence_mode_command("gå i ikke-forstyr") or None).mode, "ikke_forstyr")
+        self.assertEqual((_parse_presence_mode_command("vær vågen makker") or None).mode, "vaagen_makker")
+        self.assertEqual((_parse_presence_mode_command("hold agent-vagt") or None).mode, "agent_vagt")
+        self.assertEqual(
+            (_parse_presence_mode_command("sæt mørk humor på lavt blus") or None).mode,
+            "moerk_humor_lavt_blus",
+        )
+        self.assertEqual((_parse_presence_mode_command("vær stille ven igen") or None).mode, "stille_ven")
+        self.assertIsNone(_parse_presence_mode_command("agent skills halter"))
+
+    def test_parse_sense_diary_and_state_queries(self) -> None:
+        self.assertTrue(_wants_sense_diary_recall("hvad har du lagt mærke til i dag"))
+        self.assertTrue(_wants_sense_diary_recall("vis din sanse-dagbog"))
+        self.assertFalse(_wants_sense_diary_recall("hvad laver du"))
+        self.assertTrue(_wants_stacky_state_report("hvordan føles det"))
+        self.assertTrue(_wants_stacky_state_report("hvilken mode er du i"))
+
+    def test_parse_memory_map_commands(self) -> None:
+        self.assertEqual(
+            _parse_memory_map_write_command("husk at agenten skal give status"),
+            "agenten skal give status",
+        )
+        self.assertEqual(
+            _parse_memory_map_write_command("skriv i memory-map at du kan bruge sandcode"),
+            "du kan bruge sandcode",
+        )
+        self.assertIsNone(_parse_memory_map_write_command("husk mig på kaffe"))
+        self.assertTrue(_wants_memory_map_recall("hvad husker du fra i går"))
+        self.assertTrue(_wants_memory_map_recall("vis din memory-map"))
+        self.assertTrue(_wants_capability_report("hvad kan du lave"))
+        self.assertTrue(_wants_capability_report("kan du starte agenten"))
+
+    def test_sandcode_update_speech_policy_allows_heartbeats(self) -> None:
+        self.assertTrue(_should_speak_sandcode_update("Agenten arbejder stadig efter 30 sekunder.", spoken_updates=7))
+        self.assertFalse(_should_speak_sandcode_update("Agenten arbejder med Read.", spoken_updates=5))
+        self.assertTrue(_should_speak_sandcode_update("Agenten melder: færdig.", spoken_updates=99))
+
     def test_visual_context_only_for_visual_turns(self) -> None:
         self.assertTrue(_wants_visual_context("hvad kan du se lige nu"))
         self.assertTrue(_wants_visual_context("kan du se mig"))
@@ -1080,6 +1137,29 @@ class HandsfreeHelpersTest(unittest.TestCase):
                     await task
 
             self.assertEqual(director.states, ["thinking"])
+
+        asyncio.run(run_once())
+
+    def test_speaking_body_loop_marks_motion_for_audio_guard(self) -> None:
+        async def run_once() -> None:
+            director = FakeSpeakingDirector()
+            moved = asyncio.Event()
+            task = asyncio.create_task(
+                _speaking_body_loop(
+                    director,  # type: ignore[arg-type]
+                    "Hej fra den lille maskine.",
+                    on_motion=moved.set,
+                    interval_seconds=0.01,
+                )
+            )
+            try:
+                await asyncio.wait_for(moved.wait(), timeout=1.0)
+            finally:
+                task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await task
+
+            self.assertEqual(director.texts, ["Hej fra den lille maskine."])
 
         asyncio.run(run_once())
 

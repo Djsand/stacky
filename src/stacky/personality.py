@@ -202,6 +202,31 @@ class StackySelfModel:
     def stacky_mood_name(self) -> str:
         return self.stacky_mood.bounded().mood
 
+    def set_presence_mode(self, mode: str, *, source: str = "conversation") -> str:
+        requested = _valid_presence_mode(mode)
+        current = self.presence_mode()
+        now = _now()
+        if requested != current:
+            self.state["presence_mode"] = requested
+            self.state["presence_mode_updated_at"] = now
+            self._save()
+            self._log_evolution("presence_mode", f"presence mode {current}->{requested}", source=source)
+        return requested
+
+    def sense_diary_reply(self, *, limit: int = 4) -> str:
+        diary = self._recent_sense_diary(limit=limit)
+        if not diary:
+            return "Ikke meget endnu. Mine sanser har været stille; meget dramatisk, på den kommunale måde."
+        texts = [str(item.get("text", "")).strip() for item in diary if str(item.get("text", "")).strip()]
+        if not texts:
+            return "Jeg har ikke noget brugbart i sanse-dagbogen endnu."
+        return "Jeg har især lagt mærke til: " + " ".join(f"{index}. {text}" for index, text in enumerate(texts, start=1))
+
+    def stacky_state_reply(self) -> str:
+        mood = self.stacky_mood.bounded()
+        mode = self.presence_mode().replace("_", " ")
+        return f"Jeg er i {mode}. Humør: {mood.mood}, med energi {mood.energy:.2f} og nysgerrighed {mood.curiosity:.2f}."
+
     def context_for_prompt(self, *, user_text: str = "") -> str:
         temporal = self._temporal_context()
         social = self._social_context()

@@ -45,6 +45,8 @@ class BodyDirector:
         self._presence_index = 0
         self._presence_mode = "stille_ven"
         self._stacky_mood = "rolig"
+        self._last_speaking_tick_at = 0.0
+        self._speaking_index = 0
 
     @property
     def last_motion_at(self) -> float:
@@ -94,6 +96,44 @@ class BodyDirector:
             base_x=base_x,
             base_y=base_y,
         )
+
+    def speaking_tick(self, text: str, *, now: float | None = None) -> bool:
+        """Small animatronic-style speech beats while audio is actively playing."""
+
+        now = now if now is not None else time.monotonic()
+        interval = 0.55 if self._presence_mode != "ikke_forstyr" else 0.90
+        if now - self._last_speaking_tick_at < interval:
+            return True
+        self._last_speaking_tick_at = now
+        self._speaking_index += 1
+        ok = self._speaking_led(self._speaking_index)
+        if now - self._last_motion_at < 0.32:
+            return ok
+        if self._presence_mode == "ikke_forstyr" and self._speaking_index % 3 != 0:
+            return ok
+        lowered = text.lower()
+        if "?" in text and self._speaking_index % 2 == 0:
+            motion = MotionPlan("look_up", intensity=0.09, speed=145)
+        elif any(token in lowered for token in ("ikke", "fejl", "av", "hm", "nå", "naa")) and self._speaking_index % 3 == 0:
+            motion = MotionPlan("shake", intensity=0.06, speed=130)
+        else:
+            pattern = self._speaking_index % 4
+            if pattern == 0:
+                motion = MotionPlan("nod", intensity=0.08, speed=135)
+            elif pattern == 2:
+                motion = MotionPlan("look_up", intensity=0.07, speed=125)
+            else:
+                return ok
+        base_x, base_y = self._face_motion_base(now)
+        return self._motion(
+            motion.name,
+            intensity=motion.intensity,
+            speed=motion.speed,
+            cooldown=0.0,
+            now=now,
+            base_x=base_x,
+            base_y=base_y,
+        ) and ok
 
     def reply_completed(self, text: str, *, now: float | None = None) -> bool:
         now = now if now is not None else time.monotonic()
@@ -278,6 +318,22 @@ class BodyDirector:
             duration_ms=plan.duration_ms,
             mode=plan.mode,
         )
+
+    def _speaking_led(self, index: int) -> bool:
+        if self._presence_mode == "agent_vagt":
+            colors = ((150, 105, 210), (105, 160, 235), (175, 125, 80))
+        elif self._presence_mode == "moerk_humor_lavt_blus":
+            colors = ((140, 120, 75), (95, 125, 150), (155, 95, 95))
+        elif self._presence_mode == "ikke_forstyr":
+            colors = ((55, 75, 100), (45, 65, 90), (60, 80, 95))
+        else:
+            colors = ((115, 185, 125), (90, 155, 210), (155, 170, 90))
+        r, g, b = colors[index % len(colors)]
+        brightness = 0.42 if self._presence_mode != "ikke_forstyr" else 0.20
+        if self._stacky_mood == "vagt":
+            r, g, b = 190, 130, 65
+            brightness = max(brightness, 0.34)
+        return self._set_leds(r=r, g=g, b=b, brightness=brightness, duration_ms=240, mode="pulse")
 
     def _set_leds(
         self,

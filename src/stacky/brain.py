@@ -13,6 +13,7 @@ from .danish import (
 from .evolution import StackyEvolutionEngine
 from .llm import ChatClient, ChatImageAttachment, ChatMessage, GeminiPromptBlockedError, LLMError
 from .memory import Memory, MemoryStore
+from .memory_map import MemoryMapStore
 from .personality import StackySelfModel
 from .sessions import InfiniteSessionStore
 from .soul import StackySoul
@@ -36,6 +37,7 @@ class StackyBrain:
         session_store: InfiniteSessionStore | None = None,
         self_model: StackySelfModel | None = None,
         evolution: StackyEvolutionEngine | None = None,
+        memory_map: MemoryMapStore | None = None,
     ) -> None:
         self.soul = soul
         self.memory = memory
@@ -43,6 +45,7 @@ class StackyBrain:
         self.session_store = session_store
         self.self_model = self_model
         self.evolution = evolution
+        self.memory_map = memory_map
         self._recent_turns: list[tuple[str, str]] = []
         self._skip_session_context_turns = 0
 
@@ -69,6 +72,8 @@ class StackyBrain:
         trusted_self_update = bool(observe_turn and allow_memory_writes and persist_session)
         if observe_turn and self.self_model is not None:
             self.self_model.observe_user_turn(user_text, trusted=trusted_self_update, source=session_source)
+        if observe_turn and trusted_self_update and self.memory_map is not None:
+            self.memory_map.observe_turn(user_text, source=session_source)
         if observe_turn and self.evolution is not None:
             self._observe_evolution_user_turn(user_text, trusted=trusted_self_update, source=session_source)
         memories = tuple(_dedupe_memories([*self.memory.pinned(limit=6), *self.memory.recall(user_text, limit=5)]))
@@ -221,6 +226,8 @@ class StackyBrain:
         trusted_self_update = bool(allow_memory_writes and persist_session)
         if self.self_model is not None and user_text:
             self.self_model.observe_user_turn(user_text, trusted=trusted_self_update, source=session_source)
+        if trusted_self_update and self.memory_map is not None and user_text:
+            self.memory_map.observe_turn(user_text, source=session_source)
         if self.evolution is not None and user_text:
             self._observe_evolution_user_turn(user_text, trusted=trusted_self_update, source=session_source)
 
@@ -292,6 +299,47 @@ class StackyBrain:
             return "rolig"
         return self.self_model.stacky_mood_name()
 
+    def set_presence_mode(self, mode: str, *, source: str = "voice-command") -> str:
+        if self.self_model is None:
+            return "stille_ven"
+        return self.self_model.set_presence_mode(mode, source=source)
+
+    def sense_diary_reply(self) -> str:
+        if self.self_model is None:
+            return "Jeg har ikke en sanse-dagbog klar endnu."
+        return self.self_model.sense_diary_reply()
+
+    def stacky_state_reply(self) -> str:
+        if self.self_model is None:
+            return "Jeg har ikke min egen tilstand klar endnu."
+        return self.self_model.stacky_state_reply()
+
+    def remember_memory_map(self, text: str, *, source: str = "voice-command") -> str:
+        if self.memory_map is None:
+            return "Jeg har ikke memory-map klar endnu."
+        entry = self.memory_map.remember_text(
+            text,
+            title="Nicolais røde tråd",
+            tags=("red-thread", "voice-note"),
+            importance=0.86,
+            source=source,
+        )
+        if entry is None:
+            return "Det var for tyndt til at skrive i memory-map. Heldigvis døde ingen database af det."
+        return f"Jeg har skrevet det i min røde tråd: {entry.text}"
+
+    def memory_map_reply(self, query: str = "") -> str:
+        if self.memory_map is None:
+            return "Jeg har ikke memory-map klar endnu."
+        return self.memory_map.recall_reply(query)
+
+    def capability_reply(self) -> str:
+        return (
+            "Jeg kan snakke med dig, bruge kamera og computer som sanser når runtime sender dem, "
+            "søge web når du beder om friske fakta, starte Sandcode-agenten på en tydelig kommando, "
+            "og skrive vigtige tråde i min egen memory-map. Jeg ændrer ikke filer eller starter agent uden klar ordre."
+        )
+
     def _messages(
         self,
         user_text: str,
@@ -310,6 +358,7 @@ class StackyBrain:
         recent_text = self._recent_context_text()
         self_context = self.self_model.context_for_prompt(user_text=user_text) if self.self_model is not None else ""
         evolution_context = self.evolution.context_for_prompt() if self.evolution is not None else ""
+        memory_map_context = self.memory_map.context_for_prompt(user_text=user_text) if self.memory_map is not None else ""
         system = "\n\n".join(
             [
                 self.soul.to_system_prompt(),
@@ -318,6 +367,7 @@ class StackyBrain:
                 _live_answer_rule(user_text, max_chars=max_spoken_chars),
                 self_context,
                 evolution_context,
+                memory_map_context,
                 "Seneste live-kontekst i denne session:\n" + recent_text,
                 "Relevante friske Stacky-minder:\n" + memory_text,
                 (

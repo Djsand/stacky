@@ -5,8 +5,9 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from stacky.cli import _run_sandcode_with_updates
 from stacky.config import SandcodeConfig
-from stacky.sandcode import SandcodeDanishSummarizer, SandcodeMobileHostClient, parse_sandcode_action
+from stacky.sandcode import SandcodeDanishSummarizer, SandcodeMobileHostClient, SandcodeSession, parse_sandcode_action
 
 
 class FakeSandcodeClient(SandcodeMobileHostClient):
@@ -44,6 +45,20 @@ class FakeSandcodeClient(SandcodeMobileHostClient):
 
     async def _send_ws(self, message: dict[str, object]) -> None:
         self.ws_messages.append(message)
+
+
+class SlowFakeSandcodeClient(FakeSandcodeClient):
+    async def run_session(self, cwd: Path, prompt: str, on_event, *, chat_only: bool = False) -> SandcodeSession:  # type: ignore[no-untyped-def]
+        await asyncio.sleep(0.035)
+        return SandcodeSession(
+            session_id="slow-test",
+            cwd=cwd,
+            provider=self.config.provider,
+            model=self.config.model,
+            permission_mode=self.config.permission_mode,
+            effort=self.config.effort,
+            chat_only=chat_only,
+        )
 
 
 class SandcodeTest(unittest.IsolatedAsyncioTestCase):
@@ -149,6 +164,33 @@ class SandcodeTest(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(spoken)
         self.assertIn("Agenten arbejder", spoken)
         self.assertNotIn("Sandcode bruger", spoken)
+
+    def test_summarizer_builds_heartbeat_status(self) -> None:
+        spoken = SandcodeDanishSummarizer().summarize_heartbeat(
+            elapsed_seconds=75,
+            last_update="Agenten arbejder med Read.",
+        )
+
+        self.assertIn("Agenten arbejder stadig", spoken)
+        self.assertIn("1 min", spoken)
+        self.assertIn("Sidste livstegn", spoken)
+
+    async def test_run_sandcode_with_updates_emits_heartbeat_when_silent(self) -> None:
+        updates: list[str] = []
+
+        async def on_update(update: str) -> None:
+            updates.append(update)
+
+        session = await _run_sandcode_with_updates(
+            SlowFakeSandcodeClient(),
+            Path("C:/project"),
+            "ret testen",
+            on_update=on_update,
+            heartbeat_seconds=0.01,
+        )
+
+        self.assertEqual(session.session_id, "slow-test")
+        self.assertTrue(any("Agenten arbejder stadig" in update for update in updates))
 
 
 if __name__ == "__main__":
