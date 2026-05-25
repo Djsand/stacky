@@ -278,6 +278,42 @@ class BrainMemoryContextTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("can_speak_about: sandcode_agent", system)
         self.assertIn("Opfind aldrig status uden for dette lag", system)
 
+    async def test_brain_tool_plan_can_choose_sandcode_without_trigger_words(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = MemoryStore(Path(tmp) / "memory.sqlite")
+            brain = StackyBrain(  # type: ignore[arg-type]
+                StackySoul(created_for="Nicolai"),
+                memory,
+                FixedFakeLLM(
+                    '{"say":"Jeg sender evnen ind i projektet.","actions":[{"tool":"sandcode","task":"implementer runtime tool-broker","mode":"work","chat_only":false}]}'
+                ),
+            )
+
+            plan = await brain.plan_tools(
+                "byg det",
+                recent_context="Nicolai: hjernen skal have agent-tools. Stacky: den rigtige loesning er en tool-broker.",
+            )
+
+        self.assertEqual(plan.say, "Jeg sender evnen ind i projektet.")
+        self.assertEqual(len(plan.actions), 1)
+        self.assertEqual(plan.actions[0].tool, "sandcode")
+        self.assertEqual(plan.actions[0].task, "implementer runtime tool-broker")
+        self.assertEqual(plan.actions[0].mode, "work")
+
+    async def test_brain_tool_plan_drops_unknown_tools_and_say(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = MemoryStore(Path(tmp) / "memory.sqlite")
+            brain = StackyBrain(  # type: ignore[arg-type]
+                StackySoul(created_for="Nicolai"),
+                memory,
+                FixedFakeLLM('{"say":"Jeg gør noget.","actions":[{"tool":"free_shell","task":"rm stuff"}]}'),
+            )
+
+            plan = await brain.plan_tools("gør noget farligt")
+
+        self.assertEqual(plan.say, "")
+        self.assertEqual(plan.actions, ())
+
     async def test_no_computer_context_blocks_terminal_claims(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             memory = MemoryStore(Path(tmp) / "memory.sqlite")

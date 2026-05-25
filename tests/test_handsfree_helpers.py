@@ -4,6 +4,7 @@ import asyncio
 import unittest
 from contextlib import suppress
 
+from stacky.brain import BrainToolAction, BrainToolPlan
 from stacky.cli import (
     _accept_stt_result,
     _body_presence_loop,
@@ -23,6 +24,7 @@ from stacky.cli import (
     _resolve_capture_speech_styles,
     _resolve_stt_bench_specs,
     _run_motion_gesture,
+    _sandcode_action_from_brain_tool_plan,
     _sandcode_lead_reply,
     _should_speak_sandcode_update,
     _should_comment_on_monitor_observation,
@@ -885,6 +887,33 @@ class HandsfreeHelpersTest(unittest.TestCase):
         self.assertTrue(_should_speak_sandcode_update("Agenten arbejder stadig efter 30 sekunder.", spoken_updates=7))
         self.assertFalse(_should_speak_sandcode_update("Agenten arbejder med Read.", spoken_updates=5))
         self.assertTrue(_should_speak_sandcode_update("Agenten melder: færdig.", spoken_updates=99))
+
+    def test_sandcode_action_from_brain_tool_plan(self) -> None:
+        plan = BrainToolPlan(
+            say="Jeg sender evnen ind.",
+            actions=(BrainToolAction("sandcode", task="ret testen", mode="work"),),
+        )
+
+        action = _sandcode_action_from_brain_tool_plan(plan)
+
+        self.assertIsNotNone(action)
+        assert action is not None
+        self.assertEqual(action.prompt, "ret testen")
+
+    def test_sandcode_action_from_brain_tool_plan_defaults_and_cancel(self) -> None:
+        default_action = _sandcode_action_from_brain_tool_plan(
+            BrainToolPlan(actions=(BrainToolAction("sandcode", mode="read_only"),))
+        )
+        cancel_action = _sandcode_action_from_brain_tool_plan(
+            BrainToolPlan(actions=(BrainToolAction("sandcode", mode="cancel"),))
+        )
+
+        self.assertIsNotNone(default_action)
+        assert default_action is not None
+        self.assertIn("read-only status", default_action.prompt)
+        self.assertIsNotNone(cancel_action)
+        assert cancel_action is not None
+        self.assertEqual(cancel_action.prompt, "__cancel__")
 
     def test_visual_context_only_for_visual_turns(self) -> None:
         self.assertTrue(_wants_visual_context("hvad kan du se lige nu"))

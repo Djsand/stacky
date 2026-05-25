@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import re
 from dataclasses import dataclass
 
@@ -26,6 +27,20 @@ class BrainReply:
     remembered: tuple[Memory, ...] = ()
     used_memories: tuple[Memory, ...] = ()
     degraded: bool = False
+
+
+@dataclass(frozen=True)
+class BrainToolAction:
+    tool: str
+    task: str = ""
+    mode: str = "read_only"
+    chat_only: bool = False
+
+
+@dataclass(frozen=True)
+class BrainToolPlan:
+    say: str = ""
+    actions: tuple[BrainToolAction, ...] = ()
 
 
 class StackyBrain:
@@ -207,6 +222,53 @@ class StackyBrain:
         if observe_turn and remember_recent:
             self._remember_recent_turn(user_text, response)
         return BrainReply(response, spoken_text=spoken_response, remembered=tuple(remembered), used_memories=memories)
+
+    async def plan_tools(
+        self,
+        user_text: str,
+        *,
+        runtime_context: str = "",
+        monitor_context: str = "",
+        recent_context: str = "",
+    ) -> BrainToolPlan:
+        """Let Stacky's brain choose real runtime tools before free-form speech."""
+
+        clean = user_text.strip()
+        if not clean:
+            return BrainToolPlan()
+        recent = recent_context.strip() or self._recent_context_text()
+        system = "\n".join(
+            [
+                "Du er Stackys tool-broker inde i hjernen, ikke en separat kommando-parser.",
+                "Vael om Stacky skal bruge en rigtig runtime-evne foer han svarer.",
+                'Svar KUN JSON: {"say":"kort dansk forhaandsbesked eller tom","actions":[{"tool":"sandcode","task":"konkret opgave","mode":"read_only|work|cancel","chat_only":false}]}',
+                "Tilladte tools lige nu: sandcode.",
+                "sandcode betyder Stackys Sandcode/Codex-agent til projekt-, repo-, kode-, fil-, test-, build- og fejlfindingsarbejde.",
+                "Brug sandcode naar Nicolai beder Stacky om at goere, bygge, rette, teste, implementere, undersøge eller fortsætte arbejde, der kraever filer/kode/projektkontekst.",
+                "Det skal ogsaa virke uden triggerord som 'agent' eller 'Sandcode', fx 'byg det', 'goer det', 'fortsaet', hvis seneste kontekst handler om konkret kode- eller projektarbejde.",
+                "Brug read_only ved scan/status/undersoegelse. Brug work naar han beder om at rette, bygge, implementere eller aendre. Brug cancel ved stop/afbryd en koerende agent.",
+                "Brug ingen actions for almindelig snak, identitet, hvad Stacky kan, forklaringer, battery/volume/motion/status paa kroppen, eller vague klager om agent-koncepter.",
+                "say maa aldrig paastaa resultatet. Sig kun at du sender/saetter evnen i gang.",
+                "Hvis ingen tool skal koeres: returner tom actions-array og tom say.",
+                "",
+                "Seneste live-kontekst:",
+                recent[:1200] or "- Ingen.",
+                "",
+                runtime_context[:1200] or "Runtime-sandhedslag: none",
+                "",
+                monitor_context[:700] or "Global sanseinput: none",
+            ]
+        )
+        try:
+            raw = await self.lmstudio.chat(
+                [ChatMessage("system", system), ChatMessage("user", clean)],
+                temperature=0.0,
+                max_tokens=220,
+            )
+        except Exception as exc:
+            print(f"[brain-tools] tool planning failed: {exc}", flush=True)
+            return BrainToolPlan()
+        return _parse_brain_tool_plan(raw)
 
     def record_observed_turn(
         self,
@@ -592,6 +654,47 @@ def _drop_latest_matching_user(messages: list[dict[str, str]], user_text: str) -
             del result[index]
             break
     return result
+
+
+def _parse_brain_tool_plan(raw: str) -> BrainToolPlan:
+    start = raw.find("{")
+    end = raw.rfind("}")
+    if start < 0 or end < start:
+        return BrainToolPlan()
+    try:
+        data = json.loads(raw[start : end + 1])
+    except json.JSONDecodeError:
+        return BrainToolPlan()
+    say = _one_line(str(data.get("say") or ""))
+    raw_actions = data.get("actions")
+    if not isinstance(raw_actions, list):
+        raw_actions = []
+    actions: list[BrainToolAction] = []
+    for raw_action in raw_actions[:3]:
+        if not isinstance(raw_action, dict):
+            continue
+        tool = _one_line(str(raw_action.get("tool") or "")).lower()
+        if tool not in {"sandcode"}:
+            continue
+        mode = _one_line(str(raw_action.get("mode") or "read_only")).lower()
+        if mode not in {"read_only", "work", "cancel"}:
+            mode = "read_only"
+        task = _one_line(str(raw_action.get("task") or raw_action.get("prompt") or ""))
+        actions.append(
+            BrainToolAction(
+                tool=tool,
+                task=task,
+                mode=mode,
+                chat_only=bool(raw_action.get("chat_only")),
+            )
+        )
+    if not actions:
+        say = ""
+    return BrainToolPlan(say=say, actions=tuple(actions))
+
+
+def _one_line(value: str) -> str:
+    return " ".join(str(value).split()).strip()
 
 
 def _dedupe_memories(memories: list[Memory]) -> list[Memory]:

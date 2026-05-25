@@ -28,7 +28,7 @@ except ModuleNotFoundError:
         slug = re.sub(r"-{2,}", "-", slug) or "stacky"
         return slug[:max_length].strip("-") if max_length > 0 else slug
 
-from .brain import StackyBrain
+from .brain import BrainToolPlan, StackyBrain
 from .body.calibration import BodyCalibration, load_body_calibration, save_body_calibration
 from .body.controller import BodyPresence, StackChanBodyController
 from .body.director import BodyDirector
@@ -50,7 +50,9 @@ from .monitor import (
 from .personality import StackySelfModel
 from .runtime_state import RuntimeState
 from .sandcode import (
+    DEFAULT_SANDCODE_AGENT_PROMPT,
     SandcodeDanishSummarizer,
+    SandcodeAction,
     SandcodeError,
     SandcodeMobileHostClient,
     SandcodeSession,
@@ -2533,11 +2535,25 @@ async def _handsfree(
                 set_body_state("listening")
                 accepting_audio = True
                 continue
-            sandcode_action = await classify_sandcode_action(
-                text,
-                brain.lmstudio,
-                recent_context=brain.recent_context_text(),
+            tool_monitor_context = format_monitor_context(
+                recent_monitor_observations,
+                max_items=config.monitor.max_context_observations,
             )
+            tool_plan = await brain.plan_tools(
+                text,
+                recent_context=brain.recent_context_text(),
+                runtime_context=runtime_state.context_for_prompt(),
+                monitor_context=tool_monitor_context,
+            )
+            sandcode_action = _sandcode_action_from_brain_tool_plan(tool_plan)
+            sandcode_lead_reply = tool_plan.say.strip()
+            if sandcode_action is None:
+                sandcode_action = await classify_sandcode_action(
+                    text,
+                    brain.lmstudio,
+                    recent_context=brain.recent_context_text(),
+                )
+                sandcode_lead_reply = ""
             if sandcode_action is not None:
                 reply_started = time.perf_counter()
                 set_body_state("thinking")
@@ -2566,7 +2582,7 @@ async def _handsfree(
                     accepting_audio = True
                     continue
                 runtime_state.mark_sandcode_starting(sandcode_action.prompt)
-                lead_reply = _sandcode_lead_reply(
+                lead_reply = sandcode_lead_reply or _sandcode_lead_reply(
                     sandcode_action.prompt,
                     presence_mode=brain.presence_mode() if brain is not None else "stille_ven",
                 )
@@ -2806,6 +2822,17 @@ def _sandcode_lead_reply(prompt: str, *, presence_mode: str = "stille_ven") -> s
     if mode == "moerk_humor_lavt_blus":
         return "Jeg slipper agenten løs i maskinrummet. Pænt, men med hjelm på."
     return "Jeg sender agenten afsted. Jeg bliver her."
+
+
+def _sandcode_action_from_brain_tool_plan(plan: BrainToolPlan) -> SandcodeAction | None:
+    for action in plan.actions:
+        if action.tool != "sandcode":
+            continue
+        if action.mode == "cancel":
+            return SandcodeAction(prompt="__cancel__")
+        prompt = action.task.strip() or DEFAULT_SANDCODE_AGENT_PROMPT
+        return SandcodeAction(prompt=prompt, chat_only=action.chat_only)
+    return None
 
 
 def _should_speak_sandcode_update(update: str, *, spoken_updates: int) -> bool:
