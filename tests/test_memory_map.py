@@ -15,8 +15,8 @@ class MemoryMapStoreTest(unittest.TestCase):
             context = store.context_for_prompt(user_text="kan du bruge agenten")
 
         self.assertIn("Sandcode-agent", context)
-        self.assertIn("brug agenten", context)
-        self.assertIn("eksplicit kommando", context)
+        self.assertIn("uden triggerord", context)
+        self.assertIn("tydelig handlingsintention", context)
 
     def test_observe_turn_stores_agent_reporting_preference(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -570,7 +570,8 @@ class BrainMemoryContextTest(unittest.IsolatedAsyncioTestCase):
         system = llm.messages[0][0].content
         self.assertIn("Stackys memory-map", system)
         self.assertIn("Sandcode-agent", system)
-        self.assertIn("eksplicit kommando", system)
+        self.assertIn("uden triggerord", system)
+        self.assertIn("tydelig handlingsintention", system)
 
     def test_brain_can_write_memory_map_directly(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

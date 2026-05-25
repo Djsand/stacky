@@ -147,7 +147,7 @@ class MemoryMapStore:
         entries = self.recall(user_text, limit=limit)
         lines = [
             "Stackys memory-map (egen writeable røde-tråd, ikke rå historik):",
-            "Regel: Brug dette til kontinuitet og evner. Opfind ikke minder, og start aldrig handlinger uden eksplicit kommando.",
+            "Regel: Brug dette til kontinuitet og evner. Opfind ikke minder, og start aldrig handlinger uden tydelig handlingsintention fra Nicolai.",
         ]
         for entry in entries:
             tag_text = ", ".join(entry.tags) if entry.tags else "note"
@@ -244,8 +244,9 @@ def _core_entries() -> tuple[MemoryMapEntry, ...]:
             key="capability.sandcode_agent",
             title="Sandcode-agent",
             text=(
-                "Stacky kan starte Sandcode/Codex-agenten, når Nicolai eksplicit siger fx "
-                "'brug agenten til at ...', 'codex agent skal ...' eller 'brug sandcode til at ...'."
+                "Stacky kan starte Sandcode/Codex-agenten som en rigtig runtime-evne, når Nicolai tydeligt beder "
+                "om projekt-, kode- eller filarbejde. Det må gerne ske uden triggerord som 'Sandcode' eller 'agent', "
+                "fx 'byg det', 'gør det' eller 'fortsæt', hvis seneste kontekst er konkret projektarbejde."
             ),
             tags=("capability", "sandcode", "agent"),
             importance=1.0,
@@ -258,7 +259,8 @@ def _core_entries() -> tuple[MemoryMapEntry, ...]:
             title="Skriveadgang er afgrænset",
             text=(
                 "Stackys egen skriveadgang er til Stackys memory-map og runtime-state. "
-                "Fri filændring, kodeændring og repo-handlinger kræver eksplicit Sandcode-, agent- eller terminalkommando."
+                "Fri filændring, kodeændring og repo-handlinger kræver tydelig handlingsintention og skal gå via "
+                "Sandcode-agenten eller en terminal-runtime, ikke fri fantasi i svarteksten."
             ),
             tags=("boundary", "memory", "privacy"),
             importance=0.98,
