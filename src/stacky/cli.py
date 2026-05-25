@@ -3570,6 +3570,10 @@ def _wants_runtime_status_reply(text: str) -> bool:
             "gikdenigang",
             "startededen",
             "fikdenstartet",
+            "hvadlaverden",
+            "hvadlaverdet",
+            "hvadskerdermedden",
+            "hvadskerdermeddet",
         )
     )
     status_hint = any(
@@ -3588,6 +3592,8 @@ def _wants_runtime_status_reply(text: str) -> bool:
             "igang",
             "startet",
             "hvadlaver",
+            "hvadsker",
+            "skerder",
         )
     )
     return status_hint and (agent_hint or pronoun_status_hint)

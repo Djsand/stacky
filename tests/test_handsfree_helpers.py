@@ -849,6 +849,8 @@ class HandsfreeHelpersTest(unittest.TestCase):
         self.assertTrue(_wants_runtime_status_reply("kører den som den skal"))
         self.assertTrue(_wants_runtime_status_reply("hænger den stadig"))
         self.assertTrue(_wants_runtime_status_reply("hvad er det den venter på"))
+        self.assertTrue(_wants_runtime_status_reply("hvad laver den"))
+        self.assertTrue(_wants_runtime_status_reply("hvad sker der med agenten"))
         self.assertTrue(_wants_runtime_status_reply("agent status"))
         self.assertFalse(_wants_runtime_status_reply("hvad laver du"))
         self.assertFalse(_wants_runtime_status_reply("git status"))
